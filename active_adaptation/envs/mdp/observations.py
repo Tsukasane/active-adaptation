@@ -1338,6 +1338,14 @@ class root_pos_w(Observation):
 
     def compute(self):
         return self.asset.data.root_pos_w
+    
+class root_height(Observation):
+    def __init__(self, env):
+        super().__init__(env)
+        self.asset: Quadruped = self.env.scene["robot"]
+
+    def compute(self):
+        return self.asset.data.root_pos_w[:, 2].unsqueeze(1)
 
 class root_quat_w(Observation):
     def __init__(self, env):

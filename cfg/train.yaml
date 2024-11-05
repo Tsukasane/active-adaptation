@@ -39,6 +39,6 @@ wandb:
   tags: []
 
 defaults:
-  - task: Velocity
+  - task: ORCA/CY1Walk
   - algo: ppo
   - _self_
