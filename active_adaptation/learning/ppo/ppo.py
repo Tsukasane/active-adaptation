@@ -93,8 +93,6 @@ class PPOPolicy(TensorDictModuleBase):
         self.value_norm = value_norm_cls(input_shape=1).to(self.device)
 
         fake_input = observation_spec.zero()
-        print(fake_input)
-        exit()
         
         def make_encoder(out_key: str):
             if "height_scan" in observation_spec.keys(True, True):
