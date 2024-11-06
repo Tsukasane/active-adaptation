@@ -41,8 +41,7 @@ class MotionClip(Command):
         self.ref_root_orient = torch.tensor(self.ref_root_orient, dtype=torch.float32, device=self.device)
         self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [N, 4] (w, x, y, z) quaternion
 
-        self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [N, 25] qpos
-        self.ref_qpos = self.ref_qpos[:, ref2sim]                           # [N, 25] qpos
+        self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [N, 23] qpos                          # [N, 25] qpos
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [N, 12 * 3] keypoints
 
         self.num_frames = self.smpl_joints.shape[0]
@@ -56,8 +55,15 @@ class MotionClip(Command):
     
     def reset(self, env_ids: torch.Tensor):
         self.frame[env_ids] = 0
+
+        qpos = torch.cat([  self.ref_qpos[:, :5], torch.zeros(self.num_frames, 1, device=self.device),
+                            self.ref_qpos[:, 5:10], torch.zeros(self.num_frames, 1, device=self.device),
+                            self.ref_qpos[:, 10:]
+                          ], dim=1)
+        qpos = qpos[:, idx]
+        
         self.robot.write_joint_state_to_sim(
-            self.ref_qpos[0],
+            qpos[0],
             self.robot.data.default_joint_vel[env_ids],
             env_ids=env_ids
         )
@@ -65,18 +71,4 @@ class MotionClip(Command):
     def update(self):
         self.frame += 1
 
-# self.ref_qpos order
-# [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5, lleg_joint6, 
-#  rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5, rleg_joint6,
-#  waist_yaw_joint,
-#  larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
-#  rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
-
-# isaac sim joint order
-# ['lleg_joint1', 'rleg_joint1', 'waist_yaw_joint', 'lleg_joint2', 'rleg_joint2', 
-# 'larm_joint1', 'rarm_joint1', 'lleg_joint3', 'rleg_joint3', 'larm_joint2', 'rarm_joint2', 
-# 'lleg_joint4', 'rleg_joint4', 'larm_joint3', 'rarm_joint3', 'lleg_joint5', 'rleg_joint5', 
-# 'larm_joint4', 'rarm_joint4', 'lleg_joint6', 'rleg_joint6', 'larm_joint5', 'rarm_joint5', 
-# 'larm_joint6', 'rarm_joint6']
-        
-ref2sim = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]
+idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

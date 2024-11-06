@@ -249,3 +249,15 @@ class arm_velocity(Reward):
         d = (arm_linvel - root_linvel.unsqueeze(1)).square().sum(-1)
         return - d.mean(1, True)
 
+class tracking_qpos(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids = self.asset.find_joints(joint_names, preserve_order=True)[0]
+        self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
+    
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.command_manager.frame
+        ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)
+        dev = self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos
+        return dev.square().mean(1, True)
