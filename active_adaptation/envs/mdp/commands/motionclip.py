@@ -24,7 +24,8 @@ class MotionClip(Command):
             self, 
             env,
             motion_clip: str,
-            teleop: bool=False,
+            decay: float = 0.98,
+            teleop: bool = False,
         ):
         super().__init__(env, teleop=teleop)
         self.robot: Articulation = env.scene["robot"]
@@ -42,10 +43,15 @@ class MotionClip(Command):
         self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [N, 4] (w, x, y, z) quaternion
 
         self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [N, 23] qpos                          # [N, 25] qpos
-        self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [N, 12 * 3] keypoints
+        self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [N, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
         self.num_frames = self.smpl_joints.shape[0]
         self.frame = torch.zeros(self.num_envs, 1, dtype=torch.int, device=self.device)
+
+        self.decay = decay
+        self._cum_error_root = torch.zeros(self.num_envs, 1, device=self.device)
+        self._cum_error_qpos = torch.zeros(self.num_envs, 1, device=self.device)
+        self._cum_error_keypoint = torch.zeros(self.num_envs, 1, device=self.device)
         
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6)
@@ -67,8 +73,12 @@ class MotionClip(Command):
             self.robot.data.default_joint_vel[env_ids],
             env_ids=env_ids
         )
+
+        self._cum_error_root[env_ids] = 0
+        self._cum_error_qpos[env_ids] = 0
+        self._cum_error_keypoint[env_ids] = 0
     
     def update(self):
-        self.frame += 1
+        self.frame.add_(1)
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

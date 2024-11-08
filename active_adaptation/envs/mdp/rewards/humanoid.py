@@ -248,16 +248,70 @@ class arm_velocity(Reward):
         root_linvel = self.asset.data.root_lin_vel_w
         d = (arm_linvel - root_linvel.unsqueeze(1)).square().sum(-1)
         return - d.mean(1, True)
+    
+class tracking_root(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        
+        self.sigma = sigma
+        self.decay = self.env.command_manager.decay
+    
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.command_manager.frame
+        batch_indices = torch.arange(self.num_envs, device=self.device)
+        ref_root_translation = self.env.command_manager.ref_root_translations[batch_indices, timestep.squeeze(1)]
+        ref_root_rotation = self.env.command_manager.ref_root_orient[timestep].squeeze(1)
+        ref_root_pose = torch.cat([ref_root_translation, ref_root_rotation], dim=1)
+        err = (self.asset.data.root_state_w[:, :7] - ref_root_pose).square().sum(-1, True)
+
+        self.env.command_manager._cum_error_root.mul_(self.decay).add_(err * self.env.step_dt)
+
+        reward = torch.exp(- err.sqrt() / self.sigma)
+        return reward
 
 class tracking_qpos(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str=".*"):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         self.joint_ids = self.asset.find_joints(joint_names, preserve_order=True)[0]
         self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
+
+        self.sigma = sigma
+        self.decay = self.env.command_manager.decay
     
     def compute(self) -> torch.Tensor:
         timestep = self.env.command_manager.frame
         ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)
-        dev = self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos
-        return dev.square().mean(1, True)
+        err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square().sum(-1, True)    # torch.Size([num_envs])
+        
+        self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err * self.env.step_dt)
+        
+        reward = torch.exp(- err.sqrt() / self.sigma)
+        return reward
+
+class tracking_keypoints(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str=".*"):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.body_ids = self.asset.find_bodies(body_names, preserve_order=True)[0]
+        self.body_ids = torch.tensor(self.body_ids, device=self.device)
+
+        self.sigma = sigma
+        self.decay = self.env.command_manager.decay
+    
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.command_manager.frame
+        ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1)
+        body_pos_w = self.asset.data.body_pos_w[:, self.body_ids]   # torch.Size([num_envs, num_bodies, 3])
+        root_position = self.asset.data.root_pos_w.unsqueeze(1)
+        body_pos_w = body_pos_w - root_position
+        root_quat = self.asset.data.root_quat_w.unsqueeze(1)
+
+        body_pos_b = quat_rotate_inverse(root_quat, body_pos_w).reshape(self.num_envs, -1)
+        err = (body_pos_b - ref_keypoints).square().sum(-1, True)
+        
+        self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
+        
+        reward = torch.exp(- err.sqrt() / self.sigma)
+        return reward

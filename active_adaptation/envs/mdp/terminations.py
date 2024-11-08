@@ -88,24 +88,24 @@ class tracking_error(Termination):
     def __call__(self) -> torch.Tensor:
         return self.asset.data._tracking_error > self.tracking_error_threshold
 
-
+    
 class cum_error(Termination):
     def __init__(self, env, thres: float = 0.85, min_steps: int = 50):
         super().__init__(env)
-        from .commands import Command2
         self.thres = torch.tensor(thres, device=self.env.device)
-        self.min_steps = min_steps # tolerate the first few steps
+        self.min_steps = min_steps
         self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
-        self.command_manager: Command2 = self.env.command_manager
-    
+        self.command_manager = self.env.command_manager
+
     def reset(self, env_ids):
         self.error_exceeded_count[env_ids] = 0
 
     def update(self):
-        error_exceeded = (self.command_manager._cum_error > self.thres).any(-1, True)
+        cum_error = self.command_manager._cum_error_root + self.command_manager._cum_error_qpos + self.command_manager._cum_error_keypoint
+        error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
-    
+
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
 
@@ -149,3 +149,11 @@ class impact_exceeds(Termination):
         impact_force = self.contact_sensor.data.net_forces_w_history[:, :, self.body_ids]
         return (impact_force.norm(dim=-1).mean(1) > self.thres).any(1, True)
 
+class max_timesteps(Termination):
+    def __init__(self, env):
+        super().__init__(env)
+        self.num_frames = self.env.command_manager.num_frames
+    
+    def __call__(self) -> torch.Tensor:
+        timestep = self.env.command_manager.frame
+        return timestep >= self.num_frames
