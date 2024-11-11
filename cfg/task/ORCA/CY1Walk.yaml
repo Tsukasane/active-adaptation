@@ -10,7 +10,7 @@ defaults:
   - _self_
 
 robot: cy1
-terrain: easy
+terrain: flat
 payload: false
 
 action:
@@ -103,6 +103,4 @@ termination:
     body_names_expr: ["base_link", "[l,r]leg_link4", "[l,r]arm_link6"]
     t_thres: 0.1
     min_time: 0.5
-  fall_over: {xy_thres: 0.8}
-  max_timesteps: {}
-  cum_error: {thres: 3.0}
+  # fall_over: {xy_thres: 0.8}

@@ -35,8 +35,8 @@ class MotionClip(Command):
         self.root_translations = self.smpl_joints[:, 0] # [N, 3] translation vector
         self.ref_root_translations = torch.tensor(self.root_translations, dtype=torch.float32, device=self.device)
         self.ref_root_translations = self.ref_root_translations.unsqueeze(0).repeat(self.num_envs, 1, 1) # [num_envs, N, 3]
-        origin = self.env.scene.env_origins             # [num_envs, 3]
-        self.ref_root_translations += origin.unsqueeze(1)
+        # origin = self.env.scene.env_origins             # [num_envs, 3]
+        # self.ref_root_translations += origin.unsqueeze(1)
 
         self.ref_root_orient = R.from_rotvec(data['root_orient']).as_quat() # [N, 4] (x, y, z, w) quaternion
         self.ref_root_orient = torch.tensor(self.ref_root_orient, dtype=torch.float32, device=self.device)
@@ -80,5 +80,23 @@ class MotionClip(Command):
     
     def update(self):
         self.frame.add_(1)
+
+        # for sanity check
+        # root_state = self.robot.data.root_state_w.clone()
+        # root_state[:, :3] = self.ref_root_translations[torch.arange(self.num_envs), self.frame.squeeze()] + torch.tensor([0., 0., 0.8], device=self.device)
+        # root_state[:, 3:7] = self.ref_root_orient[self.frame.squeeze()]
+        # env_ids = torch.arange(self.num_envs, device=self.device)
+        # self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
+
+        # qpos = torch.cat([  self.ref_qpos[self.frame.squeeze(), :5], torch.zeros(self.num_envs, 1, device=self.device),     # left leg joints
+        #                     self.ref_qpos[self.frame.squeeze(), 5:10], torch.zeros(self.num_envs, 1, device=self.device),   # right leg joints
+        #                     self.ref_qpos[self.frame.squeeze(), 10:]                    # waist yaw joint and arm joints
+        #                   ], dim=1)
+        # qpos = qpos[:, idx]
+        # self.robot.write_joint_state_to_sim(
+        #     qpos,
+        #     self.robot.data.default_joint_vel,
+        #     env_ids=env_ids
+        # )
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

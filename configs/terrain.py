@@ -63,14 +63,14 @@ FLAT = TerrainGeneratorCfg(
     use_cache=False,
     sub_terrains={
         "flat": MeshPlaneTerrainCfg(
-            proportion=0.5,
+            proportion=1.0,
         ),
-        "random_rough_easy": HfRandomUniformTerrainCfg(
-            proportion=0.5,
-            noise_range=(0.0, 0.06),
-            noise_step=0.02,
-            border_width=0.5
-        ),
+        # "random_rough_easy": HfRandomUniformTerrainCfg(
+        #     proportion=0.5,
+        #     noise_range=(0.0, 0.06),
+        #     noise_step=0.02,
+        #     border_width=0.5
+        # ),
     },
 )
 

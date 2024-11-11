@@ -63,7 +63,8 @@ CY1_CFG = ArticulationCfg(
         usd_path=f"{ASSET_PATH}/ORCA/orca_stable_mesh.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
+            # disable_gravity=True,           # for sanity check
+            disable_gravity=False,        # for training
             retain_accelerations=False,
             linear_damping=0.0,
             angular_damping=0.0,
@@ -107,6 +108,8 @@ CY1_CFG = ArticulationCfg(
             },
             saturation_effort=100.0,
             velocity_limit=30.0,
+            # stiffness=0.0,              # for sanity check
+            # damping=0.,
             stiffness={
                 "waist_yaw_joint": 75.,
                 "[l,r]arm_joint1": 75.,
