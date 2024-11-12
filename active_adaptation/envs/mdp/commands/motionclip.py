@@ -31,22 +31,29 @@ class MotionClip(Command):
         self.robot: Articulation = env.scene["robot"]
         
         data = joblib.load(motion_clip)
-        self.smpl_joints = data['joints']               # [N, 24, 3]
-        self.root_translations = self.smpl_joints[:, 0] # [N, 3] translation vector
+        self.root_translations = data['root_trans'] # [N, 3] translation vector
         self.ref_root_translations = torch.tensor(self.root_translations, dtype=torch.float32, device=self.device)
         self.ref_root_translations = self.ref_root_translations.unsqueeze(0).repeat(self.num_envs, 1, 1) # [num_envs, N, 3]
-        # origin = self.env.scene.env_origins             # [num_envs, 3]
-        # self.ref_root_translations += origin.unsqueeze(1)
+        origin = self.env.scene.env_origins             # [num_envs, 3]
+        self.ref_root_translations += origin.unsqueeze(1)
 
         self.ref_root_orient = R.from_rotvec(data['root_orient']).as_quat() # [N, 4] (x, y, z, w) quaternion
         self.ref_root_orient = torch.tensor(self.ref_root_orient, dtype=torch.float32, device=self.device)
         self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [N, 4] (w, x, y, z) quaternion
 
+        self.ref_root_linear = data['root_linear_velocity'] # [N, 3] linear velocity
+        self.ref_root_linear = torch.tensor(self.ref_root_linear, dtype=torch.float32, device=self.device)
+
+        self.ref_root_angular = data['root_angular_velocity'] # [N, 3] angular velocity
+        self.ref_root_angular = torch.tensor(self.ref_root_angular, dtype=torch.float32, device=self.device)
+
         self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [N, 23] qpos                          # [N, 25] qpos
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [N, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
-        self.num_frames = self.smpl_joints.shape[0]
+        self.num_frames = self.root_translations.shape[0]
+        self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
         self.frame = torch.zeros(self.num_envs, 1, dtype=torch.int, device=self.device)
+        print(f"tracking {self.num_frames} frames of motion clip !")
 
         self.decay = decay
         self._cum_error_root = torch.zeros(self.num_envs, 1, device=self.device)

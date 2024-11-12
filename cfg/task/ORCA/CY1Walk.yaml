@@ -25,16 +25,21 @@ command:
   
 observation:
   policy:
-    root_height:
-    root_quat_w:
+    # 3D body pose and velocity caconicalized with respect to local frame
+    body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+    body_rot:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
     root_linvel_b:    {yaw_only: false}
     root_angvel_b:    {noise_std: 0.05}
+    projected_gravity_b: {noise_std: 0.01}
+    # information about the robot's state in the world
     joint_pos:        {noise_std: 0.05}
     joint_vel:        {noise_std: 0.2}
-    body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
-    body_vel:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
-    projected_gravity_b: {noise_std: 0.01}
+    root_height:
+    root_quat_w:
     prev_actions:     {steps: 3}
+    # future reference motions
+    ref_keypoints:      {steps: 5}
+    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
 
 reward:
   loco:
