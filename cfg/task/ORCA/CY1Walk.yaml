@@ -27,7 +27,6 @@ observation:
   policy:
     # 3D body pose and velocity caconicalized with respect to local frame
     body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
-    body_rot:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
     root_linvel_b:    {yaw_only: false}
     root_angvel_b:    {noise_std: 0.05}
     projected_gravity_b: {noise_std: 0.01}
@@ -38,6 +37,7 @@ observation:
     root_quat_w:
     prev_actions:     {steps: 3}
     # future reference motions
+    ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
 
@@ -45,6 +45,9 @@ reward:
   loco:
     # for tracking the reference root pose
     tracking_root:      {weight: 1.0, enabled: true, sigma: 0.25}
+
+    # for tracking root velocity
+    tracking_velocity:  {weight: 1.0, enabled: true, sigma: 0.25}
 
     # for tracking the reference qpos
     tracking_qpos:      {weight: 1.0, enabled: true, sigma: 0.25,

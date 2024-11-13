@@ -31,28 +31,28 @@ class MotionClip(Command):
         self.robot: Articulation = env.scene["robot"]
         
         data = joblib.load(motion_clip)
-        self.root_translations = data['root_trans'] # [N, 3] translation vector
+        self.root_translations = data['root_trans'] # [T, 3] translation vector
         self.ref_root_translations = torch.tensor(self.root_translations, dtype=torch.float32, device=self.device)
-        self.ref_root_translations = self.ref_root_translations.unsqueeze(0).repeat(self.num_envs, 1, 1) # [num_envs, N, 3]
+        self.ref_root_translations = self.ref_root_translations.unsqueeze(0).repeat(self.num_envs, 1, 1) # [num_envs, T, 3]
         origin = self.env.scene.env_origins             # [num_envs, 3]
         self.ref_root_translations += origin.unsqueeze(1)
 
-        self.ref_root_orient = R.from_rotvec(data['root_orient']).as_quat() # [N, 4] (x, y, z, w) quaternion
+        self.ref_root_orient = R.from_rotvec(data['root_orient']).as_quat() # [T, 4] (x, y, z, w) quaternion
         self.ref_root_orient = torch.tensor(self.ref_root_orient, dtype=torch.float32, device=self.device)
-        self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [N, 4] (w, x, y, z) quaternion
+        self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [T, 4] (w, x, y, z) quaternion
 
-        self.ref_root_linear = data['root_linear_velocity'] # [N, 3] linear velocity
+        self.ref_root_linear = data['root_linear_velocity'] # [T, 3] linear velocity
         self.ref_root_linear = torch.tensor(self.ref_root_linear, dtype=torch.float32, device=self.device)
 
-        self.ref_root_angular = data['root_angular_velocity'] # [N, 3] angular velocity
+        self.ref_root_angular = data['root_angular_velocity'] # [T, 3] angular velocity
         self.ref_root_angular = torch.tensor(self.ref_root_angular, dtype=torch.float32, device=self.device)
 
-        self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [N, 23] qpos                          # [N, 25] qpos
-        self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [N, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
+        self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [T, 23] qpos
+        self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [T, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
         self.num_frames = self.root_translations.shape[0]
         self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
-        self.frame = torch.zeros(self.num_envs, 1, dtype=torch.int, device=self.device)
+        # self.frame = torch.zeros(self.num_envs, 1, dtype=torch.int, device=self.device)
         print(f"tracking {self.num_frames} frames of motion clip !")
 
         self.decay = decay
@@ -67,7 +67,6 @@ class MotionClip(Command):
         return init_root_state
     
     def reset(self, env_ids: torch.Tensor):
-        self.frame[env_ids] = 0
 
         qpos = torch.cat([  self.ref_qpos[:, :5], torch.zeros(self.num_frames, 1, device=self.device),
                             self.ref_qpos[:, 5:10], torch.zeros(self.num_frames, 1, device=self.device),
@@ -86,7 +85,6 @@ class MotionClip(Command):
         self._cum_error_keypoint[env_ids] = 0
     
     def update(self):
-        self.frame.add_(1)
 
         # for sanity check
         # root_state = self.robot.data.root_state_w.clone()
@@ -105,5 +103,6 @@ class MotionClip(Command):
         #     self.robot.data.default_joint_vel,
         #     env_ids=env_ids
         # )
+        pass
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

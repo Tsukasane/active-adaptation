@@ -204,31 +204,6 @@ class body_pos(CartesianObs):
         
     def compute(self):
         return self.body_pos_b.reshape(self.num_envs, -1)
-    
-class body_rot(CartesianObs):
-    def __init__(
-        self,
-        env,
-        body_names: str,
-        left_bodies: str=None,
-        right_bodies: str=None,
-        yaw_only: bool=False
-    ):
-        super().__init__(env, body_names, left_bodies, right_bodies)
-        self.yaw_only = yaw_only
-        print(f"Track body rotation for {self.body_names}")
-        self.body_rot_b = torch.zeros(self.env.num_envs, len(self.body_indices), 4, device=self.env.device)
-
-    def update(self):
-        if self.yaw_only:
-            quat = yaw_quat(self.asset.data.root_quat_w).unsqueeze(1)
-        else:
-            quat = self.asset.data.root_quat_w.unsqueeze(1)
-        body_quat = self.asset.data.body_quat_w[:, self.body_indices]
-        self.body_rot_b[:] = quat_rotate_inverse(quat, body_quat)
-        
-    def compute(self):
-        return self.body_rot_b.reshape(self.num_envs, -1)
 
 
 class body_vel(CartesianObs):
@@ -1409,7 +1384,7 @@ class ref_keypoints(Observation):
         self.keypoints = self.env.command_manager.ref_keypoints      # [N, 12 * 3]
 
     def compute(self):
-        frame = self.env.command_manager.frame.squeeze()                    # [num_envs]
+        frame = self.env.episode_length_buf                                 # [num_envs]
         num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
 
         step_range = torch.arange(self.steps, device=self.device)
@@ -1417,6 +1392,30 @@ class ref_keypoints(Observation):
         indices = torch.min(indices, num_frames[:, None] - 1)
         keypoints = self.keypoints[indices]
         return keypoints.reshape(self.num_envs, -1)
+    
+class ref_trans_gap(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_root_trans = self.env.command_manager.ref_root_translations     # [N, T, 3]
+
+    def compute(self) -> torch.Tensor:
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
+        indices = torch.min(indices, num_frames[:, None] - 1)
+
+        batch_indices = torch.arange(self.num_envs, device=self.device)[:, None]    # Shape: [num_envs, 1]
+        ref_root_trans = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
+
+        quat = self.asset.data.root_quat_w.unsqueeze(1)
+        current_root_pos = self.asset.data.root_pos_w.unsqueeze(1)          # [num_envs, 1, 3]
+        gap = ref_root_trans - current_root_pos                             # [num_envs, steps, 3]
+        gap_b = quat_rotate_inverse(quat, gap)
+        return gap_b.reshape(self.num_envs, -1)
 
 class ref_keypoints_gap(CartesianObs):
     def __init__(
@@ -1442,13 +1441,13 @@ class ref_keypoints_gap(CartesianObs):
         self.body_pos_b[:] = quat_rotate_inverse(quat, body_pos)
         
     def compute(self):
-        frame = self.env.command_manager.frame.squeeze()                    # [num_envs]
+        frame = self.env.episode_length_buf                                 # [num_envs]
         num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
 
         step_range = torch.arange(self.steps, device=self.device)
         indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
         indices = torch.min(indices, num_frames[:, None] - 1)
         keypoints = self.keypoints[indices].reshape(self.num_envs, self.steps, -1, 3)   # [N, steps, 12, 3]
-        self.body_pos_b = self.body_pos_b.unsqueeze(1).expand_as(keypoints)             # [N, steps, 12, 3]
-        gap = keypoints - self.body_pos_b
+        body_pos_b = self.body_pos_b.unsqueeze(1).expand_as(keypoints)                      # [N, steps, 12, 3]
+        gap = keypoints - body_pos_b
         return gap.reshape(self.num_envs, -1)
