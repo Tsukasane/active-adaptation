@@ -1451,3 +1451,56 @@ class ref_keypoints_gap(CartesianObs):
         body_pos_b = self.body_pos_b.unsqueeze(1).expand_as(keypoints)                      # [N, steps, 12, 3]
         gap = keypoints - body_pos_b
         return gap.reshape(self.num_envs, -1)
+    
+
+class history(Observation):
+    def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
+        super().__init__(env)
+        self.body_pos = body_pos(env, body_names)
+        self.root_linvel_b = root_linvel_b(env)
+        self.root_angvel_b = root_angvel_b(env)
+        self.joint_pos = joint_pos(env, joint_names)
+        self.joint_vel = joint_vel(env, joint_names)
+
+        self.body_ids = self.body_pos.body_indices
+        self.joint_ids = self.joint_pos.joint_ids
+
+        self.steps = steps + 1
+        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, steps, device=self.device)
+        self.root_linvel_b_hist = torch.zeros(self.num_envs, 3, steps, device=self.device)
+        self.root_angvel_b_hist = torch.zeros(self.num_envs, 3, steps, device=self.device)
+        self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), steps, device=self.device)
+        self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), steps, device=self.device)
+
+    def reset(self, env_ids: torch.Tensor):
+        self.body_pos_hist[env_ids] = 0.
+        self.root_linvel_b_hist[env_ids] = 0.
+        self.root_angvel_b_hist[env_ids] = 0.
+        self.joint_pos_hist[env_ids] = 0.
+
+
+    def update(self):
+        self.body_pos_hist[:, :, :, 1:] = self.body_pos_hist[:, :, :, :-1]
+        self.body_pos_hist[:, :, :, 0] = self.body_pos.compute().reshape(self.num_envs, -1, 3)
+
+        self.root_linvel_b_hist[:, :, 1:] = self.root_linvel_b_hist[:, :, :-1]
+        self.root_linvel_b_hist[:, :, 0] = self.root_linvel_b.compute().reshape(self.num_envs, -1)
+
+        self.root_angvel_b_hist[:, :, 1:] = self.root_angvel_b_hist[:, :, :-1]
+        self.root_angvel_b_hist[:, :, 0] = self.root_angvel_b.compute().reshape(self.num_envs, -1)
+
+        self.joint_pos_hist[:, :, 1:] = self.joint_pos_hist[:, :, :-1]
+        self.joint_pos_hist[:, :, 0] = self.joint_pos.compute().reshape(self.num_envs, -1)
+
+        self.joint_vel_hist[:, :, 1:] = self.joint_vel_hist[:, :, :-1]
+        self.joint_vel_hist[:, :, 0] = self.joint_vel.compute().reshape(self.num_envs, -1)
+
+    def compute(self):
+        return torch.cat([
+            self.body_pos_hist[..., 1:].reshape(self.num_envs, -1),
+            self.root_linvel_b_hist[..., 1:].reshape(self.num_envs, -1),
+            self.root_angvel_b_hist[..., 1:].reshape(self.num_envs, -1),
+            self.joint_pos_hist[..., 1:].reshape(self.num_envs, -1),
+            self.joint_vel_hist[..., 1:].reshape(self.num_envs, -1),
+        ], dim=1)
+        

@@ -52,12 +52,12 @@ class MotionClip(Command):
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [T, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
         self.num_frames = self.root_translations.shape[0]
-        max_episode_length = ((self.num_frames + 499) // 500) * 500
-        self.env.max_episode_length = max_episode_length
+        self.max_episode_length = ((self.num_frames + 499) // 500) * 500
+        self.env.max_episode_length = self.max_episode_length
 
-        padding_frames = max_episode_length - self.num_frames
+        padding_frames = self.max_episode_length - self.num_frames
         self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
-        print(f"tracking {self.num_frames} frames of motion clip, padding to {max_episode_length} frames")
+        print(f"tracking {self.num_frames} frames of motion clip, padding to {self.max_episode_length} frames")
 
         print(f"padding {padding_frames} frames for reference motion")
         self.padding_ref_motion(padding_frames, joint_names)
@@ -76,8 +76,8 @@ class MotionClip(Command):
     
     def reset(self, env_ids: torch.Tensor):
 
-        qpos = torch.cat([  self.ref_qpos[:, :5], torch.zeros(self.num_frames, 1, device=self.device),
-                            self.ref_qpos[:, 5:10], torch.zeros(self.num_frames, 1, device=self.device),
+        qpos = torch.cat([  self.ref_qpos[:, :5], torch.zeros(self.max_episode_length, 1, device=self.device),
+                            self.ref_qpos[:, 5:10], torch.zeros(self.max_episode_length, 1, device=self.device),
                             self.ref_qpos[:, 10:]
                           ], dim=1)
         qpos = qpos[:, idx]

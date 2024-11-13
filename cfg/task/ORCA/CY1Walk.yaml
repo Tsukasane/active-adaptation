@@ -45,6 +45,8 @@ observation:
     ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
+    # history
+    history:            {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
 
 reward:
   loco:
