@@ -24,6 +24,7 @@ class MotionClip(Command):
             self, 
             env,
             motion_clip: str,
+            joint_names: Sequence[str],
             decay: float = 0.98,
             teleop: bool = False,
         ):
@@ -51,12 +52,19 @@ class MotionClip(Command):
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [T, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
         self.num_frames = self.root_translations.shape[0]
+        max_episode_length = ((self.num_frames + 499) // 500) * 500
+        self.env.max_episode_length = max_episode_length
+
+        padding_frames = max_episode_length - self.num_frames
         self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
-        # self.frame = torch.zeros(self.num_envs, 1, dtype=torch.int, device=self.device)
-        print(f"tracking {self.num_frames} frames of motion clip !")
+        print(f"tracking {self.num_frames} frames of motion clip, padding to {max_episode_length} frames")
+
+        print(f"padding {padding_frames} frames for reference motion")
+        self.padding_ref_motion(padding_frames, joint_names)
 
         self.decay = decay
         self._cum_error_root = torch.zeros(self.num_envs, 1, device=self.device)
+        self._cum_error_vel = torch.zeros(self.num_envs, 1, device=self.device)
         self._cum_error_qpos = torch.zeros(self.num_envs, 1, device=self.device)
         self._cum_error_keypoint = torch.zeros(self.num_envs, 1, device=self.device)
         
@@ -81,11 +89,11 @@ class MotionClip(Command):
         )
 
         self._cum_error_root[env_ids] = 0
+        self._cum_error_vel[env_ids] = 0
         self._cum_error_qpos[env_ids] = 0
         self._cum_error_keypoint[env_ids] = 0
     
-    def update(self):
-
+    # def update(self):
         # for sanity check
         # root_state = self.robot.data.root_state_w.clone()
         # root_state[:, :3] = self.ref_root_translations[torch.arange(self.num_envs), self.frame.squeeze()] + torch.tensor([0., 0., 0.8], device=self.device)
@@ -103,6 +111,33 @@ class MotionClip(Command):
         #     self.robot.data.default_joint_vel,
         #     env_ids=env_ids
         # )
-        pass
+        # return
+
+    def padding_ref_motion(self, pad_frames: int, joint_names: Sequence[str]):
+        last_translation = self.ref_root_translations[:, -1:, :]
+        pad_translations = last_translation.expand(self.num_envs, pad_frames, 3)
+        self.ref_root_translations = torch.cat([self.ref_root_translations, pad_translations], dim=1)
+
+        last_orient = self.ref_root_orient[-1:, :]
+        pad_orient = last_orient.expand(pad_frames, 4)
+        self.ref_root_orient = torch.cat([self.ref_root_orient, pad_orient], dim=0)
+
+        pad_linear = torch.zeros(pad_frames, 3, device=self.device)
+        self.ref_root_linear = torch.cat([self.ref_root_linear, pad_linear], dim=0)
+
+        pad_angular = torch.zeros(pad_frames, 3, device=self.device)
+        self.ref_root_angular = torch.cat([self.ref_root_angular, pad_angular], dim=0)
+
+        # padding qpos by default joint values
+        joint_id, joint_names = self.asset.find_joints(joint_names, preserve_order=True)
+        default_qpos = self.robot.data.default_joint_pos[0][joint_id]
+        pad_qpos = default_qpos.unsqueeze(0).expand(pad_frames, -1)
+        self.ref_qpos = torch.cat([self.ref_qpos, pad_qpos], dim=0)
+
+        # padding keypoints by zeros and return 0 reward after num_frames
+        pad_keypoints = torch.zeros(pad_frames, 12 * 3, device=self.device)
+        self.ref_keypoints = torch.cat([self.ref_keypoints, pad_keypoints], dim=0)
+
+
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

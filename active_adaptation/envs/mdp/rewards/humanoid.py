@@ -285,6 +285,8 @@ class tracking_velocity(Reward):
         ref_root_velocity = torch.cat([ref_root_linear, ref_root_angular], dim=1)
         err = (self.asset.data.root_vel_w - ref_root_velocity).square().sum(-1, True)
 
+        self.env.command_manager._cum_error_vel.mul_(self.decay).add_(err * self.env.step_dt)
+
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
 
@@ -332,4 +334,31 @@ class tracking_keypoints(Reward):
         self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         
         reward = torch.exp(- err.sqrt() / self.sigma)
+        if_need_keypoint = timestep < self.env.command_manager.num_frames
+        return reward * if_need_keypoint.float()
+    
+
+class task_done(Reward):
+    def __init__(self, env, 
+                 weight: float, 
+                 enabled: bool = True,
+                 thres: float = 1.0,
+                 number: float = 100,):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.thres = thres
+        self.number = number
+
+        self.num_frames = self.env.command_manager.num_frames
+
+    def update(self):
+        self._cum_error = self.env.command_manager._cum_error_root + \
+                            self.env.command_manager._cum_error_vel + \
+                            self.env.command_manager._cum_error_qpos + \
+                            self.env.command_manager._cum_error_keypoint
+
+    def compute(self) -> torch.Tensor:
+        reach_thres = self._cum_error < self.thres
+        reach_max_frame = (self.env.episode_length_buf == self.num_frames).unsqueeze(1)
+        reward = (reach_thres & reach_max_frame).float() * self.number
         return reward

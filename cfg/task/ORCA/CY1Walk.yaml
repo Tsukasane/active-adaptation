@@ -22,7 +22,12 @@ action:
 command:
   _target_: active_adaptation.envs.mdp.MotionClip
   motion_clip: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions/0-SFU_0007_0007_Walking001_poses_retarget.pkl"
-  
+  joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                waist_yaw_joint,
+                larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
+
 observation:
   policy:
     # 3D body pose and velocity caconicalized with respect to local frame
@@ -43,21 +48,15 @@ observation:
 
 reward:
   loco:
-    # for tracking the reference root pose
+    # for tracking the reference motion
     tracking_root:      {weight: 1.0, enabled: true, sigma: 0.25}
-
-    # for tracking root velocity
     tracking_velocity:  {weight: 1.0, enabled: true, sigma: 0.25}
-
-    # for tracking the reference qpos
     tracking_qpos:      {weight: 1.0, enabled: true, sigma: 0.25,
                           joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                         rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                         waist_yaw_joint,
                                         larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
                                         rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]}
-
-    # for tracking the keypoints
     tracking_keypoints: {weight: 1.0, enabled: true, sigma: 0.25,
                           body_names: [ larm_link2, rarm_link2,
                                         larm_link4, rarm_link4,
@@ -65,6 +64,9 @@ reward:
                                         lleg_link1, rleg_link1,
                                         lleg_link4, rleg_link4,
                                         lleg_link5, rleg_link5]}
+
+    # task-done reward
+    task_done:          {weight: 1.0, enabled: true, thres: 2, number: 100}
 
     # for survival
     survival:           {weight: 1.0, enabled: true}
@@ -111,4 +113,5 @@ termination:
     body_names_expr: ["base_link", "[l,r]leg_link4", "[l,r]arm_link6"]
     t_thres: 0.1
     min_time: 0.5
-  # fall_over: {xy_thres: 0.8}
+  fall_over: {xy_thres: 0.8}
+  cum_error: {thres: 5.0}

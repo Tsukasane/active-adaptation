@@ -101,7 +101,10 @@ class cum_error(Termination):
         self.error_exceeded_count[env_ids] = 0
 
     def update(self):
-        cum_error = self.command_manager._cum_error_root + self.command_manager._cum_error_qpos + self.command_manager._cum_error_keypoint
+        cum_error = self.command_manager._cum_error_root + \
+                    self.command_manager._cum_error_vel + \
+                    self.command_manager._cum_error_qpos + \
+                    self.command_manager._cum_error_keypoint
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
@@ -148,12 +151,3 @@ class impact_exceeds(Termination):
     def __call__(self) -> torch.Tensor:
         impact_force = self.contact_sensor.data.net_forces_w_history[:, :, self.body_ids]
         return (impact_force.norm(dim=-1).mean(1) > self.thres).any(1, True)
-
-class max_timesteps(Termination):
-    def __init__(self, env):
-        super().__init__(env)
-        self.num_frames = self.env.command_manager.num_frames
-    
-    def __call__(self) -> torch.Tensor:
-        timestep = self.env.command_manager.frame
-        return timestep >= self.num_frames
