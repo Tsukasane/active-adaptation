@@ -1412,10 +1412,18 @@ class ref_trans_gap(Observation):
         ref_root_trans = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
 
         quat = self.asset.data.root_quat_w.unsqueeze(1)
-        current_root_pos = self.asset.data.root_pos_w.unsqueeze(1)          # [num_envs, 1, 3]
-        gap = ref_root_trans - current_root_pos                             # [num_envs, steps, 3]
-        gap_b = quat_rotate_inverse(quat, gap)
+        self.current_root_pos = self.asset.data.root_pos_w.unsqueeze(1)          # [num_envs, 1, 3]
+        self.gap = ref_root_trans - self.current_root_pos                        # [num_envs, steps, 3]
+        gap_b = quat_rotate_inverse(quat, self.gap)
         return gap_b.reshape(self.num_envs, -1)
+    
+    def debug_draw(self):
+        self.env.debug_draw.vector(
+            self.current_root_pos[:, 0],
+            self.gap[:, 0],
+            color=(1., 0., 1., 1.),
+            size=1.
+        )
 
 class ref_keypoints_gap(CartesianObs):
     def __init__(

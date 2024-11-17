@@ -262,8 +262,15 @@ class tracking_root(Reward):
         batch_indices = torch.arange(self.num_envs, device=self.device)
         ref_root_translation = self.env.command_manager.ref_root_translations[batch_indices, timestep.squeeze(1)]
         ref_root_rotation = self.env.command_manager.ref_root_orient[timestep].squeeze(1)
-        ref_root_pose = torch.cat([ref_root_translation, ref_root_rotation], dim=1)
-        err = (self.asset.data.root_state_w[:, :7] - ref_root_pose).square().sum(-1, True)
+
+        root_pos_w = self.asset.data.root_pos_w
+        pos_err = (root_pos_w - ref_root_translation[:, :3]).square().sum(-1, True)
+
+        root_rot_w = self.asset.data.root_quat_w
+        dot_product = dot(root_rot_w, ref_root_rotation)
+        angular_err = 2 * torch.acos(dot_product.abs().clamp(max=1.0))
+        
+        err = pos_err + angular_err
 
         self.env.command_manager._cum_error_root.mul_(self.decay).add_(err * self.env.step_dt)
 
@@ -280,15 +287,24 @@ class tracking_velocity(Reward):
 
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1)
-        ref_root_linear = self.env.command_manager.ref_root_linear[timestep].squeeze(1)
+        self.ref_root_linear = self.env.command_manager.ref_root_linear[timestep].squeeze(1)
         ref_root_angular = self.env.command_manager.ref_root_angular[timestep].squeeze(1)
-        ref_root_velocity = torch.cat([ref_root_linear, ref_root_angular], dim=1)
+        ref_root_velocity = torch.cat([self.ref_root_linear, ref_root_angular], dim=1)
         err = (self.asset.data.root_vel_w - ref_root_velocity).square().sum(-1, True)
 
         self.env.command_manager._cum_error_vel.mul_(self.decay).add_(err * self.env.step_dt)
 
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
+    
+    def debug_draw(self):
+        self.env.debug_draw.vector(
+            self.asset.data.root_pos_w[:, :3],
+            self.ref_root_linear,
+            color=(0., 1., 0., 1.),
+            size=1.0
+        )
+
 
 class tracking_qpos(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str=".*"):
@@ -303,11 +319,11 @@ class tracking_qpos(Reward):
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1)
         ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)
-        err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square().sum(-1, True)    # torch.Size([num_envs])
+        err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square()    # torch.Size([num_envs])
         
-        self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err * self.env.step_dt)
+        self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err.mean(-1, True) * self.env.step_dt)
         
-        reward = torch.exp(- err.sqrt() / self.sigma)
+        reward = torch.exp(- err.mean(-1, True) / self.sigma)
         return reward
 
 class tracking_keypoints(Reward):

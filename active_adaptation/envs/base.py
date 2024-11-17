@@ -249,7 +249,7 @@ class Env(EnvBase):
         reward_spec = Composite({})
 
         # parse rewards
-        self.clip_rewards = self.cfg.reward.pop("_clip_", True)
+        self.clip_rewards = self.cfg.reward.pop("_clip_", False)
         self.reward_groups = OrderedDict()
         for group_name, func_specs in self.cfg.reward.items():
             print(f"Reward group: {group_name}")
