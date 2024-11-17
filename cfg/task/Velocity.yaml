@@ -8,7 +8,7 @@ defaults:
   
 # num_envs: 2
 num_envs: 4096
-max_episode_length: 1000
+max_episode_length: 2000
 
 scene: locomotion
 robot: a1

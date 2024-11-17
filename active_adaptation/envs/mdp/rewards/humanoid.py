@@ -248,6 +248,12 @@ class arm_velocity(Reward):
         root_linvel = self.asset.data.root_lin_vel_w
         d = (arm_linvel - root_linvel.unsqueeze(1)).square().sum(-1)
         return - d.mean(1, True)
+
+r'''
+in base.py : env
+self._update( episode_length_buf += 1 )
+self._compute_reward()
+'''
     
 class tracking_root(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
@@ -258,7 +264,15 @@ class tracking_root(Reward):
         self.decay = self.env.command_manager.decay
     
     def compute(self) -> torch.Tensor:
-        timestep = self.env.episode_length_buf.unsqueeze(1)
+        
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+
+        try:
+            assert (timestep < self.env.max_episode_length).all()
+        except AssertionError as e:
+            timestep_idx = torch.where(timestep >= self.env.max_episode_length)[0]
+            print(f"timestep in tracking root is greater than {self.env.max_episode_length} at {timestep_idx} with value {timestep[timestep_idx]}")
+
         batch_indices = torch.arange(self.num_envs, device=self.device)
         ref_root_translation = self.env.command_manager.ref_root_translations[batch_indices, timestep.squeeze(1)]
         ref_root_rotation = self.env.command_manager.ref_root_orient[timestep].squeeze(1)
@@ -286,7 +300,7 @@ class tracking_velocity(Reward):
         self.decay = self.env.command_manager.decay
 
     def compute(self) -> torch.Tensor:
-        timestep = self.env.episode_length_buf.unsqueeze(1)
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
         self.ref_root_linear = self.env.command_manager.ref_root_linear[timestep].squeeze(1)
         ref_root_angular = self.env.command_manager.ref_root_angular[timestep].squeeze(1)
         ref_root_velocity = torch.cat([self.ref_root_linear, ref_root_angular], dim=1)
@@ -317,7 +331,7 @@ class tracking_qpos(Reward):
         self.decay = self.env.command_manager.decay
     
     def compute(self) -> torch.Tensor:
-        timestep = self.env.episode_length_buf.unsqueeze(1)
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
         ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)
         err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square()    # torch.Size([num_envs])
         
@@ -337,7 +351,7 @@ class tracking_keypoints(Reward):
         self.decay = self.env.command_manager.decay
     
     def compute(self) -> torch.Tensor:
-        timestep = self.env.episode_length_buf.unsqueeze(1)
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
         ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1)
         body_pos_w = self.asset.data.body_pos_w[:, self.body_ids]   # torch.Size([num_envs, num_bodies, 3])
         root_position = self.asset.data.root_pos_w.unsqueeze(1)

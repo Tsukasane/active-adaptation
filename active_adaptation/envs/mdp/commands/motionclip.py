@@ -52,8 +52,7 @@ class MotionClip(Command):
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [T, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
 
         self.num_frames = self.root_translations.shape[0]
-        self.max_episode_length = ((self.num_frames + 499) // 500) * 500
-        self.env.max_episode_length = self.max_episode_length
+        self.max_episode_length = self.env.max_episode_length
 
         padding_frames = self.max_episode_length - self.num_frames
         self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
