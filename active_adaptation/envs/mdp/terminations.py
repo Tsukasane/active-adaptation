@@ -78,6 +78,26 @@ class fall_over(Termination):
         fall_over = gravity_xy.norm(dim=1, keepdim=True) >= self.xy_thres
         return fall_over
 
+class root_deviation(Termination):
+    def __init__(self, env, max_distance: float):
+        super().__init__(env)
+        self.max_distance = torch.tensor(max_distance, device=self.env.device)
+        self.asset: Articulation = self.env.scene["robot"]
+    
+    def __call__(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        batch_indices = torch.arange(self.num_envs, device=self.env.device)
+        ref_root_translation = self.env.command_manager.ref_root_translations[batch_indices, timestep.squeeze(1)]
+
+        root_pos_w = self.asset.data.root_pos_w
+        deviation = (root_pos_w - ref_root_translation).norm(dim=1, keepdim=True)
+
+        # success_indicators = (self.episode_length_buf >= self.max_episode_length * 0.9).unsqueeze(1).float()
+        # success_rate = success_indicators.mean().item()
+
+        # self.env.stats["termination"]["max_deviation_allowed"] = self.max_distance.item()
+
+        return deviation > self.max_distance
 
 class tracking_error(Termination):
     def __init__(self, env, tracking_error_threshold):
@@ -105,6 +125,7 @@ class cum_error_root(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
+        # self.env.stats["termination"]["cum_error_root"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -125,6 +146,7 @@ class cum_error_root_rot(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
+        # self.env.stats["termination"]["cum_error_root_rot"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -165,6 +187,7 @@ class cum_error_qpos(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
+        # self.env.stats["termination"]["cum_error_qpos"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -185,6 +208,7 @@ class cum_error_kp(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
+        # self.env.stats["termination"]["cum_error_kp"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)

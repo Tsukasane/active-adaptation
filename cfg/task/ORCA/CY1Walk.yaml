@@ -51,7 +51,6 @@ observation:
 reward:
   loco:
     # for tracking the reference motion
-    # tracking_root:      {weight: 1.0, enabled: true, sigma: 1.0}
     tracking_root_trans:      {weight: 1.0, enabled: true, sigma: 1.0}
     tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 1.0}
     # tracking_velocity:  {weight: 1.0, enabled: true, sigma: 1.0}
@@ -113,8 +112,9 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
+  root_deviation: {max_distance: 0.5}
   cum_error_root: {thres: 5.0}
   cum_error_root_rot: {thres: 5.0}
   # cum_error_vel: {thres: 5.0}
-  cum_error_qpos: {thres: 5.0}
-  cum_error_kp: {thres: 5.0}
+  cum_error_qpos: {thres: 1.0}
+  cum_error_kp: {thres: 1.0}
