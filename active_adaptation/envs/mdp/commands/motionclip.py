@@ -63,6 +63,7 @@ class MotionClip(Command):
 
         self.decay = decay
         self._cum_error_root = torch.zeros(self.num_envs, 1, device=self.device)
+        self._cum_error_root_rot = torch.zeros(self.num_envs, 1, device=self.device)
         self._cum_error_vel = torch.zeros(self.num_envs, 1, device=self.device)
         self._cum_error_qpos = torch.zeros(self.num_envs, 1, device=self.device)
         self._cum_error_keypoint = torch.zeros(self.num_envs, 1, device=self.device)

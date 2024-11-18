@@ -291,6 +291,57 @@ class tracking_root(Reward):
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
     
+class tracking_root_trans(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        
+        self.sigma = sigma
+        self.decay = self.env.command_manager.decay
+    
+    def compute(self) -> torch.Tensor:
+        
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+
+        try:
+            assert (timestep < self.env.max_episode_length).all()
+        except AssertionError as e:
+            timestep_idx = torch.where(timestep >= self.env.max_episode_length)[0]
+            print(f"timestep in tracking root is greater than {self.env.max_episode_length} at {timestep_idx} with value {timestep[timestep_idx]}")
+
+        batch_indices = torch.arange(self.num_envs, device=self.device)
+        ref_root_translation = self.env.command_manager.ref_root_translations[batch_indices, timestep.squeeze(1)]
+
+        root_pos_w = self.asset.data.root_pos_w
+        err = (root_pos_w - ref_root_translation[:, :3]).square().sum(-1, True)
+
+        self.env.command_manager._cum_error_root.mul_(self.decay).add_(err * self.env.step_dt)
+
+        reward = torch.exp(- err.sqrt() / self.sigma)
+        return reward
+    
+class tracking_root_rot(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        
+        self.sigma = sigma
+        self.decay = self.env.command_manager.decay
+    
+    def compute(self) -> torch.Tensor:
+        
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_root_rotation = self.env.command_manager.ref_root_orient[timestep].squeeze(1)
+
+        root_rot_w = self.asset.data.root_quat_w
+        dot_product = dot(root_rot_w, ref_root_rotation)
+        err = 2 * torch.acos(dot_product.abs().clamp(max=1.0))
+
+        self.env.command_manager._cum_error_root_rot.mul_(self.decay).add_(err * self.env.step_dt)
+
+        reward = torch.exp(- err / self.sigma)
+        return reward
+    
 class tracking_velocity(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
         super().__init__(env, weight, enabled)

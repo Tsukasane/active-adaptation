@@ -109,6 +109,26 @@ class cum_error_root(Termination):
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
     
+class cum_error_root_rot(Termination):
+    def __init__(self, env, thres: float = 0.85, min_steps: int = 50):
+        super().__init__(env)
+        self.thres = torch.tensor(thres, device=self.env.device)
+        self.min_steps = min_steps
+        self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
+        self.command_manager = self.env.command_manager
+
+    def reset(self, env_ids):
+        self.error_exceeded_count[env_ids] = 0
+
+    def update(self):
+        cum_error = self.command_manager._cum_error_root_rot
+        error_exceeded = (cum_error > self.thres).any(-1, True)
+        self.error_exceeded_count[error_exceeded] += 1
+        self.error_exceeded_count[~error_exceeded] = 0
+
+    def __call__(self) -> torch.Tensor:
+        return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
+    
 class cum_error_vel(Termination):
     def __init__(self, env, thres: float = 0.85, min_steps: int = 50):
         super().__init__(env)
