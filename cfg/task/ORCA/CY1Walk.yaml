@@ -22,6 +22,7 @@ action:
 command:
   _target_: active_adaptation.envs.mdp.MotionClip
   motion_clip: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions/0-SFU_0007_0007_Walking001_poses_retarget.pkl"
+  # motion_clip: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions/lift.pkl"
   joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                 rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                 waist_yaw_joint,
@@ -51,16 +52,16 @@ observation:
 reward:
   loco:
     # for tracking the reference motion
-    tracking_root_trans:      {weight: 1.0, enabled: true, sigma: 1.0}
+    tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 1.0}
     tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 1.0}
     # tracking_velocity:  {weight: 1.0, enabled: true, sigma: 1.0}
-    tracking_qpos:      {weight: 1.0, enabled: true, sigma: 1.0,
+    tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.81,
                           joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                         rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                         waist_yaw_joint,
                                         larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
                                         rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]}
-    tracking_keypoints: {weight: 1.0, enabled: true, sigma: 1.0,
+    tracking_keypoints: {weight: 3.0, enabled: true, sigma: 0.81,
                           body_names: [ larm_link2, rarm_link2,
                                         larm_link4, rarm_link4,
                                         larm_link6, rarm_link6,
@@ -82,8 +83,8 @@ reward:
     joint_acc_l2:       {weight: 1.0e-8, enabled: true}
     joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: .*arm_joint.*}
     joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*arm_joint.*}
-    action_rate_l2:     {weight: 0.02, enabled: true}
-    action_rate2_l2:    {weight: 0.01, enabled: true}
+    action_rate_l2:     {weight: 0.05, enabled: true}
+    action_rate2_l2:    {weight: 0.02, enabled: true}
 
 randomization:
   push:     {body_names: ["base_link", "waist_yaw_link"], force_range: [0.0, 0.1]}
@@ -113,8 +114,5 @@ termination:
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
   root_deviation: {max_distance: 0.5}
-  cum_error_root: {thres: 5.0}
-  cum_error_root_rot: {thres: 5.0}
-  # cum_error_vel: {thres: 5.0}
-  cum_error_qpos: {thres: 1.0}
-  cum_error_kp: {thres: 1.0}
+  cum_error_qpos: {thres: 0.2}
+  cum_error_kp: {thres: 0.2}

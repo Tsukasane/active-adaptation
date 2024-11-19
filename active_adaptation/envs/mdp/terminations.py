@@ -125,7 +125,6 @@ class cum_error_root(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
-        # self.env.stats["termination"]["cum_error_root"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -146,7 +145,6 @@ class cum_error_root_rot(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
-        # self.env.stats["termination"]["cum_error_root_rot"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -187,7 +185,6 @@ class cum_error_qpos(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
-        # self.env.stats["termination"]["cum_error_qpos"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)
@@ -208,7 +205,6 @@ class cum_error_kp(Termination):
         error_exceeded = (cum_error > self.thres).any(-1, True)
         self.error_exceeded_count[error_exceeded] += 1
         self.error_exceeded_count[~error_exceeded] = 0
-        # self.env.stats["termination"]["cum_error_kp"] = cum_error.mean().item()
 
     def __call__(self) -> torch.Tensor:
         return (self.error_exceeded_count > self.min_steps).reshape(-1, 1)

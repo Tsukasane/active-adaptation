@@ -403,14 +403,16 @@ class tracking_keypoints(Reward):
     
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1) - 1
-        ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1)
+        ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1).reshape(self.num_envs, -1, 3)
         body_pos_w = self.asset.data.body_pos_w[:, self.body_ids]   # torch.Size([num_envs, num_bodies, 3])
         root_position = self.asset.data.root_pos_w.unsqueeze(1)
         body_pos_w = body_pos_w - root_position
         root_quat = self.asset.data.root_quat_w.unsqueeze(1)
 
-        body_pos_b = quat_rotate_inverse(root_quat, body_pos_w).reshape(self.num_envs, -1)
-        err = (body_pos_b - ref_keypoints).square().sum(-1, True)
+        body_pos_b = quat_rotate_inverse(root_quat, body_pos_w)
+        diff = body_pos_b - ref_keypoints
+        diff_per_kp = diff.norm(dim=-1)
+        err = diff_per_kp.square().sum(-1, True)
         
         self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         
