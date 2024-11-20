@@ -268,7 +268,7 @@ class Env(EnvBase):
                 self._reset_callbacks.append(reward.reset)
                 self._debug_draw_callbacks.append(reward.debug_draw)
                 self._step_callbacks.append(reward.step)
-                print(f"\t{key}: \t{reward.weight:.2f}, \t{reward.enabled}")
+                print(f"\t{key}: \t{reward.weight:.4f}, \t{reward.enabled}")
             self.reward_groups[group_name] = RewardGroup(self, group_name, funcs)
             reward_spec["stats", group_name, "return"] = UnboundedContinuous(1, device=self.device)
             reward_spec["stats", group_name, "reward_clip_ratio"] = UnboundedContinuous(1, device=self.device)

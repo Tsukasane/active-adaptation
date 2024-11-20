@@ -674,7 +674,7 @@ class max_feet_height(Reward):
         self.env.debug_draw.point(
             feet_pos_w[self.impact],
             color=(1.0, 0., 0., 1.),
-            size=30,
+            size=20,
         )
 
 

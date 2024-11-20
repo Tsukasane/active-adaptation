@@ -392,11 +392,15 @@ class tracking_qpos(Reward):
         return reward
 
 class tracking_keypoints(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str=".*"):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, 
+                 upper_body_names: str=".*",
+                 lower_body_names: str=".*"):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
-        self.body_ids = self.asset.find_bodies(body_names, preserve_order=True)[0]
-        self.body_ids = torch.tensor(self.body_ids, device=self.device)
+        self.upper_body_ids = self.asset.find_bodies(upper_body_names, preserve_order=True)[0]
+        self.upper_body_ids = torch.tensor(self.upper_body_ids, device=self.device)
+        self.lower_body_ids = self.asset.find_bodies(lower_body_names, preserve_order=True)[0]
+        self.lower_body_ids = torch.tensor(self.lower_body_ids, device=self.device)
 
         self.sigma = sigma
         self.decay = self.env.command_manager.decay
@@ -404,15 +408,24 @@ class tracking_keypoints(Reward):
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1) - 1
         ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1).reshape(self.num_envs, -1, 3)
-        body_pos_w = self.asset.data.body_pos_w[:, self.body_ids]   # torch.Size([num_envs, num_bodies, 3])
+        up_body_pos_w = self.asset.data.body_pos_w[:, self.upper_body_ids]   # torch.Size([num_envs, num_bodies, 3])
+        low_body_pos_w = self.asset.data.body_pos_w[:, self.lower_body_ids]   # torch.Size([num_envs, num_bodies, 3])
         root_position = self.asset.data.root_pos_w.unsqueeze(1)
-        body_pos_w = body_pos_w - root_position
+        up_body_pos_w = up_body_pos_w - root_position
+        low_body_pos_w = low_body_pos_w - root_position
         root_quat = self.asset.data.root_quat_w.unsqueeze(1)
 
-        body_pos_b = quat_rotate_inverse(root_quat, body_pos_w)
-        diff = body_pos_b - ref_keypoints
-        diff_per_kp = diff.norm(dim=-1)
-        err = diff_per_kp.square().sum(-1, True)
+        up_body_pos_b = quat_rotate_inverse(root_quat, up_body_pos_w)
+        diff_up = up_body_pos_b - ref_keypoints[:, :6]
+        diff_per_kp_up = diff_up.norm(dim=-1)
+        err_up = diff_per_kp_up.square().sum(-1, True)
+
+        low_body_pos_b = quat_rotate_inverse(root_quat, low_body_pos_w)
+        diff_low = low_body_pos_b - ref_keypoints[:, 6:]
+        diff_per_kp_low = diff_low.norm(dim=-1)
+        err_low = diff_per_kp_low.square().sum(-1, True)
+
+        err = err_up + err_low * 1.5
         
         self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         
@@ -420,6 +433,17 @@ class tracking_keypoints(Reward):
         if_need_keypoint = timestep < self.env.command_manager.num_frames
         return reward * if_need_keypoint.float()
     
+    def debug_draw(self):
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1).reshape(self.num_envs, -1, 3)       # keypoint in root local frame
+
+        root_position = self.asset.data.root_pos_w.unsqueeze(1)
+        root_quat = self.asset.data.root_quat_w.unsqueeze(1)
+
+        kp_global = quat_rotate(root_quat, ref_keypoints) + root_position
+        for i in range(kp_global.shape[1]):
+            self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
+
 
 class task_done(Reward):
     def __init__(self, env, 
