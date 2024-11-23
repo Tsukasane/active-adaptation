@@ -30,7 +30,7 @@ command:
                 rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
 
 observation:
-  policy:
+  robot:
     # 3D body pose and velocity caconicalized with respect to local frame
     body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
     root_linvel_b:    {yaw_only: false}
@@ -41,13 +41,12 @@ observation:
     joint_vel:        {noise_std: 0.2}
     root_height:
     root_quat_w:
-    # prev_actions:     {steps: 3}
-    # future reference motions
+  history:
+    history_io:            {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
+  ref_motion_:         # future reference motions
     ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
-    # history
-    history:            {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
 
 reward:
   loco:

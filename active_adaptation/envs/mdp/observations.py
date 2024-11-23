@@ -1461,7 +1461,7 @@ class ref_keypoints_gap(CartesianObs):
         return gap.reshape(self.num_envs, -1)
     
 
-class history(Observation):
+class history_io(Observation):
     def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
         super().__init__(env)
         self.body_pos = body_pos(env, body_names)

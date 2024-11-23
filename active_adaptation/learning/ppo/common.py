@@ -30,9 +30,10 @@ from torchrl.modules import ProbabilisticActor
 from torchrl.data import CompositeSpec
 
 
-OBS_KEY = "policy" # ("agents", "observation")
+OBS_KEY = "robot" # ("agents", "observation", "policy")
 OBS_PRIV_KEY = "priv"
-OBS_HIST_KEY = "policy_h"
+OBS_HIST_KEY = "history"
+OBS_REF_KEY = "ref_motion_"
 ACTION_KEY = "action" # ("agents", "action")
 REWARD_KEY = ("next", "reward") # ("agents", "reward")
 # DONE_KEY = ("next", "done")
