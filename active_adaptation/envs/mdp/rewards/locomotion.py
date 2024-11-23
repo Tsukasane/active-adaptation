@@ -723,68 +723,68 @@ class max_feet_height(Reward):
 #         self.env.debug_draw.vector(self.center, self.center_vel, color=(1.0, 0., 0., 1.))
 
 
-class max_feet_height(Reward):
-    def __init__(
-        self,
-        env,
-        body_names: str,
-        target_height: float,
-        weight: float,
-        enabled: bool = True
-    ):
-        super().__init__(env, weight, enabled)
-        self.target_height = target_height
+# class max_feet_height(Reward):
+#     def __init__(
+#         self,
+#         env,
+#         body_names: str,
+#         target_height: float,
+#         weight: float,
+#         enabled: bool = True
+#     ):
+#         super().__init__(env, weight, enabled)
+#         self.target_height = target_height
 
-        self.asset: Articulation = self.env.scene["robot"]
-        self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
-        self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
-        self.body_ids = torch.tensor(self.body_ids, device=self.device)
+#         self.asset: Articulation = self.env.scene["robot"]
+#         self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+#         self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
+#         self.body_ids = torch.tensor(self.body_ids, device=self.device)
 
-        self.asset_body_ids, self.asset_body_names = self.asset.find_bodies(body_names)
+#         self.asset_body_ids, self.asset_body_names = self.asset.find_bodies(body_names)
 
-        self.in_contact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-        self.impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-        self.detach = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-        self.has_impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-        self.max_height = torch.zeros(self.num_envs, len(self.body_ids), device=self.device)
-        self.impact_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
-        self.detach_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
+#         self.in_contact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
+#         self.impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
+#         self.detach = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
+#         self.has_impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
+#         self.max_height = torch.zeros(self.num_envs, len(self.body_ids), device=self.device)
+#         self.impact_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
+#         self.detach_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
 
-    def reset(self, env_ids):
-        self.has_impact[env_ids] = False
+#     def reset(self, env_ids):
+#         self.has_impact[env_ids] = False
     
-    def update(self):
-        contact_force = self.contact_sensor.data.net_forces_w_history[:, :, self.body_ids]
-        feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
-        in_contact = (contact_force.norm(dim=-1) > 0.01).any(dim=1)
-        self.impact[:] = (~self.in_contact) & in_contact
-        self.detach[:] = self.in_contact & (~in_contact)
-        self.in_contact[:] = in_contact
-        self.has_impact.logical_or_(self.impact)
-        self.impact_point[self.impact] = feet_pos_w[self.impact]
-        self.detach_point[self.detach] = feet_pos_w[self.detach]
-        self.max_height[:] = torch.where(
-            self.detach,
-            feet_pos_w[:, :, 2],
-            torch.maximum(self.max_height, feet_pos_w[:, :, 2])
-        )
+#     def update(self):
+#         contact_force = self.contact_sensor.data.net_forces_w_history[:, :, self.body_ids]
+#         feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
+#         in_contact = (contact_force.norm(dim=-1) > 0.01).any(dim=1)
+#         self.impact[:] = (~self.in_contact) & in_contact
+#         self.detach[:] = self.in_contact & (~in_contact)
+#         self.in_contact[:] = in_contact
+#         self.has_impact.logical_or_(self.impact)
+#         self.impact_point[self.impact] = feet_pos_w[self.impact]
+#         self.detach_point[self.detach] = feet_pos_w[self.detach]
+#         self.max_height[:] = torch.where(
+#             self.detach,
+#             feet_pos_w[:, :, 2],
+#             torch.maximum(self.max_height, feet_pos_w[:, :, 2])
+#         )
 
-    def compute(self) -> torch.Tensor:
-        reference_height = torch.maximum(self.impact_point[:, :, 2], self.detach_point[:, :, 2])
-        max_height = self.max_height - reference_height
-        r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(dim=1, keepdim=True)
-        is_standing = self.env.command_manager.is_standing_env.squeeze(1)
-        r[~is_standing] -= r[~is_standing].mean()
-        r[is_standing] = 0
-        return r
+#     def compute(self) -> torch.Tensor:
+#         reference_height = torch.maximum(self.impact_point[:, :, 2], self.detach_point[:, :, 2])
+#         max_height = self.max_height - reference_height
+#         r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(dim=1, keepdim=True)
+#         is_standing = self.env.command_manager.is_standing_env.squeeze(1)
+#         r[~is_standing] -= r[~is_standing].mean()
+#         r[is_standing] = 0
+#         return r
 
-    def debug_draw(self):
-        feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
-        self.env.debug_draw.point(
-            feet_pos_w[self.impact],
-            color=(1.0, 0., 0., 1.),
-            size=30,
-        )
+#     def debug_draw(self):
+#         feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
+#         self.env.debug_draw.point(
+#             feet_pos_w[self.impact],
+#             color=(1.0, 0., 0., 1.),
+#             size=30,
+#         )
 
     # def _reward_feet_max_height_for_this_air(self):
     #     # Reward long steps

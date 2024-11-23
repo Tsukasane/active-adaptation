@@ -73,9 +73,9 @@ reward:
     # TODO
 
     # for feet gesture
-    feet_slip:          {weight: 0.5, enabled: true, body_names: .*leg_link6}
+    feet_slip:          {weight: 0.75, enabled: true, body_names: .*leg_link6}
     feet_orientation:   {weight: 0.2, enabled: true, feet_names: .*leg_link5, body_name: waist_yaw_link}
-    # max_feet_height:    {weight: 0.5, enabled: true, body_names: .*leg_link5, target_height: 0.15}
+    max_feet_height:    {weight: 0.5, enabled: true, body_names: .*leg_link6, target_height: 0.15}
 
     # for survival
     survival:           {weight: 1.0, enabled: true}
