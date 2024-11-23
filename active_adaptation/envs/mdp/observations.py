@@ -1474,11 +1474,11 @@ class history(Observation):
         self.joint_ids = self.joint_pos.joint_ids
 
         self.steps = steps + 1
-        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, steps, device=self.device)
-        self.root_linvel_b_hist = torch.zeros(self.num_envs, 3, steps, device=self.device)
-        self.root_angvel_b_hist = torch.zeros(self.num_envs, 3, steps, device=self.device)
-        self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), steps, device=self.device)
-        self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), steps, device=self.device)
+        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, self.steps, device=self.device)
+        self.root_linvel_b_hist = torch.zeros(self.num_envs, 3, self.steps, device=self.device)
+        self.root_angvel_b_hist = torch.zeros(self.num_envs, 3, self.steps, device=self.device)
+        self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
+        self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
 
     def reset(self, env_ids: torch.Tensor):
         self.body_pos_hist[env_ids] = 0.
@@ -1504,11 +1504,18 @@ class history(Observation):
         self.joint_vel_hist[:, :, 0] = self.joint_vel.compute().reshape(self.num_envs, -1)
 
     def compute(self):
-        return torch.cat([
-            self.body_pos_hist[..., 1:].reshape(self.num_envs, -1),
-            self.root_linvel_b_hist[..., 1:].reshape(self.num_envs, -1),
-            self.root_angvel_b_hist[..., 1:].reshape(self.num_envs, -1),
-            self.joint_pos_hist[..., 1:].reshape(self.num_envs, -1),
-            self.joint_vel_hist[..., 1:].reshape(self.num_envs, -1),
-        ], dim=1)
+        body_pos_hist = self.body_pos_hist.permute(0, 3, 1, 2).reshape(self.num_envs, self.steps, -1)   
+        root_linvel_b_hist = self.root_linvel_b_hist.permute(0, 2, 1)
+        root_angvel_b_hist = self.root_angvel_b_hist.permute(0, 2, 1)                                   
+        joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)                                          
+        joint_vel_hist = self.joint_vel_hist.permute(0, 2, 1)           
+        features = torch.cat([
+                    body_pos_hist,              # [N, steps, 3 * num_bodies]
+                    root_linvel_b_hist,         # [N, steps, 3]
+                    root_angvel_b_hist,         # [N, steps, 3]
+                    joint_pos_hist,             # [N, steps, num_joints]
+                    joint_vel_hist],            # [N, steps, num_joints]
+                dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
+        features_over_time = features[:, 1:, :]
+        return features_over_time.reshape(self.num_envs, -1)
         
