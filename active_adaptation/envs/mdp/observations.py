@@ -1509,13 +1509,16 @@ class history(Observation):
         root_angvel_b_hist = self.root_angvel_b_hist.permute(0, 2, 1)                                   
         joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)                                          
         joint_vel_hist = self.joint_vel_hist.permute(0, 2, 1)           
-        features = torch.cat([
+        obs_per_time = torch.cat([
                     body_pos_hist,              # [N, steps, 3 * num_bodies]
                     root_linvel_b_hist,         # [N, steps, 3]
                     root_angvel_b_hist,         # [N, steps, 3]
                     joint_pos_hist,             # [N, steps, num_joints]
                     joint_vel_hist],            # [N, steps, num_joints]
                 dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
-        features_over_time = features[:, 1:, :]
+        
+        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + 6 + 2 * num_joints]
+        action_per_time = self.env.action_manager.action_buf[:, :, :self.steps-1].permute(0, 2, 1)  # [N, steps-1, num_joints]
+        features_over_time = torch.cat([obs_per_time, action_per_time], dim=2)
         return features_over_time.reshape(self.num_envs, -1)
         

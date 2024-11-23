@@ -41,7 +41,7 @@ observation:
     joint_vel:        {noise_std: 0.2}
     root_height:
     root_quat_w:
-    prev_actions:     {steps: 3}
+    # prev_actions:     {steps: 3}
     # future reference motions
     ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}
