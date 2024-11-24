@@ -28,6 +28,7 @@ from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import TensorDictModuleBase as ModBase
 from torchrl.modules import ProbabilisticActor
 from torchrl.data import CompositeSpec
+from dataclasses import dataclass, field
 
 
 OBS_KEY = "robot" # ("agents", "observation", "policy")
@@ -41,6 +42,100 @@ TERM_KEY = ("next", "terminated")
 DONE_KEY = ("next", "done")
 CMD_KEY = "command"
 
+@dataclass
+class TransformerConfig:
+    token_dim: int = 128
+    output_dim: int = 128
+    latent_dim: int = 256
+
+    robot_tokens: int = 2
+    hist_tokens: int = 2*3
+    ref_motion_tokens: int = 5
+    context_len: int = 2 + 2*3 + 5
+
+    num_head: int = 4
+    num_layer: int = 2
+    dropout_rate: float = 0.1
+
+class Tokenizer(nn.Module):
+    def __init__(self, num_units, num_tokens, token_dim, activation=nn.Mish, norm="before", dropout=0.):
+        super().__init__()
+        assert norm in ("before", "after", None)
+        layers = []
+        for n in num_units:
+            layers.append(nn.LazyLinear(n))
+            if norm == "before":
+                layers.append(nn.LayerNorm(n))
+                layers.append(activation())
+            elif norm == "after":
+                layers.append(activation())
+                layers.append(nn.LayerNorm(n))
+            else:
+                layers.append(activation())
+            if dropout > 0. :
+                layers.append(nn.Dropout(dropout))
+        layers.append(nn.LazyLinear(num_tokens * token_dim))
+        self.model = nn.Sequential(*layers)
+        self.num_tokens = num_tokens
+        self.token_dim = token_dim
+
+    def forward(self, x):
+        x = self.model(x)
+        return x.view(*x.shape[:-1], self.num_tokens, self.token_dim)
+    
+# a BERT-style transformer block
+class Transformer_Block(nn.Module):
+    def __init__(self, latent_dim, num_head, dropout_rate) -> None:
+        super().__init__()
+        self.num_head = num_head
+        self.latent_dim = latent_dim
+        self.ln_1 = nn.LayerNorm(latent_dim)
+        self.attn = nn.MultiheadAttention(latent_dim, num_head, dropout=dropout_rate, batch_first=True)
+        self.ln_2 = nn.LayerNorm(latent_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(latent_dim, 2 * latent_dim),
+            nn.GELU(),
+            nn.Linear(2 * latent_dim, latent_dim),
+            nn.Dropout(dropout_rate),
+        )
+    
+    def forward(self, x: torch.tensor):
+        x = self.ln_1(x)
+        x.add_(self.attn(x, x, x, need_weights=False)[0])
+        x = self.ln_2(x)
+        x = x + self.mlp(x)
+        
+        return x
+    
+class Transformer(nn.Module):
+    def __init__(self, cfg: TransformerConfig):
+        super().__init__()
+        self.input_dim = cfg.token_dim
+        self.output_dim = cfg.output_dim
+        self.context_len = cfg.context_len
+        self.latent_dim = cfg.latent_dim
+        self.num_head = cfg.num_head
+        self.num_layer = cfg.num_layer
+        self.input_layer = nn.Sequential(
+            nn.Linear(cfg.token_dim, cfg.latent_dim),
+            nn.Dropout(cfg.dropout_rate),
+        )
+        self.weight_pos_embed = nn.Embedding(cfg.context_len, cfg.latent_dim)
+        self.attention_blocks = nn.Sequential(
+            *[Transformer_Block(cfg.latent_dim, cfg.num_head, cfg.dropout_rate) for _ in range(cfg.num_layer)],
+        )
+        self.output_layer = nn.Sequential(
+            nn.LayerNorm(cfg.latent_dim),
+            nn.Linear(cfg.latent_dim, cfg.output_dim),
+        )
+    
+    def forward(self, x):
+        x = self.input_layer(x)
+        x = x + self.weight_pos_embed(torch.arange(x.shape[1], device=x.device))
+        x = self.attention_blocks(x)
+
+        x = self.output_layer(x)
+        return x.reshape(-1, self.context_len * self.output_dim)        # [batch_size, context_len * output_dim]
 
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)
@@ -330,6 +425,24 @@ class CatTensors(ModBase):
 
     def forward(self, tensordict: TensorDictBase):
         out = torch.cat([tensordict.get(k) for k in self.in_keys], dim=-1)
+        tensordict.set(self.out_keys[0], out)
+        if self.del_keys:
+            tensordict.exclude(*self.in_keys, inplace=True)
+        return tensordict
+    
+class CatTokens(ModBase):
+    def __init__(self, in_keys, out_key, del_keys=False, sort=True):
+        super().__init__()
+        self.in_keys = in_keys
+        self.out_keys = [out_key]
+
+        self.del_keys = del_keys
+        self.sort = sort
+        if self.sort:
+            self.in_keys = sorted(self.in_keys)
+
+    def forward(self, tensordict: TensorDictBase):
+        out = torch.cat([tensordict.get(k) for k in self.in_keys], dim=1)       # tensordict.get(k) with shape [batch_size, num_tokens, token_dim]
         tensordict.set(self.out_keys[0], out)
         if self.del_keys:
             tensordict.exclude(*self.in_keys, inplace=True)

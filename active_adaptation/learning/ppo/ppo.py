@@ -94,8 +94,10 @@ class PPOPolicy(TensorDictModuleBase):
 
         fake_input = observation_spec.zero()
         print(fake_input)
+
+        transformer_cfg = TransformerConfig()
         
-        def make_encoder(out_key: str):
+        def make_encoder(out_key: str, is_actor: bool=True):
             if "height_scan" in observation_spec.keys(True, True):
                 cnn = nn.Sequential(
                     make_conv(num_channels=[8, 8, 8]),
@@ -108,22 +110,31 @@ class PPOPolicy(TensorDictModuleBase):
                     CatTensors(["_cnn", "_mlp"], out_key),
                 ]
             elif OBS_REF_KEY in observation_spec.keys(True, True):
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
-                    TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
-                    TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
-                    CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
+                if is_actor:
+                    modules = [
+                        TensorDictModule(Tokenizer([256], num_tokens=transformer_cfg.robot_tokens, token_dim=transformer_cfg.token_dim), [OBS_KEY], ["robot_tokens"]),
+                        TensorDictModule(Tokenizer([256], num_tokens=transformer_cfg.hist_tokens, token_dim=transformer_cfg.token_dim), [OBS_HIST_KEY], ["hist_tokens"]),
+                        TensorDictModule(Tokenizer([256], num_tokens=transformer_cfg.ref_motion_tokens, token_dim=transformer_cfg.token_dim), [OBS_REF_KEY], ["ref_motion_tokens"]),
+                        CatTokens(["robot_tokens", "hist_tokens", "ref_motion_tokens"], out_key),               # [B, num_tokens, token_dim]
+                    ]
+                else:       # critic
+                    modules = [
+                        TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
+                        TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
+                        TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
+                        CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
                 ]
             else:
                 modules = [
                     TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
                 ]
             return modules
-
+        _actor_transformer = Transformer(transformer_cfg)     # [B, num_tokens, input_dim] -> [B, num_tokens * output_dim]
         _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
-            *make_encoder("_actor_feature"),
-            TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
+            *make_encoder("_actor_feature", is_actor=True),
+            TensorDictModule(_actor_transformer, ["_actor_feature"], ["_actor_t_feature"]),
+            TensorDictModule(_actor, ["_actor_t_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
             module=actor_module,
@@ -135,12 +146,14 @@ class PPOPolicy(TensorDictModuleBase):
         
         _critic = nn.Sequential(make_mlp([256, 128]), nn.Linear(128, 1))
         self.critic = TensorDictSequential(
-            *make_encoder("_critic_feature"),
+            *make_encoder("_critic_feature", is_actor=False),
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
         self.actor(fake_input)
         self.critic(fake_input)
+
+        self.count_parameters()
 
         self.opt = torch.optim.Adam(
             [
@@ -157,6 +170,14 @@ class PPOPolicy(TensorDictModuleBase):
         
         self.actor.apply(init_)
         self.critic.apply(init_)
+
+    def count_parameters(self):
+        num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
+        num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
+        actor_params_m = num_actor_params / 1e6
+        critic_params_m = num_critic_params / 1e6
+        print(f'Number of actor parameters: {actor_params_m:.2f}M')
+        print(f'Number of critic parameters: {critic_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
         policy = TensorDictSequential(
