@@ -30,6 +30,8 @@ from torchrl.modules import ProbabilisticActor
 from torchrl.data import CompositeSpec
 from dataclasses import dataclass, field
 
+from .rotary import RotaryEmbedding
+
 
 OBS_KEY = "robot" # ("agents", "observation", "policy")
 OBS_PRIV_KEY = "priv"
@@ -89,6 +91,7 @@ class Transformer_Block(nn.Module):
         super().__init__()
         self.num_head = num_head
         self.latent_dim = latent_dim
+        self.rope = RotaryEmbedding(latent_dim)
         self.ln_1 = nn.LayerNorm(latent_dim)
         self.attn = nn.MultiheadAttention(latent_dim, num_head, dropout=dropout_rate, batch_first=True)
         self.ln_2 = nn.LayerNorm(latent_dim)
@@ -101,7 +104,8 @@ class Transformer_Block(nn.Module):
     
     def forward(self, x: torch.tensor):
         x = self.ln_1(x)
-        x.add_(self.attn(x, x, x, need_weights=False)[0])
+        q, k = self.rope(x)
+        x = x + self.attn(q, k, x, need_weights=False)[0]
         x = self.ln_2(x)
         x = x + self.mlp(x)
         
@@ -120,7 +124,6 @@ class Transformer(nn.Module):
             nn.Linear(cfg.token_dim, cfg.latent_dim),
             nn.Dropout(cfg.dropout_rate),
         )
-        self.weight_pos_embed = nn.Embedding(cfg.context_len, cfg.latent_dim)
         self.attention_blocks = nn.Sequential(
             *[Transformer_Block(cfg.latent_dim, cfg.num_head, cfg.dropout_rate) for _ in range(cfg.num_layer)],
         )
@@ -131,11 +134,9 @@ class Transformer(nn.Module):
     
     def forward(self, x):
         x = self.input_layer(x)
-        x = x + self.weight_pos_embed(torch.arange(x.shape[1], device=x.device))
         x = self.attention_blocks(x)
-
         x = self.output_layer(x)
-        return x.reshape(-1, self.context_len * self.output_dim)        # [batch_size, context_len * output_dim]
+        return x[:, -1]          # only return the last token, shape [batch_size, output_dim]
 
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)

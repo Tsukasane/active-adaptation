@@ -129,12 +129,11 @@ class PPOPolicy(TensorDictModuleBase):
                     TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
                 ]
             return modules
-        _actor_transformer = Transformer(transformer_cfg)     # [B, num_tokens, input_dim] -> [B, num_tokens * output_dim]
-        _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
+        _actor_transformer = Transformer(transformer_cfg)     # [B, num_tokens, input_dim] -> [B, output_dim]
+        _actor = nn.Sequential(_actor_transformer, Actor(self.action_dim))  # [B, output_dim] -> [B, action_dim]
         actor_module = TensorDictSequential(
             *make_encoder("_actor_feature", is_actor=True),
-            TensorDictModule(_actor_transformer, ["_actor_feature"], ["_actor_t_feature"]),
-            TensorDictModule(_actor, ["_actor_t_feature"], ["loc", "scale"])
+            TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
             module=actor_module,
