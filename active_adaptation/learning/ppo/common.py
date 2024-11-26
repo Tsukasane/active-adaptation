@@ -50,10 +50,10 @@ class TransformerConfig:
     output_dim: int = 128
     latent_dim: int = 256
 
-    robot_tokens: int = 2
-    hist_tokens: int = 2*3
+    robot_tokens: int = 1
+    hist_tokens: int = 1*3
     ref_motion_tokens: int = 5
-    context_len: int = 2 + 2*3 + 5
+    context_len: int = 1 + 1*3 + 5
 
     num_head: int = 4
     num_layer: int = 2
@@ -136,7 +136,7 @@ class Transformer(nn.Module):
         x = self.input_layer(x)
         x = self.attention_blocks(x)
         x = self.output_layer(x)
-        return x[:, -1]          # only return the last token, shape [batch_size, output_dim]
+        return x[:, 0]          # only return the first token, shape [batch_size, output_dim]
 
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)

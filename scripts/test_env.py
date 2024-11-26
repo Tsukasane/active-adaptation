@@ -20,7 +20,7 @@ from omni.isaac.lab.app import AppLauncher
 from active_adaptation.utils.torchrl import SyncDataCollector
 
 # local import
-from scripts.helpers import make_env_policy, EpisodeStats, evaluate
+from helpers import make_env_policy, EpisodeStats, evaluate
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
