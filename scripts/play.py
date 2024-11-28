@@ -31,7 +31,7 @@ def main(cfg):
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
 
-    from scripts.helpers import EpisodeStats, make_env_policy, ObsNorm, export_onnx
+    from helpers import EpisodeStats, make_env_policy, ObsNorm, export_onnx
     env, policy, vecnorm = make_env_policy(cfg)
     
     if cfg.export_policy:

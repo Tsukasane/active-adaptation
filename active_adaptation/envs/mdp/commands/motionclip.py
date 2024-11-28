@@ -131,7 +131,14 @@ class MotionClip(Command):
         # padding qpos by default joint values
         joint_id, joint_names = self.asset.find_joints(joint_names, preserve_order=True)
         default_qpos = self.robot.data.default_joint_pos[0][joint_id]
-        pad_qpos = default_qpos.unsqueeze(0).expand(pad_frames, -1)
+
+        qpos_interpolate_frames = 50
+        last_qpos = self.ref_qpos[-1:, :]   # [1, 23]
+        t = torch.linspace(0, 1, qpos_interpolate_frames, device=self.device).unsqueeze(1)
+        pad_qpos = (1 - t) * self.ref_qpos[-1:, :] + t * default_qpos.unsqueeze(0)  # [10, 23]
+        self.ref_qpos = torch.cat([self.ref_qpos, pad_qpos], dim=0)         
+
+        pad_qpos = default_qpos.unsqueeze(0).expand(pad_frames - qpos_interpolate_frames, -1)
         self.ref_qpos = torch.cat([self.ref_qpos, pad_qpos], dim=0)
 
         # padding keypoints by zeros and return 0 reward after num_frames

@@ -393,14 +393,17 @@ class tracking_qpos(Reward):
 
 class tracking_keypoints(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, 
-                 upper_body_names: str=".*",
-                 lower_body_names: str=".*"):
+                 upper_body_names: str=".*", upper_body_err_weight: float=1.0,
+                 lower_body_names: str=".*", lower_body_err_weight: float=1.5):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         self.upper_body_ids = self.asset.find_bodies(upper_body_names, preserve_order=True)[0]
         self.upper_body_ids = torch.tensor(self.upper_body_ids, device=self.device)
         self.lower_body_ids = self.asset.find_bodies(lower_body_names, preserve_order=True)[0]
         self.lower_body_ids = torch.tensor(self.lower_body_ids, device=self.device)
+
+        self.upper_body_err_weight = upper_body_err_weight
+        self.lower_body_err_weight = lower_body_err_weight
 
         self.sigma = sigma
         self.decay = self.env.command_manager.decay
@@ -425,7 +428,7 @@ class tracking_keypoints(Reward):
         diff_per_kp_low = diff_low.norm(dim=-1)
         err_low = diff_per_kp_low.square().sum(-1, True)
 
-        err = err_up + err_low * 1.5
+        err = err_up * self.upper_body_err_weight + err_low * self.lower_body_err_weight
         
         self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         
