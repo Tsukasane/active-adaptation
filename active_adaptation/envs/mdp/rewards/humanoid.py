@@ -433,8 +433,7 @@ class tracking_keypoints(Reward):
         self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         
         reward = torch.exp(- err.sqrt() / self.sigma)
-        if_need_keypoint = timestep < self.env.command_manager.num_frames
-        return reward * if_need_keypoint.float()
+        return reward
     
     def debug_draw(self):
         timestep = self.env.episode_length_buf.unsqueeze(1) - 1

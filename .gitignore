@@ -188,3 +188,6 @@ checkpoint*.pt
 
 # ref motion
 reference_motions/
+
+# checkpoints
+checkpoints/

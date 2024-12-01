@@ -19,12 +19,15 @@ from scipy.spatial.transform import Rotation as R
 if TYPE_CHECKING:
     from active_adaptation.envs.base import Env
 
+quat_rotate_inverse = batchify(quat_rotate_inverse)
+
 class MotionClip(Command):
     def __init__(
             self, 
             env,
             motion_clip: str,
             joint_names: Sequence[str],
+            body_names: Sequence[str],
             decay: float = 0.98,
             teleop: bool = False,
         ):
@@ -54,12 +57,17 @@ class MotionClip(Command):
         self.num_frames = self.root_translations.shape[0]
         self.max_episode_length = self.env.max_episode_length
 
-        padding_frames = self.max_episode_length - self.num_frames
         self.num_frames = torch.tensor(self.num_frames, dtype=torch.int, device=self.device)
         print(f"tracking {self.num_frames} frames of motion clip, padding to {self.max_episode_length} frames")
 
-        print(f"padding {padding_frames} frames for reference motion")
-        self.padding_ref_motion(padding_frames, joint_names)
+        self.joint_names = joint_names
+        self.body_names = body_names
+        
+        root_position = self.robot.data.root_pos_w.unsqueeze(1)
+        root_quat = self.robot.data.root_quat_w.unsqueeze(1)
+        body_pos_b = self.robot.data.body_pos_w - root_position
+        body_pos_b = quat_rotate_inverse(root_quat, body_pos_b)
+        self.post_init(body_pos_b)
 
         self.decay = decay
         self._cum_error_root = torch.zeros(self.num_envs, 1, device=self.device)
@@ -113,7 +121,11 @@ class MotionClip(Command):
         # )
         # return
 
-    def padding_ref_motion(self, pad_frames: int, joint_names: Sequence[str]):
+
+    def post_init(self, body_pos_b):
+        pad_frames = self.max_episode_length - self.num_frames
+        print(f"padding {pad_frames} frames for reference motion")
+
         last_translation = self.ref_root_translations[:, -1:, :]
         pad_translations = last_translation.expand(self.num_envs, pad_frames, 3)
         self.ref_root_translations = torch.cat([self.ref_root_translations, pad_translations], dim=1)
@@ -129,22 +141,28 @@ class MotionClip(Command):
         self.ref_root_angular = torch.cat([self.ref_root_angular, pad_angular], dim=0)
 
         # padding qpos by default joint values
-        joint_id, joint_names = self.asset.find_joints(joint_names, preserve_order=True)
+        joint_id, joint_names = self.asset.find_joints(self.joint_names, preserve_order=True)
         default_qpos = self.robot.data.default_joint_pos[0][joint_id]
 
-        qpos_interpolate_frames = 50
+        interpolate_frames = 50
+        t = torch.linspace(0, 1, interpolate_frames, device=self.device).unsqueeze(1)
         last_qpos = self.ref_qpos[-1:, :]   # [1, 23]
-        t = torch.linspace(0, 1, qpos_interpolate_frames, device=self.device).unsqueeze(1)
-        pad_qpos = (1 - t) * self.ref_qpos[-1:, :] + t * default_qpos.unsqueeze(0)  # [10, 23]
+        pad_qpos = (1 - t) * last_qpos + t * default_qpos.unsqueeze(0)  # [qpos_interpolate_frames, 23]
         self.ref_qpos = torch.cat([self.ref_qpos, pad_qpos], dim=0)         
 
-        pad_qpos = default_qpos.unsqueeze(0).expand(pad_frames - qpos_interpolate_frames, -1)
+        pad_qpos = default_qpos.unsqueeze(0).expand(pad_frames - interpolate_frames, -1)
         self.ref_qpos = torch.cat([self.ref_qpos, pad_qpos], dim=0)
 
-        # padding keypoints by zeros and return 0 reward after num_frames
-        pad_keypoints = torch.zeros(pad_frames, 12 * 3, device=self.device)
+        # padding keypoints by default body pos
+        body_id, body_names = self.asset.find_bodies(self.body_names, preserve_order=True)
+        default_body_pos = body_pos_b[0][body_id].reshape(1, -1)
+
+        last_keypoints = self.ref_keypoints[-1:, :]     # [1, 12 * 3]
+        pad_keypoints = (1 - t) * last_keypoints + t * default_body_pos
         self.ref_keypoints = torch.cat([self.ref_keypoints, pad_keypoints], dim=0)
 
+        pad_keypoints = default_body_pos.expand(pad_frames - interpolate_frames, -1)
+        self.ref_keypoints = torch.cat([self.ref_keypoints, pad_keypoints], dim=0)
 
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]

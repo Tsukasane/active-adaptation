@@ -1385,11 +1385,13 @@ class ref_keypoints(Observation):
 
     def compute(self):
         frame = self.env.episode_length_buf                                 # [num_envs]
-        num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
 
         step_range = torch.arange(self.steps, device=self.device)
         indices = frame[:, None] + step_range  # Shape: [num_envs, steps]
-        indices = torch.min(indices, num_frames[:, None] - 1)
+        indices = torch.min(indices, max_frame[:, None] - 1)
+        assert indices.max() < self.keypoints.shape[0], f"{indices.max()} >= {self.keypoints.shape[0]}"
         keypoints = self.keypoints[indices]
         return keypoints.reshape(self.num_envs, -1)
     
@@ -1402,11 +1404,12 @@ class ref_trans_gap(Observation):
 
     def compute(self) -> torch.Tensor:
         frame = self.env.episode_length_buf                                 # [num_envs]
-        num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
 
         step_range = torch.arange(self.steps, device=self.device)
         indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
-        indices = torch.min(indices, num_frames[:, None] - 1)
+        indices = torch.min(indices, max_frame[:, None] - 1)
 
         batch_indices = torch.arange(self.num_envs, device=self.device)[:, None]    # Shape: [num_envs, 1]
         ref_root_trans = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
@@ -1450,11 +1453,12 @@ class ref_keypoints_gap(CartesianObs):
         
     def compute(self):
         frame = self.env.episode_length_buf                                 # [num_envs]
-        num_frames = self.env.command_manager.num_frames.expand_as(frame)   # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
 
         step_range = torch.arange(self.steps, device=self.device)
         indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
-        indices = torch.min(indices, num_frames[:, None] - 1)
+        indices = torch.min(indices, max_frame[:, None] - 1)
         keypoints = self.keypoints[indices].reshape(self.num_envs, self.steps, -1, 3)   # [N, steps, 12, 3]
         body_pos_b = self.body_pos_b.unsqueeze(1).expand_as(keypoints)                      # [N, steps, 12, 3]
         gap = keypoints - body_pos_b

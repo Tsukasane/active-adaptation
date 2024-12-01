@@ -79,7 +79,7 @@ def main(cfg):
     td_ = env.reset()
     
     for i in itertools.count():
-        td_ = policy(td_)
+        td_ = policy(td_)       # "loc" and "scale" in td_ are the mean and std of the policy distribution
         td, td_ = env.step_and_maybe_reset(td_)
         # td_.update(td["next"])
         episode_stats.add(td)
