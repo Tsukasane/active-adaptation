@@ -98,6 +98,25 @@ class root_deviation(Termination):
         # self.env.stats["termination"]["max_deviation_allowed"] = self.max_distance.item()
 
         return deviation > self.max_distance
+    
+def dot(a: torch.Tensor, b: torch.Tensor):
+    return (a * b).sum(-1, True)
+class root_rot_deviation(Termination):
+    def __init__(self, env, max_theta: float):
+        super().__init__(env)
+        radian = max_theta * 3.14 / 180
+        self.max_theta = torch.tensor(radian, device=self.env.device)
+        self.asset: Articulation = self.env.scene["robot"]
+
+    def __call__(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_root_orientation = self.env.command_manager.ref_root_orient[timestep.squeeze(1)]
+
+        root_quat_w = self.asset.data.root_quat_w
+        dot_product = dot(root_quat_w, ref_root_orientation)
+        deviation = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
+
+        return deviation > self.max_theta
 
 class tracking_error(Termination):
     def __init__(self, env, tracking_error_threshold):
