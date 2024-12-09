@@ -3,7 +3,7 @@ import copy
 import omni.isaac.lab.sim as sim_utils
 import torch
 from omni.isaac.lab_assets import ArticulationCfg, H1_CFG
-from omni.isaac.lab.actuators import DCMotorCfg
+from omni.isaac.lab.actuators import DCMotorCfg, IdealPDActuatorCfg, ImplicitActuatorCfg
 from omni.isaac.lab.assets import Articulation
 
 
@@ -97,6 +97,8 @@ CY1_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators={
         "base_legs": DCMotorCfg(
+        # "base_legs": IdealPDActuatorCfg(
+        # "base_legs": ImplicitActuatorCfg(
             joint_names_expr=[".*"],
             effort_limit={
                 "waist_yaw_joint": 36,
