@@ -69,8 +69,8 @@ def energy_l2(self):
 @reward_func
 def joint_acc_l2(self):
     asset: Articulation = self.scene["robot"]
-    r = - asset.data.joint_acc.square().sum(dim=-1, keepdim=True)
-    return r
+    r = asset.data.joint_acc.square().sum(dim=-1, keepdim=True)
+    return -r
 
 
 @reward_func
@@ -117,8 +117,8 @@ class angvel_xy_l2(Reward):
         self.angvel = angvel
     
     def compute(self) -> torch.Tensor:
-        r = - self.angvel[:, :2].square().sum(-1, True)
-        return r
+        r = self.angvel[:, :2].square().sum(-1, True)
+        return - r
         
 
 @reward_func
@@ -583,8 +583,8 @@ class feet_slip(Reward):
         in_contact = self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02
         feet_vel = self.asset.data.body_lin_vel_w[:, self.articulation_body_ids, :2]
         slip = (in_contact * feet_vel.norm(dim=-1).square()).sum(dim=1, keepdim=True)
-        # return - slip * self.asset.data.linvel_exp
-        return - slip
+        # return - slip
+        return -(1 - torch.exp(-slip / 0.25))
 
 
 class feet_air_time(Reward):
@@ -721,87 +721,6 @@ class max_feet_height(Reward):
 #         self.env.debug_draw.vector(self.lr_corner, self.ll_corner - self.lr_corner, color=(1.0, 0., 0., 1.))
 #         self.env.debug_draw.vector(self.ll_corner, self.ul_corner - self.ll_corner, color=(1.0, 0., 0., 1.))
 #         self.env.debug_draw.vector(self.center, self.center_vel, color=(1.0, 0., 0., 1.))
-
-
-# class max_feet_height(Reward):
-#     def __init__(
-#         self,
-#         env,
-#         body_names: str,
-#         target_height: float,
-#         weight: float,
-#         enabled: bool = True
-#     ):
-#         super().__init__(env, weight, enabled)
-#         self.target_height = target_height
-
-#         self.asset: Articulation = self.env.scene["robot"]
-#         self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
-#         self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
-#         self.body_ids = torch.tensor(self.body_ids, device=self.device)
-
-#         self.asset_body_ids, self.asset_body_names = self.asset.find_bodies(body_names)
-
-#         self.in_contact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-#         self.impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-#         self.detach = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-#         self.has_impact = torch.zeros(self.num_envs, len(self.body_ids), dtype=bool, device=self.device)
-#         self.max_height = torch.zeros(self.num_envs, len(self.body_ids), device=self.device)
-#         self.impact_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
-#         self.detach_point = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.device)
-
-#     def reset(self, env_ids):
-#         self.has_impact[env_ids] = False
-    
-#     def update(self):
-#         contact_force = self.contact_sensor.data.net_forces_w_history[:, :, self.body_ids]
-#         feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
-#         in_contact = (contact_force.norm(dim=-1) > 0.01).any(dim=1)
-#         self.impact[:] = (~self.in_contact) & in_contact
-#         self.detach[:] = self.in_contact & (~in_contact)
-#         self.in_contact[:] = in_contact
-#         self.has_impact.logical_or_(self.impact)
-#         self.impact_point[self.impact] = feet_pos_w[self.impact]
-#         self.detach_point[self.detach] = feet_pos_w[self.detach]
-#         self.max_height[:] = torch.where(
-#             self.detach,
-#             feet_pos_w[:, :, 2],
-#             torch.maximum(self.max_height, feet_pos_w[:, :, 2])
-#         )
-
-#     def compute(self) -> torch.Tensor:
-#         reference_height = torch.maximum(self.impact_point[:, :, 2], self.detach_point[:, :, 2])
-#         max_height = self.max_height - reference_height
-#         r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(dim=1, keepdim=True)
-#         is_standing = self.env.command_manager.is_standing_env.squeeze(1)
-#         r[~is_standing] -= r[~is_standing].mean()
-#         r[is_standing] = 0
-#         return r
-
-#     def debug_draw(self):
-#         feet_pos_w = self.asset.data.body_pos_w[:, self.asset_body_ids]
-#         self.env.debug_draw.point(
-#             feet_pos_w[self.impact],
-#             color=(1.0, 0., 0., 1.),
-#             size=30,
-#         )
-
-    # def _reward_feet_max_height_for_this_air(self):
-    #     # Reward long steps
-    #     # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
-    #     contact = self.contact_forces[:, self.feet_indices, 2] > 1.
-
-    #     contact_filt = torch.logical_or(contact, self.last_contacts) 
-    #     from_air_to_contact = torch.logical_and(contact_filt, ~self.last_contacts_filt)
-
-    #     self.last_contacts = contact
-    #     self.last_contacts_filt = contact_filt
-
-    #     self.feet_air_max_height = torch.max(self.feet_air_max_height, self._rigid_body_pos[:, self.feet_indices, 2])
-        
-    #     rew_feet_max_height = torch.sum((torch.clamp_min(self.cfg.rewards.desired_feet_max_height_for_this_air - self.feet_air_max_height, 0)) * from_air_to_contact, dim=1) # reward only on first contact with the ground
-    #     self.feet_air_max_height *= ~contact_filt
-    #     return rew_feet_max_height
 
 
 

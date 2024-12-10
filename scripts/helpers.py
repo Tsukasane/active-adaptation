@@ -158,7 +158,6 @@ def make_env_policy(cfg: DictConfig):
         if not (spec.dtype == bool or key.endswith("_"))
     ]
     transform = Compose(InitTracker(), StepCounter())
-
     assert cfg.vecnorm in ("train", "eval", None)
     print(colored(f"[Info]: create VecNorm for keys: {obs_keys}", "green"))
     vecnorm = VecNorm(obs_keys, decay=0.9999)
@@ -229,6 +228,7 @@ def evaluate(
     """
     keys = set(keys)
     keys.add(("next", "done"))
+    keys.add(("next", "stats"))
 
     env.eval()
     env.set_seed(seed)
