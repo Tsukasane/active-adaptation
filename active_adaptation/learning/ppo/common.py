@@ -37,12 +37,14 @@ OBS_KEY = "robot" # ("agents", "observation", "policy")
 OBS_PRIV_KEY = "priv"
 OBS_HIST_KEY = "history"
 OBS_REF_KEY = "ref_motion_"
+OBS_AMP_KEY = "amp_"
 ACTION_KEY = "action" # ("agents", "action")
 REWARD_KEY = ("next", "reward") # ("agents", "reward")
 # DONE_KEY = ("next", "done")
 TERM_KEY = ("next", "terminated")
 DONE_KEY = ("next", "done")
 CMD_KEY = "command"
+AMP_REWARD = "amp_reward"
 
 @dataclass
 class TransformerConfig:

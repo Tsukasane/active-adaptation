@@ -128,5 +128,5 @@ termination:
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
   root_deviation: {max_distance: 0.5}
-  cum_error_qpos: {thres: 0.4}
-  cum_error_kp: {thres: 0.4}
+  cum_error_qpos: {thres: 0.3}
+  cum_error_kp: {thres: 0.3}

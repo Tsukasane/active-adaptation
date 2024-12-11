@@ -433,7 +433,7 @@ class JointObs(Observation):
     ):
         super().__init__(env, mask_ratio)
         self.asset: Articulation = self.env.scene["robot"]
-        self.joint_ids, self.joint_names = self.asset.find_joints(joint_names)
+        self.joint_ids, self.joint_names = self.asset.find_joints(joint_names, preserve_order=True)
         if left_joints is not None:
             self.left_joint_ids, self.left_joint_names = resolve_matching_names(left_joints, self.joint_names)
             self.right_joint_ids, self.right_joint_names = resolve_matching_names(right_joints, self.joint_names)
@@ -1489,6 +1489,7 @@ class history_io(Observation):
         self.root_linvel_b_hist[env_ids] = 0.
         self.root_angvel_b_hist[env_ids] = 0.
         self.joint_pos_hist[env_ids] = 0.
+        self.joint_vel_hist[env_ids] = 0.
 
 
     def update(self):
@@ -1526,3 +1527,39 @@ class history_io(Observation):
         features_over_time = torch.cat([obs_per_time, action_per_time], dim=2)
         return features_over_time.reshape(self.num_envs, -1)
         
+
+class amp_traj(Observation):
+    def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
+        super().__init__(env)
+        self.body_pos = body_pos(env, body_names)
+        self.joint_pos = joint_pos(env, joint_names)
+
+        self.body_ids = self.body_pos.body_indices
+        self.joint_ids = self.joint_pos.joint_ids
+
+        self.steps = steps + 1
+        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, self.steps, device=self.device)
+        self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
+
+    def reset(self, env_ids: torch.Tensor):
+        self.body_pos_hist[env_ids] = 0.
+        self.joint_pos_hist[env_ids] = 0.
+
+
+    def update(self):
+        self.body_pos_hist[:, :, :, 1:] = self.body_pos_hist[:, :, :, :-1]
+        self.body_pos_hist[:, :, :, 0] = self.body_pos.compute().reshape(self.num_envs, -1, 3)
+
+        self.joint_pos_hist[:, :, 1:] = self.joint_pos_hist[:, :, :-1]
+        self.joint_pos_hist[:, :, 0] = self.joint_pos.compute().reshape(self.num_envs, -1)
+
+    def compute(self):
+        body_pos_hist = self.body_pos_hist.permute(0, 3, 1, 2).reshape(self.num_envs, self.steps, -1)                             
+        joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)      
+        obs_per_time = torch.cat([
+                    body_pos_hist,              # [N, steps, 3 * num_bodies]
+                    joint_pos_hist],            # [N, steps, num_joints]
+                dim=2)                          # [N, steps, 3 * num_bodies + num_joints]
+        
+        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + num_joints]
+        return obs_per_time.reshape(self.num_envs, -1)

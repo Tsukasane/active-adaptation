@@ -86,18 +86,6 @@ class BCPolicy(TensorDictModuleBase):
         policy = self.actor
         return policy
     
-    def train_op(self, tensordict: TensorDictBase):
-        
-        losses = []
-        for epoch in range(self.epoch):
-            for minibatch in make_batch(tensordict, num_minibatches=self.batch_size, seq_len=-1):
-                loss = self.loss(minibatch)
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                losses.append(loss.item())
-        return {"loss": sum(losses) / len(losses)}
-    
     def kl_loss_a(self, tensordict: TensorDictBase):
         loc, scale = self(tensordict)["loc"], self(tensordict)["scale"]
         gt_loc, gt_scale = tensordict["gt_loc"], tensordict["gt_scale"]

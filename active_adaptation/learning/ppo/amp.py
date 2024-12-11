@@ -42,6 +42,7 @@ from collections import OrderedDict
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
 from .common import *
+from .amp_utils import *
 
 torch.set_float32_matmul_precision('high')
 
@@ -59,7 +60,11 @@ class AMPConfig:
     value_norm: bool = False
 
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_AMP_KEY, OBS_HIST_KEY, OBS_REF_KEY])
+
+    # for amp
+    data_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions"
+    amp_length: int = 3
 
 cs = ConfigStore.instance()
 cs.store("amp", node=AMPConfig, group="algo")
@@ -85,7 +90,9 @@ class AMPPolicy(TensorDictModuleBase):
         self.critic_loss_fn = nn.MSELoss(reduction="none")
         self.action_dim = action_spec.shape[-1]
         self.gae = GAE(0.99, 0.95)
-        
+
+        self.amp_data = AMPLoader(cfg.data_dir, cfg.amp_length, OBS_AMP_KEY, device)
+
         if cfg.value_norm:
             value_norm_cls = ValueNorm1
         else:
@@ -96,28 +103,12 @@ class AMPPolicy(TensorDictModuleBase):
         print(fake_input)
         
         def make_encoder(out_key: str):
-            if "height_scan" in observation_spec.keys(True, True):
-                cnn = nn.Sequential(
-                    make_conv(num_channels=[8, 8, 8]),
-                    nn.LazyLinear(64),
-                    nn.LayerNorm(64),
-                )
-                modules = [
-                    TensorDictModule(cnn, ["height_scan"], ["_cnn"]),
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_mlp"]),
-                    CatTensors(["_cnn", "_mlp"], out_key),
-                ]
-            elif OBS_REF_KEY in observation_spec.keys(True, True):
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
-                    TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
-                    TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
-                    CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
-                ]
-            else:
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
-                ]
+            modules = [
+                TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
+                TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
+                TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
+                CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
+            ]
             return modules
 
         _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
@@ -142,12 +133,16 @@ class AMPPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
+        _discriminator = Discriminator(observation_spec[OBS_AMP_KEY].shape[-1], [256, 128], device)
+        self.discriminator = TensorDictModule(_discriminator, [OBS_AMP_KEY], [AMP_REWARD])
+
         self.count_parameters()
 
         self.opt = torch.optim.Adam(
             [
                 {"params": self.actor.parameters()},
                 {"params": self.critic.parameters()},
+                {"params": self.discriminator.parameters()},
             ],
             lr=cfg.lr
         )
@@ -163,10 +158,13 @@ class AMPPolicy(TensorDictModuleBase):
     def count_parameters(self):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
+        num_discriminator_params = sum(p.numel() for p in self.discriminator.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
+        discriminator_params_m = num_discriminator_params / 1e6
         print(f'Number of actor parameters: {actor_params_m:.2f}M')
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
+        print(f'Number of discriminator parameters: {discriminator_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
         policy = TensorDictSequential(
@@ -184,7 +182,8 @@ class AMPPolicy(TensorDictModuleBase):
         for epoch in range(self.cfg.ppo_epochs):
             batch = make_batch(tensordict, self.cfg.num_minibatches)
             for minibatch in batch:
-                infos.append(TensorDict(self._update(minibatch), []))
+                amp_batch = self.amp_data.sample_batch(minibatch.shape[0])
+                infos.append(TensorDict(self._update(minibatch, amp_batch), []))
         
         infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
         infos["critic/value_mean"] = tensordict["ret"].mean().item()
@@ -206,7 +205,9 @@ class AMPPolicy(TensorDictModuleBase):
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)
+        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)      # [batch_size, train_every, 1]
+        style_rewards = self.discriminator(tensordict)[AMP_REWARD]
+        rewards = (rewards + style_rewards) * 0.5
         terms = tensordict[TERM_KEY]
         dones = tensordict[DONE_KEY]
         values = self.value_norm.denormalize(values)
@@ -222,7 +223,7 @@ class AMPPolicy(TensorDictModuleBase):
         return tensordict
 
     # @torch.compile
-    def _update(self, tensordict: TensorDict):
+    def _update(self, tensordict: TensorDict, amp_batch: TensorDict):
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
         entropy = dist.entropy().mean()
@@ -239,8 +240,17 @@ class AMPPolicy(TensorDictModuleBase):
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
         value_loss = (value_loss * (~tensordict["is_init"])).mean()
+
+        # amp loss
+        policy_d = self.discriminator(tensordict)[AMP_REWARD]
+        expert_d = self.discriminator(amp_batch)[AMP_REWARD]
+        policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones_like(policy_d, device=self.device))
+        expert_loss = torch.nn.MSELoss()(expert_d, torch.ones_like(expert_d, device=self.device))
+        discriminator_loss = (policy_loss + expert_loss) / 2
+        gradient_penalty = self.discriminator.gradient_penalty(amp_batch[OBS_AMP_KEY], tensordict[OBS_AMP_KEY])
+        amp_loss = discriminator_loss + 10 * gradient_penalty
         
-        loss = policy_loss + entropy_loss + value_loss
+        loss = policy_loss + entropy_loss + value_loss + amp_loss
         self.opt.zero_grad()
         loss.backward()
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
@@ -256,6 +266,11 @@ class AMPPolicy(TensorDictModuleBase):
             "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
+            "amp/policy_loss": policy_loss,
+            "amp/expert_loss": expert_loss,
+            "amp/discriminator_loss": discriminator_loss,
+            "amp/gradient_penalty": gradient_penalty,
+            "amp/loss": amp_loss,
         }
 
     def state_dict(self):
