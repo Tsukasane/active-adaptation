@@ -46,9 +46,9 @@ from .common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
-    name: str = "ppo"
+class AMPConfig:
+    _target_: str = "active_adaptation.learning.ppo.amp.AMPPolicy"
+    name: str = "amp"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -62,14 +62,14 @@ class PPOConfig:
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
 
 cs = ConfigStore.instance()
-cs.store("ppo", node=PPOConfig, group="algo")
+cs.store("amp", node=AMPConfig, group="algo")
 
 
-class PPOPolicy(TensorDictModuleBase):
+class AMPPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOConfig, 
+        cfg: AMPConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,

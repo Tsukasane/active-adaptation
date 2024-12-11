@@ -383,7 +383,10 @@ class tracking_qpos(Reward):
     
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1) - 1
-        ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)
+        ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)       
+        # fix arm joint 5 and joint 6
+        indice = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20]
+        ref_qpos = ref_qpos[:, indice]
         err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square()    # torch.Size([num_envs, num_joints])
         
         self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err.mean(-1, True) * self.env.step_dt)

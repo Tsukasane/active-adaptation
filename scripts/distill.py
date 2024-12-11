@@ -30,7 +30,9 @@ torch.backends.cudnn.benchmark = False
 FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(FILE_PATH, "..", "cfg")
 BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer")
-REPLAY_BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer", "trajs-Walk.pt")
+
+REPLAY_FILE = "trajs-Walk.pt"
+REPLAY_BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer", REPLAY_FILE)
 
 keys = [
     "robot",
@@ -69,24 +71,26 @@ def main(cfg: DictConfig):
     env, policy, vecnorm = make_env_policy(cfg)
 
     save_interval = cfg.get("save_interval", -1)
-
-    class BatchSampler:
-        def __init__(self, tensordict, batch_size):
+        
+    class Sampler:
+        def __init__(self, tensordict, num_mini_batch, mini_batch_size, device="cuda"):
             self.data = tensordict
+            self.num_mini_batch = num_mini_batch
+            self.mini_batch_size = mini_batch_size
+            self.device = device
 
             self.perm = torch.randperm(
-                (tensordict.shape[0] // batch_size) * batch_size,
+                (tensordict.shape[0] // mini_batch_size) * mini_batch_size,
                 device=tensordict.device,
-            ).reshape(batch_size, -1)
-
-            self.length = self.perm.shape[1]
+            ).reshape(mini_batch_size, -1)
 
         def __len__(self):
-            return self.length
-
-        def sample(self):
-            indice = self.perm[:, torch.randint(self.length, (1,))].squeeze()
-            return self.data[indice]
+            return self.perm.shape[1]
+        
+        def generator(self):
+            for _ in range(self.num_mini_batch):
+                indice = self.perm[:, torch.randint(self.perm.shape[1], (1,))].squeeze()
+                yield self.data[indice].to(self.device)
         
     def save(policy, checkpoint_name: str, artifact: bool=False):
         ckpt_path = os.path.join(run.dir, f"{checkpoint_name}.pt")
@@ -106,7 +110,7 @@ def main(cfg: DictConfig):
         logging.info(f"Saved checkpoint to {str(ckpt_path)}")
 
     trajs = os.listdir(BUFFER_PATH)
-    trajs.pop(trajs.index("trajs-Walk.pt"))
+    trajs.pop(trajs.index(REPLAY_FILE))
     expert_buffer = None
     for traj in trajs:
         path = os.path.join(BUFFER_PATH, traj)
@@ -126,16 +130,14 @@ def main(cfg: DictConfig):
 
     epoch = policy.epoch
     batch_size = policy.batch_size
+    num_mini_batch = max(len(expert_buffer) // batch_size, len(replay_buffer) // batch_size)
 
-    expert_sampler, replay_sampler = BatchSampler(expert_buffer, batch_size), BatchSampler(replay_buffer, batch_size)
+    expert_sampler, replay_sampler = Sampler(expert_buffer, num_mini_batch, batch_size, policy.device), Sampler(replay_buffer, num_mini_batch, batch_size, policy.device)
 
     for i in tqdm(range(epoch)):
         info = {}
         kl_a_losses, kl_b_losses, kl_losses = [], [], []
-        for j in range(2 * max(len(expert_sampler), len(replay_sampler))):
-            
-            replay_batch = replay_sampler.sample().to(policy.device)
-            expert_batch = expert_sampler.sample().to(policy.device)
+        for expert_batch, replay_batch in zip(expert_sampler.generator(), replay_sampler.generator()):
 
             kl_a = policy.kl_loss_a(replay_batch)
             kl_b = policy.kl_loss_b(expert_batch)
@@ -154,7 +156,7 @@ def main(cfg: DictConfig):
         info["kl_loss"] = sum(kl_losses) / len(kl_losses)
 
         if i % 10 == 0:
-            print(f"Iteration: {i}, KL Loss: {kl_loss}")
+            print(f"Epoch {i}: KL Loss A: {info['kl_loss_a']}, KL Loss B: {info['kl_loss_b']}, KL Loss: {info['kl_loss']}")
 
         if save_interval != -1 and i % save_interval == 0:
             save(policy, f"checkpoint_{i}")

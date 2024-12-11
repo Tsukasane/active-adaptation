@@ -20,7 +20,7 @@ from .modules.distributions import IndependentNormal
 class BCConfig:
     _target_: str = "active_adaptation.learning.bc.BCPolicy"
     name: str = "bc"
-    epoch: int = 1000
+    epoch: int = 100
     batch_size: int = 64
     lr: float = 1e-4
 
