@@ -3,3 +3,4 @@ from .locomanip import CommandEEPose, CommandEEPose_Loco, CommandEEPose_Cont, Co
 from .manipulation import EEImpedance, PushWall, EEPosition
 
 from .motionclip import MotionClip
+from .AmpCommand import AmpCommand

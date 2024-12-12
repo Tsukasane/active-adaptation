@@ -12,31 +12,34 @@ class AMPLoader:
         self.device = device
         
         self.data = self.load_data()
-        self.traj_length = [traj.shape[0] for traj in self.data]
+        self.segments = self.pre_slice()
 
     def load_data(self):
         data = []
         for file in glob.glob(f"{self.data_dir}/*/*.pkl"):
             trajectory = joblib.load(file)
-            body_pose = torch.tensor(trajectory["keypoints"], dtype=torch.float32, device=self.device)
-            joint_pos = torch.tensor(trajectory["qpos"], dtype=torch.float32, device=self.device)
+            body_pose = torch.tensor(trajectory["keypoints"], dtype=torch.float32)
+            joint_pos = torch.tensor(trajectory["qpos"], dtype=torch.float32)
             amp_data = torch.cat([body_pose, joint_pos], dim=-1) # [T, 12 * 3 + 23]
             data.append(amp_data)
+        data = torch.cat(data, dim=0)
         return data
     
     def __len__(self):
         return len(self.data)
     
+    def pre_slice(self):
+        N = self.data.shape[0]
+        M = N - self.amp_length + 1
+        indices = torch.arange(M).unsqueeze(1) + torch.arange(self.amp_length).unsqueeze(0)
+        segments = self.data[indices]       # [M, amp_length, feature]
+        return segments
+    
     def sample_batch(self, batch_size):
-        s = []
-        traj_idx = torch.randint(0, len(self.data), (batch_size,))
-        for idx in traj_idx:
-            start = torch.randint(0, self.traj_length[idx] - self.amp_length, (1,))
-            s.append(self.data[idx][start:start+self.amp_length])   # [B, T, 12 * 3 + 23]
-
-        amp_batch = torch.stack(s).to(self.device).reshape(batch_size, -1)
+        seg_idx = torch.randint(0, len(self.segments), (batch_size,))
+        amp_batch = self.segments[seg_idx].to(self.device)     # [B, amp_length, 12 * 3 + 23]
         tensordict = TensorDict()
-        tensordict.set(self.key, amp_batch)
+        tensordict.set(self.key, amp_batch.reshape(batch_size, -1))
         return tensordict
     
 class Discriminator(nn.Module):

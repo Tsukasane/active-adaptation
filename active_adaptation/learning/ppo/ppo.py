@@ -57,6 +57,7 @@ class PPOConfig:
     entropy_coef: float = 0.001
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
+    vecnorm: Union[str, None] = None
 
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
@@ -142,6 +143,8 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
+        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY], decay=0.9999)
+
         self.count_parameters()
 
         self.opt = torch.optim.Adam(
@@ -169,9 +172,16 @@ class PPOPolicy(TensorDictModuleBase):
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
-        policy = TensorDictSequential(
-            self.actor,
-        )
+        if mode == "train":
+            policy = TensorDictSequential(
+                self.vecnorm,
+                self.actor,
+            )
+        else:
+            policy = TensorDictSequential(
+                self.vecnorm.to_observation_norm(),
+                self.actor,
+            )
         return policy
 
     # @torch.compile
@@ -201,7 +211,10 @@ class PPOPolicy(TensorDictModuleBase):
     ):
         with tensordict.view(-1) as tensordict_flat:
             critic(tensordict_flat)
+            self.vecnorm.freeze()
+            self.vecnorm(tensordict_flat["next"])
             critic(tensordict_flat["next"])
+            self.vecnorm.unfreeze()
 
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
