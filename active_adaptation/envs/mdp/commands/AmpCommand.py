@@ -38,28 +38,34 @@ class AmpCommand(Command):
         self.body_names = body_names
         self.decay = decay
 
-        self.motion_clips, self.max_traj_len = self._load_motions(motion_clip_dir)
+        self.motion_clips, self.motion_clips_len, self.max_traj_len = self._load_motions(motion_clip_dir)
         self.num_motions = len(self.motion_clips)
+        print(f"Loaded {self.num_motions} motion clips with max_traj_len: {self.max_traj_len}")
         self._stack_all_motions()
-        print(f"Loaded {len(self.motion_clips)} motion clips with max_traj_len: {self.max_traj_len}")
 
         self.motion_ids = torch.randint(0, len(self.motion_clips), (self.num_envs,), device=self.device)
+        self.ref_root_trans = self.ref_root_trans[self.motion_ids]     # [num_envs, max_traj_len, 3]
+        self.ref_root_orient = self.ref_root_orient[self.motion_ids]   # [num_envs, max_traj_len, 4]
+        self.ref_root_linear = self.ref_root_linear[self.motion_ids]   # [num_envs, max_traj_len, 3]
+        self.ref_root_angular = self.ref_root_angular[self.motion_ids] # [num_envs, max_traj_len, 3]
+        self.ref_qpos = self.ref_qpos[self.motion_ids]                 # [num_envs, max_traj_len, num_joints]
+        self.ref_keypoints = self.ref_keypoints[self.motion_ids]       # [num_envs, max_traj_len, num_keypoints * 3]
+
+        self.motion_clips_len = self.motion_clips_len[self.motion_ids] # [num_envs]
 
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
-        motion_ids = self.motion_ids[env_ids]
-        init_root_state = self.init_root_state[env_ids]
-        init_root_state[:, :3] = self.root_translations[motion_ids, 0]
-        init_root_state[:, 3:7] = self.ref_root_orient[motion_ids, 0]
+        init_root_state = self.init_root_state[env_ids]         # [num_envs, 3 + 4 + 3 + 3]
+        init_root_state[:, :3] = self.ref_root_trans[env_ids, 0]     # [num_envs, 3]
+        init_root_state[:, 3:7] = self.ref_root_orient[env_ids, 0]
         return init_root_state
     
     def reset(self, env_ids: torch.Tensor):
-        motion_ids = self.motion_ids[env_ids]
-        qpos = self.ref_qpos[motion_ids]
-        qpos = torch.cat([qpos[:, :5], torch.zeros(self.max_traj_len, 1, device=self.device),
-                          qpos[:, 5:10], torch.zeros(self.max_traj_len, 1, device=self.device),
+        qpos = self.ref_qpos[env_ids, 0]     # [num_envs, num_joints]
+        qpos = torch.cat([qpos[:, :5], torch.zeros(env_ids.shape[0], 1, device=self.device),
+                          qpos[:, 5:10], torch.zeros(env_ids.shape[0], 1, device=self.device),
                           qpos[:, 10:]
-                        ], dim=1)
-        qpos = qpos[0, idx]
+                        ], dim=1)               # [num_envs, num_joints]
+        qpos = qpos[:, idx]
         
         self.robot.write_joint_state_to_sim(
             qpos,
@@ -68,37 +74,37 @@ class AmpCommand(Command):
         )
 
     # for sanity check
-    def update(self):
-        root_state = self.robot.data.root_state_w.clone()
-        frame = self.env.episode_length_buf
-        root_state[:, :3] = self.ref_root_translations[self.motion_ids, frame] + torch.tensor([0., 0., 0.8], device=self.device)
-        root_state[:, 3:7] = self.ref_root_orient[self.motion_ids, frame]
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
+    # def update(self):
+    #     root_state = self.robot.data.root_state_w.clone()
+    #     frame = self.env.episode_length_buf     # [num_envs]
+    #     root_state[:, :3] = self.ref_root_trans[self.motion_ids, frame] + torch.tensor([0., 0., 0.8], device=self.device)
+    #     root_state[:, 3:7] = self.ref_root_orient[self.motion_ids, frame]
+    #     env_ids = torch.arange(self.num_envs, device=self.device)
+    #     self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
 
-        qpos = torch.cat([  self.ref_qpos[self.motion_ids, frame, :5], torch.zeros(self.num_envs, 1, device=self.device),     # left leg joints
-                            self.ref_qpos[self.motion_ids, frame, 5:10], torch.zeros(self.num_envs, 1, device=self.device),   # right leg joints
-                            self.ref_qpos[self.motion_ids, frame, 10:]                    # waist yaw joint and arm joints
-                          ], dim=1)
-        qpos = qpos[:, idx]
-        self.robot.write_joint_state_to_sim(
-            qpos,
-            self.robot.data.default_joint_vel,
-            env_ids=env_ids
-        )
-        return
+    #     qpos = torch.cat([  self.ref_qpos[self.motion_ids, frame, :5], torch.zeros(self.num_envs, 1, device=self.device),     # left leg joints
+    #                         self.ref_qpos[self.motion_ids, frame, 5:10], torch.zeros(self.num_envs, 1, device=self.device),   # right leg joints
+    #                         self.ref_qpos[self.motion_ids, frame, 10:]                    # waist yaw joint and arm joints
+    #                       ], dim=1)
+    #     qpos = qpos[:, idx]
+    #     self.robot.write_joint_state_to_sim(
+    #         qpos,
+    #         self.robot.data.default_joint_vel,
+    #         env_ids=env_ids
+    #     )
+    #     return
 
     def _load_motions(self, motion_clip_dir):
         motion_clips = []
-        max_traj_len = 0
+        motion_clips_len = []
         for file in glob.glob(f"{motion_clip_dir}/*/*.pkl"):
             trajectory = joblib.load(file)
             motion_clips.append(trajectory)
-            max_traj_len = max(max_traj_len, trajectory["keypoints"].shape[0])
-        return motion_clips, max_traj_len + 200
+            motion_clips_len.append(trajectory["keypoints"].shape[0] + 200)
+        return motion_clips, motion_clips_len, max(motion_clips_len)
 
     def _stack_all_motions(self):
-        self.root_translations = []
+        self.ref_root_trans = []
         self.ref_root_orient = []
         self.ref_root_linear = []
         self.ref_root_angular = []
@@ -121,24 +127,27 @@ class AmpCommand(Command):
                                                 root_translations, root_orient_quat, root_linear, root_angular, qpos, keypoints
                                                 )
             
-            self.root_translations.append(root_translations)
+            self.ref_root_trans.append(root_translations)
             self.ref_root_orient.append(root_orient)
             self.ref_root_linear.append(root_linear)
             self.ref_root_angular.append(root_angular)
             self.ref_qpos.append(qpos)
             self.ref_keypoints.append(keypoints)
 
-        origin = self.env.scene.env_origins         # [num_envs, 3]
-        picked_origin_ids = torch.randint(0, origin.shape[0], (self.num_motions,), device=self.device)
-        self.root_translations = torch.stack(self.root_translations, dim=0)     # (num_clips, max_traj_len, 3)
-        self.root_translations += origin[picked_origin_ids].unsqueeze(1)        # (num_clips, max_traj_len, 3)
-
+        self.ref_root_trans = torch.stack(self.ref_root_trans, dim=0)           # (num_clips, max_traj_len, 3)
         self.ref_root_orient = torch.stack(self.ref_root_orient, dim=0)         # (num_clips, max_traj_len, 4)
         self.ref_root_linear = torch.stack(self.ref_root_linear, dim=0)         # (num_clips, max_traj_len, 3)
         self.ref_root_angular = torch.stack(self.ref_root_angular, dim=0)       # (num_clips, max_traj_len, 3)
         self.ref_qpos = torch.stack(self.ref_qpos, dim=0)                       # (num_clips, max_traj_len, num_joints)
         self.ref_keypoints = torch.stack(self.ref_keypoints, dim=0)             # (num_clips, max_traj_len, num_keypoints * 3)
 
+        # add terrain origin to reference root translations
+        origin = self.env.scene.env_origins     # [num_envs, 3]
+        pick_idx = torch.randint(0, self.num_envs, (self.num_motions,), device=self.device)
+        pick_origin = origin[pick_idx]          # [num_motions, 3]
+        self.ref_root_trans += pick_origin.unsqueeze(1)
+
+        self.motion_clips_len = torch.tensor(self.motion_clips_len, device=self.device)   # (num_clips)
 
     def _padding_reference_motion(self, root_trans, root_orient, root_linear, root_angular, qpos, keypoints):
         r'''

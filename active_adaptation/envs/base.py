@@ -198,7 +198,7 @@ class Env(EnvBase):
         self._debug_draw_callbacks = []
         self._step_callbacks = []
 
-        self.command_manager: mdp.MotionClip = hydra.utils.instantiate(self.cfg.command, env=self)
+        self.command_manager = hydra.utils.instantiate(self.cfg.command, env=self)
         self._step_callbacks.append(self.command_manager.step)
         # self._update_callbacks.append(self.command_manager.update)
         self._reset_callbacks.append(self.command_manager.reset)

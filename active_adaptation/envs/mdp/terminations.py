@@ -77,6 +77,14 @@ class fall_over(Termination):
         gravity_xy: torch.Tensor = self.asset.data.projected_gravity_b[:, :2]
         fall_over = gravity_xy.norm(dim=1, keepdim=True) >= self.xy_thres
         return fall_over
+    
+class max_traj_length(Termination):
+    def __init__(self, env):
+        super().__init__(env)
+        self.max_traj_length = self.env.command_manager.motion_clips_len
+    
+    def __call__(self) -> torch.Tensor:
+        return self.env.episode_length_buf >= self.max_traj_length
 
 class root_deviation(Termination):
     def __init__(self, env, max_distance: float):

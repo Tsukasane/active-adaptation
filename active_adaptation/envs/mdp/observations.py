@@ -544,6 +544,7 @@ class applied_torques(JointObs):
     def compute(self) -> torch.Tensor:
         # TODO: deprecate normalization to avoid division by zero
         applied_efforts = self.asset.data.applied_torque
+        print(applied_efforts)
         return applied_efforts[:, self.joint_indices] / self.effort_limit
 
 
@@ -1563,3 +1564,91 @@ class amp_traj(Observation):
         
         obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + num_joints]
         return obs_per_time.reshape(self.num_envs, -1)
+
+class amp_ref_trans_gap(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_root_trans = self.env.command_manager.ref_root_trans     # [num_envs, T, 3]
+
+    def compute(self) -> torch.Tensor:
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.command_manager.max_traj_len
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+
+        ref_root_trans = self.ref_root_trans[torch.arange(self.num_envs).unsqueeze(-1), indices]   # [num_envs, steps, 3]
+
+        quat = self.asset.data.root_quat_w.unsqueeze(1)
+        self.current_root_pos = self.asset.data.root_pos_w.unsqueeze(1)          # [num_envs, 1, 3]
+        self.gap = ref_root_trans - self.current_root_pos                        # [num_envs, steps, 3]
+        gap_b = quat_rotate_inverse(quat, self.gap)
+        return gap_b.reshape(self.num_envs, -1)
+    
+    def debug_draw(self):
+        self.env.debug_draw.vector(
+            self.current_root_pos[:, 0],
+            self.gap[:, 0],
+            color=(1., 0., 1., 1.),
+            size=1.
+        )
+
+class amp_ref_keypoints(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.keypoints = self.env.command_manager.ref_keypoints      # [num_envs, T, 12 * 3]
+
+    def compute(self):
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range  # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+
+        keypoints = self.keypoints[torch.arange(self.num_envs).unsqueeze(1), indices]        # [num_envs, steps, 12 * 3]
+        return keypoints.reshape(self.num_envs, -1)
+    
+class amp_ref_keypoints_gap(CartesianObs):
+    def __init__(
+        self,
+        env,
+        body_names: str,
+        steps: int=1,
+        left_bodies: str=None,
+        right_bodies: str=None,
+        yaw_only: bool=False
+    ):
+        super().__init__(env, body_names, left_bodies, right_bodies)
+        self.yaw_only = yaw_only
+        print(f"Track body position with reference motion for {self.body_names} in future {steps} steps")
+        self.steps = steps
+        self.body_pos_b = torch.zeros(self.env.num_envs, len(self.body_indices), 3, device=self.env.device)
+        self.keypoints = self.env.command_manager.ref_keypoints      # [num_envs, T, 12 * 3]
+
+    def update(self):
+        quat = self.asset.data.root_quat_w.unsqueeze(1)
+        body_pos = self.asset.data.body_pos_w[:, self.body_indices]
+        body_pos = body_pos - self.asset.data.root_pos_w.unsqueeze(1)
+        self.body_pos_b[:] = quat_rotate_inverse(quat, body_pos)
+        
+    def compute(self):
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+
+        keypoints = self.keypoints[torch.arange(self.num_envs).unsqueeze(1), indices].reshape(self.num_envs, self.steps, -1, 3)   # [N, steps, 12, 3]
+        body_pos_b = self.body_pos_b.unsqueeze(1).expand_as(keypoints)                      # [N, steps, 12, 3]
+        gap = keypoints - body_pos_b
+        return gap.reshape(self.num_envs, -1)
