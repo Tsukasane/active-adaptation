@@ -199,7 +199,10 @@ def make_env_policy(cfg: DictConfig):
     
     if "policy" in state_dict.keys():
         print(colored("[Info]: Load policy from checkpoint.", "green"))
-        policy.load_state_dict(state_dict["policy"])
+        if hasattr(policy, "vecnorm"):
+            policy.load_state_dict(state_dict["policy"], state_dict["vecnorm"])
+        else:
+            policy.load_state_dict(state_dict["policy"])
     
     if hasattr(policy, "make_tensordict_primer"):
         primer = policy.make_tensordict_primer()
@@ -230,10 +233,23 @@ def evaluate(
     keys.add(("next", "done"))
     keys.add(("next", "stats"))
 
+    state_keys = [
+        "robot",
+        "history",
+        "ref_motion_",
+    ]
+
+    action_keys = [
+        "loc",
+        "scale",
+    ]
+
+
     env.eval()
     env.set_seed(seed)
 
     tensordict_ = env.reset()
+    s_a_pair = []
     trajs = []
     frames = []
 
@@ -241,7 +257,9 @@ def evaluate(
     with set_exploration_type(exploration_type):
         for i in tqdm(range(env.max_episode_length), miniters=10):
             s = time.perf_counter()
+            s_a_pair.append(tensordict_.select(*state_keys, strict=False).cpu())  # record state
             tensordict_ = policy(tensordict_)
+            s_a_pair[-1].update(tensordict_.select(*action_keys, strict=False).cpu())  # record action
             e = time.perf_counter()
             inference_time.append(e - s)
             tensordict, tensordict_ = env.step_and_maybe_reset(tensordict_)
@@ -252,6 +270,7 @@ def evaluate(
     print(f"Average inference time: {inference_time:.4f} s")
 
     trajs: TensorDictBase = torch.stack(trajs, dim=1)
+    s_a_pair: TensorDictBase = torch.stack(s_a_pair, dim=1)
     done = trajs.get(("next", "done"))
     episode_cnt = len(done.nonzero())
     first_done = torch.argmax(done.long(), dim=1).cpu()
@@ -280,7 +299,7 @@ def evaluate(
         write_video(video_path, video_array, fps=1 / env.step_dt)
 
     info["episode_cnt"] = episode_cnt
-    return dict(sorted(info.items())), trajs, stats
+    return dict(sorted(info.items())), trajs, stats, s_a_pair
 
 
 @torch.inference_mode()

@@ -40,12 +40,15 @@ def main(cfg):
     ]
     
     policy_eval = agent.get_rollout_policy("eval")
-    info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed, keys=keys)
+    info, trajs, stats, s_a_pair = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed, keys=keys)
     
     print(termcolor.colored(trajs, "light_yellow"))
     time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
     path = os.path.join(os.path.dirname(__file__), f"trajs-{cfg.task.name}.pt")
-    torch.save(trajs, path)
+    # torch.save(trajs, path)
+    
+    path = os.path.join(os.path.dirname(__file__), f"s_a_pair-{cfg.task.name}.pt")
+    # torch.save(s_a_pair, path)
 
     # path = os.path.join(os.path.dirname(__file__), f"stats-{time_str}.pt")
     # torch.save(stats, path)

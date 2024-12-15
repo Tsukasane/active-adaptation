@@ -277,9 +277,10 @@ class PPOPolicy(TensorDictModuleBase):
             state_dict[name] = module.state_dict()
         return state_dict
     
-    def load_state_dict(self, state_dict, strict=True):
+    def load_state_dict(self, state_dict, state_dict_vecnorm, strict=True):
         succeed_keys = []
         failed_keys = []
+        self.vecnorm.load_state_dict(state_dict_vecnorm)
         for name, module in self.named_children():
             _state_dict = state_dict.get(name, {})
             try:
