@@ -81,10 +81,10 @@ class fall_over(Termination):
 class max_traj_length(Termination):
     def __init__(self, env):
         super().__init__(env)
-        self.max_traj_length = self.env.command_manager.motion_clips_len
+        self.max_traj_length = self.env.command_manager.motion_clips_len    # [num_envs]
     
     def __call__(self) -> torch.Tensor:
-        return self.env.episode_length_buf >= self.max_traj_length
+        return (self.env.episode_length_buf >= self.max_traj_length).unsqueeze(1) 
 
 class root_deviation(Termination):
     def __init__(self, env, max_distance: float):

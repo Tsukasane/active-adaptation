@@ -193,6 +193,7 @@ class AMPPolicy(TensorDictModuleBase):
         with torch.no_grad():
             style_rewards = self.discriminator.amp_reward(tensordict[OBS_AMP_KEY])
             tensordict[REWARD_KEY] += style_rewards
+            tensordict[REWARD_KEY] *= 0.5
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
         tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
 
@@ -303,12 +304,12 @@ class AMPPolicy(TensorDictModuleBase):
         state_dict = OrderedDict()
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
+        state_dict["vecnorm"] = self.vecnorm.state_dict()
         return state_dict
     
-    def load_state_dict(self, state_dict, state_dict_vecnorm, strict=True):
+    def load_state_dict(self, state_dict, strict=True):
         succeed_keys = []
         failed_keys = []
-        self.vecnorm.load_state_dict(state_dict_vecnorm)
         for name, module in self.named_children():
             _state_dict = state_dict.get(name, {})
             try:
