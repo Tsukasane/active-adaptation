@@ -13,7 +13,7 @@ num_envs: 4096
 robot: cy1
 terrain: flat
 payload: false
-max_episode_length: 3500
+max_episode_length: 3452
 
 action:
   _target_: active_adaptation.envs.mdp.action.JointPosition
@@ -35,14 +35,14 @@ command:
   body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5]
 
 observation:
-  amp_:
+  amp:
     amp_traj:         { body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], 
                         joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                       rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                       waist_yaw_joint,
                                       larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
                                       rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6],
-                        steps: 3}
+                        steps: 8}
   robot:
     # 3D body pose and velocity caconicalized with respect to local frame
     body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
@@ -64,8 +64,8 @@ observation:
 reward:
   loco:
     # for tracking the reference motion
-    amp_tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
-    amp_tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
+    amp_tracking_root_trans:    {weight: 1.5, enabled: true, sigma: 0.81}
+    amp_tracking_root_rot:      {weight: 1.5, enabled: true, sigma: 0.81}
     amp_tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.64,
                             joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                           rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
@@ -136,7 +136,6 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
-  max_traj_length: {}
-  # root_deviation: {max_distance: 0.5}
+  root_deviation_amp: {max_distance: 0.5}
   # cum_error_qpos: {thres: 0.2}
   # cum_error_kp: {thres: 0.2}

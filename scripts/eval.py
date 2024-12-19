@@ -31,11 +31,6 @@ def main(cfg):
     env, agent, vecnorm = make_env_policy(cfg)
     
     keys = [
-        "robot",
-        "history",
-        "ref_motion_",
-        "loc",
-        "scale",
         ("next", "stats")
     ]
     
@@ -45,10 +40,10 @@ def main(cfg):
     print(termcolor.colored(trajs, "light_yellow"))
     time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
     path = os.path.join(os.path.dirname(__file__), f"trajs-{cfg.task.name}.pt")
-    torch.save(trajs, path)
+    # torch.save(trajs, path)
 
     path = os.path.join(os.path.dirname(__file__), f"stats-{time_str}.pt")
-    torch.save(stats, path)
+    # torch.save(stats, path)
 
     info["task"] = cfg.task.name
     info["algo"] = cfg.algo.name

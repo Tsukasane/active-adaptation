@@ -35,6 +35,14 @@ command:
   body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5]
 
 observation:
+  amp_:
+    amp_traj:         { body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], 
+                        joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                                      rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                                      waist_yaw_joint,
+                                      larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                                      rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6],
+                        steps: 3}
   robot:
     # 3D body pose and velocity caconicalized with respect to local frame
     body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
@@ -99,6 +107,26 @@ reward:
     joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*arm_joint.*}
     action_rate_l2:     {weight: 0.12, enabled: true}
     action_rate2_l2:    {weight: 0.08, enabled: true}
+
+    # for evaluation
+    mean_qpos_error:    {weight: 1.0, enabled: false,
+                          joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                                        rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                                        waist_yaw_joint,
+                                        # larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                                        # rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
+                                        larm_joint1, larm_joint2, larm_joint3, larm_joint4,
+                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
+                                        
+                        }
+    mean_kp_error: {weight: 1.0, enabled: false,
+                    body_names: [ larm_link2, rarm_link2,
+                                  larm_link4, rarm_link4,
+                                  larm_link6, rarm_link6,
+                                  lleg_link1, rleg_link1,
+                                  lleg_link4, rleg_link4,
+                                  lleg_link5, rleg_link5],
+                    }
 
 randomization:
   push:     {body_names: ["base_link", "waist_yaw_link"], force_range: [0.0, 0.1]}

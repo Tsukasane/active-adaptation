@@ -505,27 +505,55 @@ class tracking_end_effector(Reward):
         return reward
 
 
-class task_done(Reward):
-    def __init__(self, env, 
-                 weight: float, 
-                 enabled: bool = True,
-                 thres: float = 1.0,
-                 number: float = 100,):
+class mean_qpos_error(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
-        self.thres = thres
-        self.number = number
+        self.joint_ids = self.asset.find_joints(joint_names, preserve_order=True)[0]
+        self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
 
-        self.num_frames = self.env.command_manager.num_frames
+        self.cum_error = torch.zeros(self.num_envs, 1, device=self.device)
 
-    def update(self):
-        self._cum_error = self.env.command_manager._cum_error_root + \
-                            self.env.command_manager._cum_error_vel + \
-                            self.env.command_manager._cum_error_qpos + \
-                            self.env.command_manager._cum_error_keypoint
-
+    def reset(self, env_ids):
+        self.cum_error[env_ids] = 0.
+    
     def compute(self) -> torch.Tensor:
-        reach_thres = self._cum_error < self.thres
-        reach_max_frame = (self.env.episode_length_buf == self.num_frames).unsqueeze(1)
-        reward = (reach_thres & reach_max_frame).float() * self.number
-        return reward
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_qpos = self.env.command_manager.ref_qpos[timestep].squeeze(1)       
+        # fix arm joint 5 and joint 6
+        indice = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20]
+        ref_qpos = ref_qpos[:, indice]
+        err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).abs()    # torch.Size([num_envs, num_joints])
+        
+        self.cum_error += err.sum(-1, True)
+        self.cum_error /= timestep + 1
+        return self.cum_error
+
+class mean_kp_error(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, 
+                 body_names: str=".*"):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.body_ids = self.asset.find_bodies(body_names, preserve_order=True)[0]
+        self.body_ids = torch.tensor(self.body_ids, device=self.device)
+
+        self.cum_error = torch.zeros(self.num_envs, 1, device=self.device)
+
+    def reset(self, env_ids):
+        self.cum_error[env_ids] = 0.
+    
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_keypoints = self.env.command_manager.ref_keypoints[timestep].squeeze(1).reshape(self.num_envs, -1, 3)
+        body_pos_w = self.asset.data.body_pos_w[:, self.body_ids]   # torch.Size([num_envs, num_bodies, 3])
+        root_position = self.asset.data.root_pos_w.unsqueeze(1)
+        body_pos_w = body_pos_w - root_position
+        root_quat = self.asset.data.root_quat_w.unsqueeze(1)
+
+        body_pos_b = quat_rotate_inverse(root_quat, body_pos_w)
+        err = (body_pos_b - ref_keypoints).norm(dim=-1)         # torch.Size([num_envs, num_bodies])
+        
+
+        self.cum_error += err.sum(-1, True)
+        self.cum_error /= timestep + 1
+        return self.cum_error

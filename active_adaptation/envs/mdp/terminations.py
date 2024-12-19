@@ -85,6 +85,22 @@ class max_traj_length(Termination):
     
     def __call__(self) -> torch.Tensor:
         return (self.env.episode_length_buf >= self.max_traj_length).unsqueeze(1) 
+    
+class root_deviation_amp(Termination):
+    def __init__(self, env, max_distance: float):
+        super().__init__(env)
+        self.max_distance = torch.tensor(max_distance, device=self.env.device)
+        self.asset: Articulation = self.env.scene["robot"]
+    
+    def __call__(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        batch_indices = torch.arange(self.num_envs, device=self.env.device)
+        ref_root_translation = self.env.command_manager.ref_root_trans[batch_indices, timestep.squeeze(1)]
+
+        root_pos_w = self.asset.data.root_pos_w
+        deviation = (root_pos_w - ref_root_translation).norm(dim=1, keepdim=True)
+
+        return deviation > self.max_distance
 
 class root_deviation(Termination):
     def __init__(self, env, max_distance: float):
@@ -99,11 +115,6 @@ class root_deviation(Termination):
 
         root_pos_w = self.asset.data.root_pos_w
         deviation = (root_pos_w - ref_root_translation).norm(dim=1, keepdim=True)
-
-        # success_indicators = (self.episode_length_buf >= self.max_episode_length * 0.9).unsqueeze(1).float()
-        # success_rate = success_indicators.mean().item()
-
-        # self.env.stats["termination"]["max_deviation_allowed"] = self.max_distance.item()
 
         return deviation > self.max_distance
     

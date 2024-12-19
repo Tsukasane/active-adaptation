@@ -51,8 +51,8 @@ class AMPConfig:
     _target_: str = "active_adaptation.learning.ppo.amp.AMPPolicy"
     name: str = "amp"
     train_every: int = 32
-    ppo_epochs: int = 4
-    num_minibatches: int = 16
+    ppo_epochs: int = 5
+    num_minibatches: int = 8
     lr: float = 5e-4
     clip_param: float = 0.2
     entropy_coef: float = 0.001
@@ -65,7 +65,7 @@ class AMPConfig:
 
     # for amp
     data_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions"
-    amp_length: int = 3
+    amp_length: int = 8
 
 cs = ConfigStore.instance()
 cs.store("amp", node=AMPConfig, group="algo")
@@ -134,10 +134,11 @@ class AMPPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
-        _discriminator = Discriminator(observation_spec[OBS_AMP_KEY].shape[-1], [256, 128], device)
+        _discriminator = Discriminator(observation_spec[OBS_AMP_KEY].shape[-1], [512, 256], device)
         self.discriminator = TensorDictModule(_discriminator, [OBS_AMP_KEY], [AMP_REWARD])
 
-        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY], decay=0.9999)
+        # self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY], decay=0.9999)
+        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY, OBS_AMP_KEY], decay=0.9999)
 
         self.count_parameters()
 
@@ -151,7 +152,8 @@ class AMPPolicy(TensorDictModuleBase):
 
         self.d_opt = torch.optim.Adam(
             self.discriminator.parameters(),
-            lr=cfg.lr
+            lr=1e-3,
+            weight_decay=10e-4
         )
         
         def init_(module):
@@ -191,9 +193,8 @@ class AMPPolicy(TensorDictModuleBase):
         tensordict = tensordict.copy()
         infos = []
         with torch.no_grad():
-            style_rewards = self.discriminator.amp_reward(tensordict[OBS_AMP_KEY])
+            style_rewards = self.discriminator.amp_reward(tensordict[OBS_AMP_KEY])      # [batch_size, train_every, 1]
             tensordict[REWARD_KEY] += style_rewards
-            tensordict[REWARD_KEY] *= 0.5
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
         tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
 
@@ -201,6 +202,7 @@ class AMPPolicy(TensorDictModuleBase):
             batch = make_batch(tensordict, self.cfg.num_minibatches)
             for minibatch in batch:
                 amp_batch = self.amp_data.sample_batch(minibatch.shape[0])
+                amp_batch = self.vecnorm(amp_batch)
                 infos.append(TensorDict(self._update(minibatch, amp_batch), []))
         
         infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
@@ -267,7 +269,7 @@ class AMPPolicy(TensorDictModuleBase):
         policy_amp_loss = F.mse_loss(policy_d, -1 * torch.ones_like(policy_d, device=self.device))
         expert_amp_loss = F.mse_loss(expert_d, torch.ones_like(expert_d, device=self.device))
         discriminator_loss = (policy_amp_loss + expert_amp_loss) / 2
-        gradient_penalty = self.discriminator.gradient_penalty(amp_batch[OBS_AMP_KEY], tensordict[OBS_AMP_KEY])
+        gradient_penalty = self.discriminator.gradient_penalty(amp_batch[OBS_AMP_KEY])
         amp_loss = discriminator_loss + 10 * gradient_penalty
         
         loss = policy_loss + entropy_loss + value_loss

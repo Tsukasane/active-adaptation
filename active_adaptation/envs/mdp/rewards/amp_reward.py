@@ -76,8 +76,16 @@ class amp_tracking_qpos(Reward):
     
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf - 1
+        if not (timestep < self.env.max_episode_length).all():
+            timestep_idx = torch.where(timestep >= self.env.max_episode_length)[0]
+            print(f"timestep in tracking qpos is greater than {self.env.max_episode_length} at {timestep_idx} with value {timestep[timestep_idx]}")
+
+        if not (timestep < self.env.command_manager.max_traj_len).all():
+            timestep_idx = torch.where(timestep >= self.env.command_manager.max_traj_len)[0]
+            print(f"timestep in tracking qpos is greater than {self.env.command_manager.max_traj_len} at {timestep_idx} with value {timestep[timestep_idx]}")
+
         batch_indices = torch.arange(self.num_envs, device=self.device)
-        ref_qpos = self.env.command_manager.ref_qpos[batch_indices, timestep]
+        ref_qpos = self.env.command_manager.ref_qpos[batch_indices, timestep]       # torch.Size([num_envs, 23])
         # fix arm joint 5 and joint 6
         indice = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20]
         ref_qpos = ref_qpos[:, indice]

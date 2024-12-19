@@ -41,15 +41,27 @@ class AmpCommand(Command):
         self.motion_clips, self.motion_clips_len, self.max_traj_len = self._load_motions(motion_clip_dir)
         self.num_motions = len(self.motion_clips)
         print(f"Loaded {self.num_motions} motion clips with max_traj_len: {self.max_traj_len}")
+        # self.max_traj_len = max(self.max_traj_len, self.env.max_episode_length)
         self._stack_all_motions()
 
-        self.motion_ids = torch.randint(0, len(self.motion_clips), (self.num_envs,), device=self.device)
+        # self.motion_ids = torch.randint(0, len(self.motion_clips), (self.num_envs,), device=self.device)
+        self.motion_ids = torch.arange(self.num_motions, device=self.device).repeat(self.num_envs // self.num_motions + 1)[:self.num_envs]
         self.ref_root_trans = self.ref_root_trans[self.motion_ids]     # [num_envs, max_traj_len, 3]
+
+        # add terrain origin to reference root translations
+        origin = self.env.scene.env_origins     # [num_envs, 3]
+        self.ref_root_trans += origin.unsqueeze(1)
+
         self.ref_root_orient = self.ref_root_orient[self.motion_ids]   # [num_envs, max_traj_len, 4]
         self.ref_root_linear = self.ref_root_linear[self.motion_ids]   # [num_envs, max_traj_len, 3]
         self.ref_root_angular = self.ref_root_angular[self.motion_ids] # [num_envs, max_traj_len, 3]
         self.ref_qpos = self.ref_qpos[self.motion_ids]                 # [num_envs, max_traj_len, num_joints]
         self.ref_keypoints = self.ref_keypoints[self.motion_ids]       # [num_envs, max_traj_len, num_keypoints * 3]
+
+        print(f"reference motion root translation shape: {self.ref_root_trans.shape}")
+        print(f"reference motion root orientation shape: {self.ref_root_orient.shape}")
+        print(f"reference motion qpos shape: {self.ref_qpos.shape}")
+        print(f"reference motion keypoints shape: {self.ref_keypoints.shape}")
 
         self.motion_clips_len = self.motion_clips_len[self.motion_ids] # [num_envs]
 
@@ -140,12 +152,6 @@ class AmpCommand(Command):
         self.ref_root_angular = torch.stack(self.ref_root_angular, dim=0)       # (num_clips, max_traj_len, 3)
         self.ref_qpos = torch.stack(self.ref_qpos, dim=0)                       # (num_clips, max_traj_len, num_joints)
         self.ref_keypoints = torch.stack(self.ref_keypoints, dim=0)             # (num_clips, max_traj_len, num_keypoints * 3)
-
-        # add terrain origin to reference root translations
-        origin = self.env.scene.env_origins     # [num_envs, 3]
-        pick_idx = torch.randint(0, self.num_envs, (self.num_motions,), device=self.device)
-        pick_origin = origin[pick_idx]          # [num_motions, 3]
-        self.ref_root_trans += pick_origin.unsqueeze(1)
 
         self.motion_clips_len = torch.tensor(self.motion_clips_len, device=self.device)   # (num_clips)
 

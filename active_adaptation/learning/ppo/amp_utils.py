@@ -58,20 +58,18 @@ class Discriminator(nn.Module):
         return self.model(x)
     
     # wasserstein gradient penalty
-    def gradient_penalty(self, real_data, fake_data):
-        alpha = torch.rand(real_data.shape[0], 1, device=self.device)
-        interpolates = alpha * real_data + (1 - alpha) * fake_data
-        interpolates.requires_grad = True
-        disc_interpolates = self(interpolates)
+    def gradient_penalty(self, expert_data):
+        expert_data.requires_grad = True
+        disc_interpolates = self(expert_data)
         gradients = torch.autograd.grad(
             outputs=disc_interpolates,
-            inputs=interpolates,
+            inputs=expert_data,
             grad_outputs=torch.ones(disc_interpolates.size(), device=self.device),
             create_graph=True,
             retain_graph=True,
             only_inputs=True,
         )[0]
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        gradient_penalty = ((gradients.norm(2, dim=1) - 0) ** 2).mean()
         return gradient_penalty
     
     def amp_reward(self, trajs):
