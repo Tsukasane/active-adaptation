@@ -47,15 +47,20 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.device = device
         self.model = nn.Sequential()
+        self.amp_linear = nn.Linear(hidden_sizes[-1], 1)
         for i, (in_size, out_size) in enumerate(zip([input_size] + hidden_sizes[:-1], hidden_sizes)):
             self.model.add_module(f"fc{i}", nn.Linear(in_size, out_size))
             self.model.add_module(f"layer_norm{i}", nn.LayerNorm(out_size))
             self.model.add_module(f"mish{i}", nn.Mish())
-        self.model.add_module(f"fc{len(hidden_sizes)}", nn.Linear(hidden_sizes[-1], 1))
+        self.model.add_module(f"fc{len(hidden_sizes)}", self.amp_linear)
         self.model.to(self.device)
         
     def forward(self, x):
         return self.model(x)
+    
+    # Compute the regularization term
+    def compute_disc_logit_reg(self, disc_logit_reg=0.01):
+        return disc_logit_reg * torch.sum(torch.square(self.amp_linear.weight))
     
     # wasserstein gradient penalty
     def gradient_penalty(self, expert_data):

@@ -189,7 +189,7 @@ class AmpCommand(Command):
         pad_qpos = (1-t) * last_qpos + t * default_qpos.unsqueeze(0)        # (interpolate_frame, num_joints)
         qpos = torch.cat([qpos, pad_qpos], dim=0)                        
 
-        pad_qpos = default_qpos.unsqueeze(0).repeat(pad_frames, 1)         # (pad_frames, num_joints)
+        pad_qpos = default_qpos.unsqueeze(0).repeat(pad_frames - interpolate_frame, 1)         # (pad_frames, num_joints)
         qpos = torch.cat([qpos, pad_qpos], dim=0)                          # (max_traj_len, num_joints)
 
         body_id, body_names = self.asset.find_bodies(self.body_names, preserve_order=True)
@@ -203,7 +203,7 @@ class AmpCommand(Command):
         pad_keypoints = (1 - t) * last_keypoints + t * default_body_pos
         keypoints = torch.cat([keypoints, pad_keypoints], dim=0)
 
-        pad_keypoints = default_body_pos.repeat(pad_frames, 1)
+        pad_keypoints = default_body_pos.repeat(pad_frames - interpolate_frame, 1)
         keypoints = torch.cat([keypoints, pad_keypoints], dim=0)
 
         return root_trans, root_orient, root_linear, root_angular, qpos, keypoints

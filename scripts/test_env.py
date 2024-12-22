@@ -96,7 +96,7 @@ def main(cfg: DictConfig):
     render_decimation = cfg.get("render_decimation", 1)
     save_interval = cfg.get("save_interval", -1)
 
-    log_interval = (env.max_episode_length // cfg.algo.train_every) + 1
+    log_interval = cfg.algo.train_every
     logging.info(f"Log interval: {log_interval} steps")
 
     stats_keys = [

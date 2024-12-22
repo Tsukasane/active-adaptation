@@ -208,6 +208,7 @@ class AMPPolicy(TensorDictModuleBase):
         infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
         infos["critic/value_mean"] = tensordict["ret"].mean().item()
         infos["amp/style_reward"] = style_rewards.mean().item()
+        infos["amp/task_reward"] = tensordict[REWARD_KEY].mean().item()
         return infos
 
     @torch.no_grad()
@@ -270,7 +271,8 @@ class AMPPolicy(TensorDictModuleBase):
         expert_amp_loss = F.mse_loss(expert_d, torch.ones_like(expert_d, device=self.device))
         discriminator_loss = (policy_amp_loss + expert_amp_loss) / 2
         gradient_penalty = self.discriminator.gradient_penalty(amp_batch[OBS_AMP_KEY])
-        amp_loss = discriminator_loss + 10 * gradient_penalty
+        reg_loss = self.discriminator.compute_disc_logit_reg()
+        amp_loss = discriminator_loss + 10 * gradient_penalty + reg_loss
         
         loss = policy_loss + entropy_loss + value_loss
         self.opt.zero_grad()

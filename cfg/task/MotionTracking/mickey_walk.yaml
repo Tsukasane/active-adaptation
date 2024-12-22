@@ -35,14 +35,14 @@ command:
   body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5]
 
 observation:
-  amp_:
+  amp:
     amp_traj:         { body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], 
                         joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                       rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                       waist_yaw_joint,
                                       larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
                                       rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6],
-                        steps: 3}
+                        steps: 8}
   robot:
     # 3D body pose and velocity caconicalized with respect to local frame
     body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}

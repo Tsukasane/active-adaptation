@@ -24,7 +24,8 @@ render_interval: -1
 render_decimation: 4
 seed: 0
 checkpoint_path: null
-vecnorm: ${oc.select:algo.vecnorm,train}
+# vecnorm: ${oc.select:algo.vecnorm,train}
+vecnorm: null
 
 camera_follow: true
 
