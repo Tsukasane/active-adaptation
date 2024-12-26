@@ -31,9 +31,6 @@ FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(FILE_PATH, "..", "cfg")
 BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer")
 
-REPLAY_FILE = "trajs-Walk.pt"
-REPLAY_BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer", REPLAY_FILE)
-
 keys = [
     "robot",
     "history",
@@ -49,28 +46,7 @@ def main(cfg: DictConfig):
     app_launcher = AppLauncher(OmegaConf.to_container(cfg.app))
     simulation_app = app_launcher.app
 
-    run = wandb.init(
-        job_type=cfg.wandb.job_type,
-        entity=cfg.wandb.entity,
-        project=cfg.wandb.project,
-        mode=cfg.wandb.mode,
-        tags=cfg.wandb.tags,
-    )
-    run.config.update(OmegaConf.to_container(cfg))
-    
-    default_run_name = f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
-    run_idx = run.name.split("-")[-1]
-    run.name = f"{run_idx}-{default_run_name}"
-    setproctitle(run.name)
-
-    cfg_save_path = os.path.join(run.dir, "cfg.yaml")
-    OmegaConf.save(cfg, cfg_save_path)
-    run.save(cfg_save_path, policy="now")
-    run.save(os.path.join(run.dir, "config.yaml"), policy="now")
-
     env, policy, vecnorm = make_env_policy(cfg)
-
-    save_interval = cfg.get("save_interval", -1)
         
     class Sampler:
         def __init__(self, tensordict, num_mini_batch, mini_batch_size, device="cuda"):
@@ -92,29 +68,26 @@ def main(cfg: DictConfig):
                 indice = self.perm[:, torch.randint(self.perm.shape[1], (1,))].squeeze()
                 yield self.data[indice].to(self.device)
         
+    run_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
+    if not os.path.exists(run_dir):
+        os.mkdir(run_dir)
     def save(policy, checkpoint_name: str, artifact: bool=False):
-        ckpt_path = os.path.join(run.dir, f"{checkpoint_name}.pt")
+        ckpt_path = os.path.join(run_dir, f"{checkpoint_name}.pt")
         state_dict = OrderedDict()
-        state_dict["wandb"] = {"name": run.name, "id": run.id}
         state_dict["policy"] = policy.state_dict()
         state_dict["cfg"] = cfg
         torch.save(state_dict, ckpt_path)
-        if artifact:
-            artifact = wandb.Artifact(
-                f"{type(env).__name__}-{type(policy).__name__}", 
-                type="model"
-            )
-            artifact.add_file(ckpt_path)
-            run.log_artifact(artifact)
-        run.save(ckpt_path, policy="now", base_path=run.dir)
         logging.info(f"Saved checkpoint to {str(ckpt_path)}")
 
-    trajs = os.listdir(BUFFER_PATH)
-    trajs.pop(trajs.index(REPLAY_FILE))
+    trajs_dis = os.path.join(BUFFER_PATH, cfg.buffer_name)
+    trajs = os.listdir(trajs_dis)
+    replay_file = trajs.pop(-1)
+
     expert_buffer = None
     for traj in trajs:
-        path = os.path.join(BUFFER_PATH, traj)
-        buffer: TensorDict = torch.load(path).reshape(-1).select(*keys, strict=False)
+        path = os.path.join(trajs_dis, traj)
+        buffer: TensorDict = torch.load(path).reshape(-1)
+        buffer = buffer.select(*keys, strict=False)
         if expert_buffer == None:
             expert_buffer = buffer
         else:
@@ -123,21 +96,26 @@ def main(cfg: DictConfig):
     expert_buffer.rename_key_("loc", "gt_loc")
     expert_buffer.rename_key_("scale", "gt_scale")
 
-    # print(expert_buffer)      # num_tasks * num_envs_per_task * num_steps_per_env
+    REPLAY_BUFFER_PATH = os.path.join(BUFFER_PATH, cfg.buffer_name, replay_file)
     replay_buffer: TensorDict = torch.load(REPLAY_BUFFER_PATH).reshape(-1).select(*keys, strict=False)
     replay_buffer.rename_key_("loc", "gt_loc")
     replay_buffer.rename_key_("scale", "gt_scale")
 
-    epoch = policy.epoch
+    print("Expert Buffer: ", expert_buffer)      # num_tasks * num_envs_per_task * num_steps_per_env
+    print("Replay Buffer: ", replay_buffer)
+    
+    epoch = max(policy.epoch, cfg.epoch)
     batch_size = policy.batch_size
     num_mini_batch = max(len(expert_buffer) // batch_size, len(replay_buffer) // batch_size)
+    print(f"Behavioral Cloning: Epochs: {epoch}, Batch Size: {batch_size}, Num Mini Batch: {num_mini_batch}")
 
     expert_sampler, replay_sampler = Sampler(expert_buffer, num_mini_batch, batch_size, policy.device), Sampler(replay_buffer, num_mini_batch, batch_size, policy.device)
 
     for i in tqdm(range(epoch)):
         info = {}
         kl_a_losses, kl_b_losses, kl_losses = [], [], []
-        for expert_batch, replay_batch in zip(expert_sampler.generator(), replay_sampler.generator()):
+        pbar = tqdm(zip(expert_sampler.generator(), replay_sampler.generator()))
+        for expert_batch, replay_batch in pbar:
 
             kl_a = policy.kl_loss_a(replay_batch)
             kl_b = policy.kl_loss_b(expert_batch)
@@ -151,21 +129,17 @@ def main(cfg: DictConfig):
             kl_b_losses.append(kl_b.item())
             kl_losses.append(kl_loss.item())
 
+            pbar.set_description(f"KL Loss A: {kl_a.item():.4f}, KL Loss B: {kl_b.item():.4f}, KL Loss: {kl_loss.item():.4f}")
+
         info["kl_loss_a"] = sum(kl_a_losses) / len(kl_a_losses)
         info["kl_loss_b"] = sum(kl_b_losses) / len(kl_b_losses)
         info["kl_loss"] = sum(kl_losses) / len(kl_losses)
 
         if i % 10 == 0:
             print(f"Epoch {i}: KL Loss A: {info['kl_loss_a']}, KL Loss B: {info['kl_loss_b']}, KL Loss: {info['kl_loss']}")
-
-        if save_interval != -1 and i % save_interval == 0:
             save(policy, f"checkpoint_{i}")
 
-        run.log(info)
-
-
-    wandb.finish()
-    exit(0)
+    save(policy, "checkpoint_final")
     
     base_env.close()
     simulation_app.close()

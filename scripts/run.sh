@@ -30,3 +30,4 @@ python test_env.py task=MotionTracking/lambada            # action rate penalty
 
 # python eval.py task.num_envs=8 eval_render=true algo=ppo task=MotionTracking/walk checkpoint_path=ckpt_path
 
+# python save_sa_pair.py task=MotionTracking/walk task.num_envs=512 checkpoint_path=ckpt_path

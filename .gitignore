@@ -188,9 +188,10 @@ checkpoint*.pt
 
 # ref motion
 reference_motions/
-replay_buffer/
+scripts/replay_buffer/
 
 # checkpoints
 checkpoints/
 oracle/
 finetuning/
+reset_distill/

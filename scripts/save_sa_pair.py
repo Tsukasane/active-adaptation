@@ -83,7 +83,7 @@ def main(cfg):
     
     print(termcolor.colored(sa_pair, "light_yellow"))
     time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
-    path = os.path.join(os.path.dirname(__file__), f"sa_pair-{cfg.task.name}.pt")
+    path = os.path.join(os.path.dirname(__file__), f"replay_buffer/sa_pair-{cfg.task.name}.pt")
     torch.save(sa_pair, path)
 
     env.close()
