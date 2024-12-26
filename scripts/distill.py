@@ -105,15 +105,13 @@ def main(cfg: DictConfig):
     print("Replay Buffer: ", replay_buffer)
     
     epoch = max(policy.epoch, cfg.epoch)
-    batch_size = policy.batch_size
+    batch_size = max(policy.batch_size, cfg.batch_size)
     num_mini_batch = max(len(expert_buffer) // batch_size, len(replay_buffer) // batch_size)
     print(f"Behavioral Cloning: Epochs: {epoch}, Batch Size: {batch_size}, Num Mini Batch: {num_mini_batch}")
 
     expert_sampler, replay_sampler = Sampler(expert_buffer, num_mini_batch, batch_size, policy.device), Sampler(replay_buffer, num_mini_batch, batch_size, policy.device)
 
     for i in tqdm(range(epoch)):
-        info = {}
-        kl_a_losses, kl_b_losses, kl_losses = [], [], []
         pbar = tqdm(zip(expert_sampler.generator(), replay_sampler.generator()))
         for expert_batch, replay_batch in pbar:
 
@@ -124,24 +122,14 @@ def main(cfg: DictConfig):
             policy.optimizer.zero_grad()
             kl_loss.backward()
             policy.optimizer.step()
-
-            kl_a_losses.append(kl_a.item())
-            kl_b_losses.append(kl_b.item())
-            kl_losses.append(kl_loss.item())
-
+            
             pbar.set_description(f"KL Loss A: {kl_a.item():.4f}, KL Loss B: {kl_b.item():.4f}, KL Loss: {kl_loss.item():.4f}")
 
-        info["kl_loss_a"] = sum(kl_a_losses) / len(kl_a_losses)
-        info["kl_loss_b"] = sum(kl_b_losses) / len(kl_b_losses)
-        info["kl_loss"] = sum(kl_losses) / len(kl_losses)
-
         if i % 10 == 0:
-            print(f"Epoch {i}: KL Loss A: {info['kl_loss_a']}, KL Loss B: {info['kl_loss_b']}, KL Loss: {info['kl_loss']}")
             save(policy, f"checkpoint_{i}")
 
     save(policy, "checkpoint_final")
     
-    base_env.close()
     simulation_app.close()
     exit(0)
 
