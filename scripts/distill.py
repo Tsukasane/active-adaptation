@@ -79,13 +79,12 @@ def main(cfg: DictConfig):
         torch.save(state_dict, ckpt_path)
         logging.info(f"Saved checkpoint to {str(ckpt_path)}")
 
-    trajs_dis = os.path.join(BUFFER_PATH, cfg.buffer_name)
-    trajs = os.listdir(trajs_dis)
+    trajs = os.listdir(BUFFER_PATH)
     replay_file = trajs.pop(-1)
 
     expert_buffer = None
     for traj in trajs:
-        path = os.path.join(trajs_dis, traj)
+        path = os.path.join(BUFFER_PATH, traj)
         buffer: TensorDict = torch.load(path).reshape(-1)
         buffer = buffer.select(*keys, strict=False)
         if expert_buffer == None:
@@ -96,7 +95,7 @@ def main(cfg: DictConfig):
     expert_buffer.rename_key_("loc", "gt_loc")
     expert_buffer.rename_key_("scale", "gt_scale")
 
-    REPLAY_BUFFER_PATH = os.path.join(BUFFER_PATH, cfg.buffer_name, replay_file)
+    REPLAY_BUFFER_PATH = os.path.join(BUFFER_PATH, replay_file)
     replay_buffer: TensorDict = torch.load(REPLAY_BUFFER_PATH).reshape(-1).select(*keys, strict=False)
     replay_buffer.rename_key_("loc", "gt_loc")
     replay_buffer.rename_key_("scale", "gt_scale")

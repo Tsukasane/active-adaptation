@@ -26,7 +26,6 @@ seed: 0
 checkpoint_path: null
 vecnorm: null
 
-buffer_name: 2-backwalk
 epoch: -1
 batch_size: -1
 

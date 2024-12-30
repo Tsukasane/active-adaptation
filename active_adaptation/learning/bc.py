@@ -23,7 +23,7 @@ class BCConfig:
     _target_: str = "active_adaptation.learning.bc.BCPolicy"
     name: str = "bc"
     epoch: int = 50
-    batch_size: int = 256
+    batch_size: int = 128
     lr: float = 1e-4
 
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])

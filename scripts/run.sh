@@ -26,8 +26,8 @@ python test_env.py task=MotionTracking/lambada            # action rate penalty
 
 # python test_env.py task=MotionTracking/amp algo=amp task.name=amp_logic_loss total_frames=600000000
 
-# python eval.py task.num_envs=2048 algo=ppo task=MotionTracking/walk checkpoint_path=ckpt_path
+# python eval.py task.num_envs=4096 algo=ppo task=MotionTracking/walk checkpoint_path=ckpt_path
 
 # python eval.py task.num_envs=8 eval_render=true algo=ppo task=MotionTracking/walk checkpoint_path=ckpt_path
 
-# python save_sa_pair.py task=MotionTracking/walk task.num_envs=512 checkpoint_path=ckpt_path
+#  python rollout.py task=MotionTracking/lambada task.num_envs=4 algo=ppo checkpoint_path=ckpt+path
