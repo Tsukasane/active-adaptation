@@ -25,7 +25,7 @@ action:
   alpha: [0.5, 1.0]
 
 command:
-  _target_: active_adaptation.envs.mdp.AmpCommand
+  _target_: active_adaptation.envs.mdp.MultiCommand
   motion_clip_dir: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions"
   joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                 rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
@@ -57,16 +57,16 @@ observation:
   history:
     history_io:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   ref_motion_:         # future reference motions
-    amp_ref_trans_gap:      {steps: 5}
-    amp_ref_keypoints:      {steps: 5}
-    amp_ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
+    m_ref_trans_gap:      {steps: 5}
+    m_ref_keypoints:      {steps: 5}
+    m_ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
 
 reward:
   loco:
     # for tracking the reference motion
-    amp_tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
-    amp_tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
-    amp_tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.64,
+    m_tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
+    m_tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
+    m_tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.64,
                             joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                           rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                           waist_yaw_joint,
@@ -74,14 +74,14 @@ reward:
                                           rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
                                           
                           }
-    amp_tracking_keypoints: {weight: 2.0, enabled: true, sigma: 0.64,
+    m_tracking_keypoints: {weight: 2.0, enabled: true, sigma: 0.64,
                           upper_body_names: [ larm_link2, rarm_link2,
                                               larm_link4, rarm_link4],
                           upper_body_err_weight: 1.5,
                           lower_body_names: [ lleg_link1, rleg_link1,
                                               lleg_link4, rleg_link4],
                           lower_body_err_weight: 1.5}
-    amp_tracking_end_effector: {weight: 3.0, enabled: true, sigma: 0.64,
+    m_tracking_end_effector: {weight: 3.0, enabled: true, sigma: 0.64,
                           upper_body_names: [ larm_link6, rarm_link6],
                           upper_body_err_weight: 1.5,
                           lower_body_names: [ lleg_link5, rleg_link5],
@@ -136,7 +136,7 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
-  root_deviation_amp: {max_distance: 0.5}
+  root_deviation_m: {max_distance: 0.5}
   max_traj_length: {}
   # cum_error_qpos: {thres: 0.2}
   # cum_error_kp: {thres: 0.2}

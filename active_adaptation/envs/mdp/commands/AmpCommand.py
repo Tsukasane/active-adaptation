@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
-class AmpCommand(Command):
+class MultiCommand(Command):
     def __init__(
             self, 
             env,

@@ -14,7 +14,7 @@ quat_rotate_inverse = batchify(quat_rotate_inverse)
 def dot(a: torch.Tensor, b: torch.Tensor):
     return (a * b).sum(-1, True)
 
-class amp_tracking_root_trans(Reward):
+class m_tracking_root_trans(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
@@ -42,7 +42,7 @@ class amp_tracking_root_trans(Reward):
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
     
-class amp_tracking_root_rot(Reward):
+class m_tracking_root_rot(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
@@ -64,7 +64,7 @@ class amp_tracking_root_rot(Reward):
         reward = torch.exp(- err / self.sigma)
         return reward
     
-class amp_tracking_qpos(Reward):
+class m_tracking_qpos(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str=".*"):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
@@ -95,7 +95,7 @@ class amp_tracking_qpos(Reward):
         reward = torch.exp(- err.mean(-1, True) / self.sigma)
         return reward
     
-class amp_tracking_keypoints(Reward):
+class m_tracking_keypoints(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, 
                  upper_body_names: str=".*", upper_body_err_weight: float=1.0,
                  lower_body_names: str=".*", lower_body_err_weight: float=1.5):
@@ -152,7 +152,7 @@ class amp_tracking_keypoints(Reward):
         for i in range(kp_global.shape[1]):
             self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
 
-class amp_tracking_end_effector(Reward):
+class m_tracking_end_effector(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, 
                  upper_body_names: str=".*", upper_body_err_weight: float=1.0,
                  lower_body_names: str=".*", lower_body_err_weight: float=1.5):

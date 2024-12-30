@@ -188,6 +188,7 @@ checkpoint*.pt
 
 # ref motion
 reference_motions/
+reference_motions_seq/
 scripts/replay_buffer/
 
 # checkpoints

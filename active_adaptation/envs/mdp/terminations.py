@@ -86,7 +86,7 @@ class max_traj_length(Termination):
     def __call__(self) -> torch.Tensor:
         return (self.env.episode_length_buf >= self.max_traj_length).unsqueeze(1) 
     
-class root_deviation_amp(Termination):
+class root_deviation_m(Termination):
     def __init__(self, env, max_distance: float):
         super().__init__(env)
         self.max_distance = torch.tensor(max_distance, device=self.env.device)

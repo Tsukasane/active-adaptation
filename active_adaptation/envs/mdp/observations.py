@@ -1565,7 +1565,7 @@ class amp_traj(Observation):
         obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + num_joints]
         return obs_per_time.reshape(self.num_envs, -1)
 
-class amp_ref_trans_gap(Observation):
+class m_ref_trans_gap(Observation):
     def __init__(self, env, steps: int=1):
         super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
@@ -1597,7 +1597,7 @@ class amp_ref_trans_gap(Observation):
             size=1.
         )
 
-class amp_ref_keypoints(Observation):
+class m_ref_keypoints(Observation):
     def __init__(self, env, steps: int=1):
         super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
@@ -1616,7 +1616,7 @@ class amp_ref_keypoints(Observation):
         keypoints = self.keypoints[torch.arange(self.num_envs).unsqueeze(1), indices]        # [num_envs, steps, 12 * 3]
         return keypoints.reshape(self.num_envs, -1)
     
-class amp_ref_keypoints_gap(CartesianObs):
+class m_ref_keypoints_gap(CartesianObs):
     def __init__(
         self,
         env,
