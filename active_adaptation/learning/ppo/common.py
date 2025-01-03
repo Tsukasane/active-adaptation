@@ -31,6 +31,7 @@ from torchrl.data import CompositeSpec
 from dataclasses import dataclass, field
 
 from .rotary import RotaryEmbedding
+import os
 
 
 OBS_KEY = "robot" # ("agents", "observation", "policy")
@@ -139,6 +140,38 @@ class Transformer(nn.Module):
         x = self.attention_blocks(x)
         x = self.output_layer(x)
         return x[:, 0]          # only return the first token, shape [batch_size, output_dim]
+    
+class ReplayBuffer:
+    def __init__(self, replay_dir, device):
+        self.replay_dir = replay_dir
+        self.device = device
+
+        self.replay_buffer = self.load_replay()
+
+    def load_replay(self):
+        trajs = os.listdir(self.replay_dir)
+        replay_buffer = None
+        for traj in trajs:
+            path = os.path.join(self.replay_dir, traj)
+            buffer: TensorDict = torch.load(path).reshape(-1)
+            if replay_buffer == None:
+                replay_buffer = buffer
+            else:
+                replay_buffer = torch.cat((replay_buffer, buffer), dim=0)
+        replay_buffer.rename_key_("loc", "replay_loc")
+        replay_buffer.rename_key_("scale", "replay_scale")
+        return replay_buffer
+    
+    def sample_batch(self, sample_shape: int, num_minibatches: int):
+        ids = torch.randint(0, len(self.replay_buffer), (sample_shape,))
+        data = self.replay_buffer[ids].to(self.device)
+        perm = torch.randperm(
+            (sample_shape // num_minibatches) * num_minibatches,
+            device=self.device,
+        ).reshape(num_minibatches, -1)
+        for indices in perm:
+            yield data[indices]
+
 
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)

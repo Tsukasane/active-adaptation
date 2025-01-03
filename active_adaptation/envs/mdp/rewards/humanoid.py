@@ -341,7 +341,23 @@ class tracking_root_rot(Reward):
 
         reward = torch.exp(- err / self.sigma)
         return reward
-    
+
+    def debug_draw(self):
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_root_rotation = self.env.command_manager.ref_root_orient[timestep].squeeze(1)
+        root_rot_w = self.asset.data.root_quat_w
+
+        unit_vector = torch.tensor([1., 0., 0.], device=self.device).unsqueeze(0).unsqueeze(0)
+        ref_rot = quat_rotate(ref_root_rotation, unit_vector)
+        root_rot = quat_rotate(root_rot_w, unit_vector)
+        self.env.debug_draw.vector(self.asset.data.root_pos_w + torch.tensor([0., 0., 1.], device=self.device), 
+                                    ref_rot,
+                                    color=(1., 0., 0., 1.))
+        self.env.debug_draw.vector(self.asset.data.root_pos_w + torch.tensor([0., 0., 1.], device=self.device),
+                                    root_rot,
+                                    color=(0., 1., 0., 1.))
+
+
 class tracking_velocity(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
         super().__init__(env, weight, enabled)
@@ -361,14 +377,6 @@ class tracking_velocity(Reward):
 
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
-    
-    def debug_draw(self):
-        self.env.debug_draw.vector(
-            self.asset.data.root_pos_w[:, :3],
-            self.ref_root_linear,
-            color=(0., 1., 0., 1.),
-            size=1.0
-        )
 
 
 class tracking_qpos(Reward):

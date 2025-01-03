@@ -137,6 +137,7 @@ termination:
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
   root_deviation_m: {max_distance: 0.5}
+  root_rot_deviation_m: {max_theta: 60}
   max_traj_length: {}
   # cum_error_qpos: {thres: 0.2}
   # cum_error_kp: {thres: 0.2}
