@@ -60,7 +60,8 @@ class PPOIMConfig:
     vecnorm: Union[str, None] = None
 
     replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_1e5"
-    kl_coef: float = 2.0
+    im_loss_type: str = "kl"    # "wasserstein", "mse"
+    im_coef: float = 2.0
 
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
@@ -91,7 +92,8 @@ class PPOIMPolicy(TensorDictModuleBase):
         self.gae = GAE(0.99, 0.95)
         
         self.replay_buffer = ReplayBuffer(cfg.replay_dir, device=device)
-        self.kl_coef = cfg.kl_coef
+        self.im_coef = cfg.im_coef  # self.im_coef = self.replay_buffer.replay_buffer_length * 1.0
+        self.im_loss_type = cfg.im_loss_type
 
         if cfg.value_norm:
             value_norm_cls = ValueNorm1
@@ -264,11 +266,24 @@ class PPOIMPolicy(TensorDictModuleBase):
 
         loc, scale = self.actor(replay_tensordict)["loc"], self.actor(replay_tensordict)["scale"]
         replay_loc, replay_scale = replay_tensordict["replay_loc"], replay_tensordict["replay_scale"]
-        im_dist = D.Normal(loc, scale)
-        replay_dist = D.Normal(replay_loc, replay_scale)
-        kl = D.kl_divergence(im_dist, replay_dist).mean()
+        if self.im_loss_type == "kl":
+            im_dist = D.Normal(loc, scale)
+            replay_dist = D.Normal(replay_loc, replay_scale)
+            imitate_loss = D.kl_divergence(im_dist, replay_dist).mean() * self.im_coef
+        elif self.im_loss_type == "wasserstein":
+            mean_diff = torch.sum((loc - replay_loc) ** 2, dim=-1)
+            trace_sigma1 = torch.sum(scale ** 2, dim=-1)
+            trace_sigma2 = torch.sum(replay_scale ** 2, dim=-1)
+            cross = 2.0 * torch.sum(scale * replay_scale, dim=-1)
+            w2 = mean_diff + trace_sigma1 + trace_sigma2 - cross
+            imitate_loss = torch.sqrt(w2).mean() * self.im_coef
+        elif self.im_loss_type == "mse":
+            r_action = self.actor(replay_tensordict)[ACTION_KEY]
+            imitate_loss = F.mse_loss(r_action, replay_tensordict["replay_action"]) * self.im_coef
+        else:
+            raise NotImplementedError
         
-        loss = policy_loss + entropy_loss + value_loss + kl * self.kl_coef
+        loss = policy_loss + entropy_loss + value_loss + imitate_loss
         self.opt.zero_grad()
         loss.backward()
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
@@ -284,7 +299,7 @@ class PPOIMPolicy(TensorDictModuleBase):
             "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
-            "critic/kl": kl,
+            "critic/imitation": imitate_loss,
         }
 
     def state_dict(self):

@@ -150,6 +150,7 @@ class ReplayBuffer:
 
     def load_replay(self):
         trajs = os.listdir(self.replay_dir)
+        self.replay_buffer_length = len(trajs)
         replay_buffer = None
         for traj in trajs:
             path = os.path.join(self.replay_dir, traj)
@@ -160,6 +161,7 @@ class ReplayBuffer:
                 replay_buffer = torch.cat((replay_buffer, buffer), dim=0)
         replay_buffer.rename_key_("loc", "replay_loc")
         replay_buffer.rename_key_("scale", "replay_scale")
+        replay_buffer.rename_key_("action", "replay_action")
         return replay_buffer
     
     def sample_batch(self, sample_shape: int, num_minibatches: int):

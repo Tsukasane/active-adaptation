@@ -28,6 +28,8 @@ def main(cfg):
     cfg.headless = True
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+
+    need_envs = cfg.get("rollout_frame", int(64))
     
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
@@ -45,20 +47,23 @@ def main(cfg):
     action_keys = [
         "loc",
         "scale",
+        "action"
     ]
 
     rollout = []
 
     td_ = env.reset()
     
-    rollout_frame = cfg.get("rollout_frame", int(25000))
-    for i in tqdm(range(rollout_frame), miniters=10):
+    for i in tqdm(range(env.max_episode_length), miniters=10):
         rollout.append(td_.select(*state_keys, strict=False).cpu()) # record state
         td_ = policy(td_)
         rollout[-1].update(td_.select(*action_keys, strict=False).cpu())
         td, td_ = env.step_and_maybe_reset(td_)
-
-    rollout = torch.stack(rollout, dim=1)
+    
+    truncated = td["next"]["truncated"].squeeze(-1).cpu()
+    assert truncated.sum() > need_envs, f"Rollout env is not enough: {truncated.sum()}"
+    print(f"Truncated envs: {truncated.sum()}")
+    rollout = torch.stack(rollout, dim=1)[truncated][:need_envs]
     print(f"Rollout shape: {rollout.shape}")
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
     torch.save(rollout, path)
