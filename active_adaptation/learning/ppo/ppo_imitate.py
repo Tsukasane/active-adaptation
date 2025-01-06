@@ -59,7 +59,7 @@ class PPOIMConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_1e5"
+    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_64"
     im_loss_type: str = "kl"    # "wasserstein", "mse"
     im_coef: float = 2.0
 

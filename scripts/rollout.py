@@ -62,7 +62,7 @@ def main(cfg):
     
     truncated = td["next"]["truncated"].squeeze(-1).cpu()
     assert truncated.sum() > need_envs, f"Rollout env is not enough: {truncated.sum()}"
-    print(f"Truncated envs: {truncated.sum()}")
+    print(f"Truncated envs: {truncated.sum()}, Success rate: {truncated.sum() / truncated.size(0)}")
     rollout = torch.stack(rollout, dim=1)[truncated][:need_envs]
     print(f"Rollout shape: {rollout.shape}")
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
