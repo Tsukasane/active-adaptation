@@ -35,7 +35,7 @@ import os
 
 
 OBS_KEY = "robot" # ("agents", "observation", "policy")
-OBS_PRIV_KEY = "priv"
+OBS_PRIV_KEY = "priv_"
 OBS_HIST_KEY = "history"
 OBS_REF_KEY = "ref_motion_"
 OBS_AMP_KEY = "amp"

@@ -43,12 +43,14 @@ def main(cfg):
         "robot",
         "history",
         "ref_motion_",
+        "priv_"
     ]
     action_keys = [
         "loc",
         "scale",
         "action"
     ]
+    next_keys = ("next", "robot")
 
     rollout = []
 
@@ -59,12 +61,14 @@ def main(cfg):
         td_ = policy(td_)
         rollout[-1].update(td_.select(*action_keys, strict=False).cpu())
         td, td_ = env.step_and_maybe_reset(td_)
+        rollout[-1].update(td.select(next_keys, strict=False).cpu())
     
     truncated = td["next"]["truncated"].squeeze(-1).cpu()
     assert truncated.sum() > need_envs, f"Rollout env is not enough: {truncated.sum()}"
     print(f"Truncated envs: {truncated.sum()}, Success rate: {truncated.sum() / truncated.size(0)}")
     rollout = torch.stack(rollout, dim=1)[truncated][:need_envs]
     print(f"Rollout shape: {rollout.shape}")
+    print(rollout)
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
     torch.save(rollout, path)
     
