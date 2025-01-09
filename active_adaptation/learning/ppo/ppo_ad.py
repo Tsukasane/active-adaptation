@@ -101,24 +101,18 @@ class PPOADPolicy(TensorDictModuleBase):
 
         self.encoder = TensorDictModule(
             nn.Sequential(
-                make_mlp([128, 64, 16 * 2 + self.estimate_dim]),
-                Split([16, 16, self.estimate_dim])
+                make_mlp([128, 64, self.estimate_dim]),
             ),
             [OBS_HIST_KEY],
-            ["mu", "logvar", "aux_pred"]
+            ["pred_priv"]
         ).to(self.device)
-
-        self.decoder = nn.Sequential(
-                make_mlp([16, 64]),
-                nn.Linear(64, self.decode_dim)
-            ).to(self.device)
         
         def make_actor(out_key: str):
             modules = [
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
-                    TensorDictModule(make_mlp([256]), [OBS_PRIV_KEY], ["_priv"]),
+                    TensorDictModule(make_mlp([256]), ["pred_priv"], ["_priv"]),
                     CatTensors(["_robot", "_hist", "_ref_motion_", "_priv"], out_key),
                 ]
             return modules
@@ -152,8 +146,7 @@ class PPOADPolicy(TensorDictModuleBase):
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
-        # self.encoder(fake_input)
-        # self.decoder(fake_input["mu"])
+        self.encoder(fake_input)
         self.actor(fake_input)
         self.critic(fake_input)
 
@@ -172,7 +165,6 @@ class PPOADPolicy(TensorDictModuleBase):
         self.opt_est = torch.optim.Adam(
             [
                 {"params": self.encoder.parameters()},
-                {"params": self.decoder.parameters()},
             ]
         )
         
@@ -187,16 +179,14 @@ class PPOADPolicy(TensorDictModuleBase):
     def count_parameters(self):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
-        # num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
         # num_decoder_params = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
-        # encoder_params_m = num_encoder_params / 1e3
-        # decoder_params_m = num_decoder_params / 1e3
+        encoder_params_m = num_encoder_params / 1e3
         print(f'Number of actor parameters: {actor_params_m:.2f}M')
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
-        # print(f'Number of encoder parameters: {encoder_params_m:.2f}K')
-        # print(f'Number of decoder parameters: {decoder_params_m:.2f}K')
+        print(f'Number of encoder parameters: {encoder_params_m:.2f}K')
     
     def get_rollout_policy(self, mode: str="train"):
         if mode == "train":
@@ -225,7 +215,7 @@ class PPOADPolicy(TensorDictModuleBase):
             for minibatch in batch:
                 infos.append(TensorDict({
                     **self._update(minibatch),
-                    # **self._update_estimation(minibatch)
+                    **self._update_estimation(minibatch)
                 }, []))
         
         infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
@@ -268,8 +258,8 @@ class PPOADPolicy(TensorDictModuleBase):
 
     # @torch.compile
     def _update(self, tensordict: TensorDict):
-        ids = torch.randint(0, tensordict.shape[0], (tensordict.shape[0] // 2,))
-        tensordict[ids]["aux_pred"] = tensordict[ids][OBS_PRIV_KEY]
+        ids = torch.randint(0, tensordict.shape[0], (int(tensordict.shape[0] * 0.02),))
+        tensordict[ids]["pred_priv"] = tensordict[ids][OBS_PRIV_KEY]
         
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
@@ -309,7 +299,7 @@ class PPOADPolicy(TensorDictModuleBase):
     def _update_estimation(self, tensordict: TensorDict):
         self.encoder(tensordict)
 
-        aux_pred = tensordict["aux_pred"]
+        aux_pred = tensordict["pred_priv"]
         aux_pred_target = tensordict[OBS_PRIV_KEY]
         aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
 
@@ -318,7 +308,7 @@ class PPOADPolicy(TensorDictModuleBase):
         loss.backward()
         self.opt_est.step()
         return {
-            "estimation/aux_pred_loss": aux_pred_loss,
+            "estimation/pred_loss": aux_pred_loss,
         }
 
     def state_dict(self):

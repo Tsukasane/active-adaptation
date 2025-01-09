@@ -1573,6 +1573,29 @@ class history_sensor_io(Observation):
         action_per_time = self.env.action_manager.action_buf[:, :, :self.steps-1].permute(0, 2, 1)  # [N, steps-1, num_joints]
         features_over_time = torch.cat([obs_per_time, action_per_time], dim=2)
         return features_over_time.reshape(self.num_envs, -1)
+    
+class long_history_sensor(history_sensor_io):
+    def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
+        super().__init__(env)
+
+    def reset(self, env_ids: torch.Tensor):
+        super().reset(env_ids)
+
+    def update(self):
+        super().update()
+
+    def compute(self):
+        body_pos_hist = self.body_pos_hist.permute(0, 3, 1, 2).reshape(self.num_envs, self.steps, -1)                             
+        joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)                                          
+        joint_vel_hist = self.joint_vel_hist.permute(0, 2, 1)           
+        obs_per_time = torch.cat([
+                    body_pos_hist,              # [N, steps, 3 * num_bodies]
+                    joint_pos_hist,             # [N, steps, num_joints]
+                    joint_vel_hist],            # [N, steps, num_joints]
+                dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
+        
+        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + 6 + 2 * num_joints]
+        return obs_per_time.reshape(self.num_envs, -1)
 
 class amp_traj(Observation):
     def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
