@@ -1,6 +1,6 @@
 # @package task
 
-name: Walk
+name: Chacha
 task: Humanoid
 
 defaults:
@@ -12,7 +12,7 @@ defaults:
 robot: cy1
 terrain: flat
 payload: false
-max_episode_length: 2100
+max_episode_length: 3500
 
 action:
   _target_: active_adaptation.envs.mdp.action.JointPosition
@@ -26,7 +26,7 @@ action:
 
 command:
   _target_: active_adaptation.envs.mdp.MotionClip
-  motion_clip: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions/walk/0-SFU_0007_0007_Walking001_poses_retarget.pkl"
+  motion_clip: "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions/dance/0-SFU_0008_0008_ChaCha001_poses_retarget.pkl"
   joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                 rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                 waist_yaw_joint,
@@ -49,15 +49,16 @@ observation:
     joint_pos:        {noise_std: 0.05}
     joint_vel:        {noise_std: 0.2}
   history:
-    history_sensor_io:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
+    history_sensor_io:            {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   ref_motion_:         # future reference motions
     ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
-  priv:
+  priv_:
+    root_height:
+    root_quat_w:
     root_linvel_b:    {yaw_only: false}
     root_angvel_b:    {noise_std: 0.05}
-
 
 reward:
   loco:
@@ -69,16 +70,12 @@ reward:
                           joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                         rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                         waist_yaw_joint,
-                                        # larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
-                                        # rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
                                         larm_joint1, larm_joint2, larm_joint3, larm_joint4,
-                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
-                                        
-                        }
+                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]}
     tracking_keypoints: {weight: 2.0, enabled: true, sigma: 0.64,
                           upper_body_names: [ larm_link2, rarm_link2,
                                               larm_link4, rarm_link4],
-                          upper_body_err_weight: 1.5,
+                          upper_body_err_weight: 2.0,
                           lower_body_names: [ lleg_link1, rleg_link1,
                                               lleg_link4, rleg_link4],
                           lower_body_err_weight: 1.5}
@@ -157,7 +154,7 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
-  root_deviation: {max_distance: 0.5}
+  root_deviation: {max_distance: 0.6}
   root_rot_deviation: {max_theta: 60}
-  cum_error_qpos: {thres: 0.2}
-  # cum_error_kp: {thres: 0.2}
+  cum_error_qpos: {thres: 0.4}
+  cum_error_kp: {thres: 0.4}
