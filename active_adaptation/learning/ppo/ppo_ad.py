@@ -60,7 +60,7 @@ class PPOADConfig:
     vecnorm: Union[str, None] = None
 
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
 cs.store("ppo_ad", node=PPOADConfig, group="algo")
@@ -101,9 +101,9 @@ class PPOADPolicy(TensorDictModuleBase):
 
         self.encoder = TensorDictModule(
             nn.Sequential(
-                make_mlp([128, 64, self.estimate_dim]),
+                make_mlp([512, 256, self.estimate_dim]),
             ),
-            [OBS_HIST_KEY],
+            [OBS_LONG_HIST_KEY],
             ["pred_priv"]
         ).to(self.device)
         
@@ -150,7 +150,7 @@ class PPOADPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
-        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY, OBS_PRIV_KEY], decay=0.9999)
+        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_PRIV_KEY], decay=0.9999)
 
         self.count_parameters()
 
@@ -180,7 +180,6 @@ class PPOADPolicy(TensorDictModuleBase):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
         num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
-        # num_decoder_params = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
         encoder_params_m = num_encoder_params / 1e3
@@ -258,7 +257,7 @@ class PPOADPolicy(TensorDictModuleBase):
 
     # @torch.compile
     def _update(self, tensordict: TensorDict):
-        ids = torch.randint(0, tensordict.shape[0], (int(tensordict.shape[0] * 0.02),))
+        ids = torch.randint(0, tensordict.shape[0], (tensordict.shape[0] // 2,))
         tensordict[ids]["pred_priv"] = tensordict[ids][OBS_PRIV_KEY]
         
         dist = self.actor.get_dist(tensordict)
@@ -303,12 +302,17 @@ class PPOADPolicy(TensorDictModuleBase):
         aux_pred_target = tensordict[OBS_PRIV_KEY]
         aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
 
+        linear_vel_err = torch.abs(tensordict["pred_priv"][:, :3] - tensordict[OBS_PRIV_KEY][:, :3]).mean()
+        angular_vel_err = torch.abs(tensordict["pred_priv"][:, 3:] - tensordict[OBS_PRIV_KEY][:, 3:]).mean()
+
         loss = aux_pred_loss
         self.opt_est.zero_grad()
         loss.backward()
         self.opt_est.step()
         return {
             "estimation/pred_loss": aux_pred_loss,
+            "estimation/linear_vel_loss": linear_vel_err,
+            "estimation/angular_vel_loss": angular_vel_err,
         }
 
     def state_dict(self):

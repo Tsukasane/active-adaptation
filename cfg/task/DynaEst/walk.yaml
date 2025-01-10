@@ -42,6 +42,8 @@ observation:
     joint_vel:        {noise_std: 0.2}
   history:
     history_sensor_io:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
+  long_history:
+    long_history_sensor: {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 10}
   ref_motion_:         # future reference motions
     ref_trans_gap:      {steps: 5}
     ref_keypoints:      {steps: 5}

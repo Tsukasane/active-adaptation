@@ -1576,7 +1576,11 @@ class history_sensor_io(Observation):
     
 class long_history_sensor(history_sensor_io):
     def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
-        super().__init__(env)
+        super().__init__(env, body_names, joint_names, steps)
+        self.steps = steps
+        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, self.steps, device=self.device)
+        self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
+        self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
 
     def reset(self, env_ids: torch.Tensor):
         super().reset(env_ids)
@@ -1593,8 +1597,6 @@ class long_history_sensor(history_sensor_io):
                     joint_pos_hist,             # [N, steps, num_joints]
                     joint_vel_hist],            # [N, steps, num_joints]
                 dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
-        
-        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + 6 + 2 * num_joints]
         return obs_per_time.reshape(self.num_envs, -1)
 
 class amp_traj(Observation):
