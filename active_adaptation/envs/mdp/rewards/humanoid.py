@@ -358,22 +358,32 @@ class tracking_root_rot(Reward):
                                     color=(0., 1., 0., 1.))
 
 
-class tracking_velocity(Reward):
+class tracking_linear_velocity(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         
         self.sigma = sigma
-        self.decay = self.env.command_manager.decay
 
     def compute(self) -> torch.Tensor:
         timestep = self.env.episode_length_buf.unsqueeze(1) - 1
-        self.ref_root_linear = self.env.command_manager.ref_root_linear[timestep].squeeze(1)
-        ref_root_angular = self.env.command_manager.ref_root_angular[timestep].squeeze(1)
-        ref_root_velocity = torch.cat([self.ref_root_linear, ref_root_angular], dim=1)
-        err = (self.asset.data.root_vel_w - ref_root_velocity).square().sum(-1, True)
+        ref_root_linear = self.env.command_manager.ref_root_linear[timestep].squeeze(1)
+        err = (self.asset.data.root_vel_w[:, :3] - ref_root_linear).square().sum(-1, True)
 
-        self.env.command_manager._cum_error_vel.mul_(self.decay).add_(err * self.env.step_dt)
+        reward = torch.exp(- err.sqrt() / self.sigma)
+        return reward
+    
+class tracking_angular_velocity(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        
+        self.sigma = sigma
+
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_root_angular = self.env.command_manager.ref_root_angular[timestep].squeeze(1)
+        err = (self.asset.data.root_vel_w[:, 3:] - ref_root_angular).square().sum(-1, True)
 
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
@@ -398,6 +408,26 @@ class tracking_qpos(Reward):
         err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square()    # torch.Size([num_envs, num_joints])
         
         self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err.mean(-1, True) * self.env.step_dt)
+        
+        reward = torch.exp(- err.mean(-1, True) / self.sigma)
+        return reward
+    
+class tracking_qvel(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str=".*"):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids = self.asset.find_joints(joint_names, preserve_order=True)[0]
+        self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
+
+        self.sigma = sigma
+    
+    def compute(self) -> torch.Tensor:
+        timestep = self.env.episode_length_buf.unsqueeze(1) - 1
+        ref_qvel = self.env.command_manager.ref_qvel[timestep].squeeze(1)
+
+        indice = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20]
+        ref_qvel = ref_qvel[:, indice]
+        err = (self.asset.data.joint_vel[:, self.joint_ids] - ref_qvel).square()    # torch.Size([num_envs, num_joints])
         
         reward = torch.exp(- err.mean(-1, True) / self.sigma)
         return reward

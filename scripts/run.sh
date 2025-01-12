@@ -36,19 +36,19 @@
 # python test_env.py task=MotionTracking/lambada algo=ppo_im
 
 # Single Policy w. Dynamic Module, wo. privileged information
-python test_env.py task=DynaEst/walk algo=ppo_ad
-python test_env.py task=DynaEst/backwalk algo=ppo_ad
-python test_env.py task=DynaEst/joint_walk algo=ppo_ad
-python test_env.py task=DynaEst/mickey_walk algo=ppo_ad
-python test_env.py task=DynaEst/cat_walk algo=ppo_ad
-python test_env.py task=DynaEst/angry_walk algo=ppo_ad
-python test_env.py task=DynaEst/stealthy_walk algo=ppo_ad
-python test_env.py task=DynaEst/jog algo=ppo_ad
-python test_env.py task=DynaEst/trot algo=ppo_ad
-python test_env.py task=DynaEst/boxing algo=ppo_ad
-python test_env.py task=DynaEst/indian algo=ppo_ad
-python test_env.py task=DynaEst/chacha algo=ppo_ad
-python test_env.py task=DynaEst/lambada algo=ppo_ad
+python test_env.py task=DynaEst/walk algo=ppo_adv total_frames=400000000 task.name=walk-hq
+python test_env.py task=DynaEst/backwalk algo=ppo_adv total_frames=400000000 task.name=backwalk-hq
+python test_env.py task=DynaEst/joint_walk algo=ppo_adv total_frames=400000000 task.name=joint_walk-hq
+python test_env.py task=DynaEst/mickey_walk algo=ppo_adv total_frames=400000000 task.name=mickey_walk-hq
+python test_env.py task=DynaEst/cat_walk algo=ppo_adv total_frames=400000000 task.name=cat_walk-hq
+python test_env.py task=DynaEst/angry_walk algo=ppo_adv total_frames=400000000 task.name=angry_walk-hq
+python test_env.py task=DynaEst/stealthy_walk algo=ppo_adv total_frames=400000000 task.name=stealthy_walk-hq
+python test_env.py task=DynaEst/jog algo=ppo_adv total_frames=400000000 task.name=jog-hq
+python test_env.py task=DynaEst/trot algo=ppo_adv total_frames=400000000 task.name=trot-hq
+python test_env.py task=DynaEst/boxing algo=ppo_adv total_frames=400000000 task.name=boxing-hq
+python test_env.py task=DynaEst/indian algo=ppo_adv total_frames=400000000 task.name=indian-hq
+python test_env.py task=DynaEst/chacha algo=ppo_adv total_frames=400000000 task.name=chacha-hq
+python test_env.py task=DynaEst/lambada algo=ppo_adv total_frames=400000000 task.name=lambada-hq
 
 # Evaluation
 # python eval.py task.num_envs=4096 algo=ppo task=MotionTracking/walk checkpoint_path=ckpt_path                               # for metric

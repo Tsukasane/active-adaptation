@@ -46,9 +46,9 @@ from .common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOADConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo_ad.PPOADPolicy"
-    name: str = "ppo_ad"
+class PPOHIMConfig:
+    _target_: str = "active_adaptation.learning.ppo.ppo_him.PPOHIMPolicy"
+    name: str = "ppo_him"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -59,18 +59,21 @@ class PPOADConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
+    history_length: int = 10
+    num_prototypes: int = 32
+    temperature: float = 3.0
+
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
-cs.store("ppo_ad", node=PPOADConfig, group="algo")
+cs.store("ppo_him", node=PPOHIMConfig, group="algo")
 
-
-class PPOADPolicy(TensorDictModuleBase):
+class PPOHIMPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOADConfig, 
+        cfg: PPOHIMConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -99,16 +102,21 @@ class PPOADPolicy(TensorDictModuleBase):
         fake_input = observation_spec.zero()
         print(fake_input)
 
+        T = cfg.history_length
+
         def _make_mlp(num_units):
             return nn.Sequential(make_mlp(num_units[:-1]), nn.LazyLinear(num_units[-1]))
-
+        
         self.encoder = TensorDictModule(
             nn.Sequential(
-                _make_mlp([512, 256, self.estimate_dim]),
+                _make_mlp([512, 256, 64 + self.estimate_dim]),
+                Split([64, self.estimate_dim])
             ),
-            [OBS_LONG_HIST_KEY],
-            ["pred_priv"]
+            [OBS_LONG_HIST_KEY], 
+            ["latent", "pred_priv"]
         ).to(self.device)
+        self._target = _make_mlp([256, 128, 64]).to(self.device)
+        self._proto = nn.Embedding(self.cfg.num_prototypes, 64).to(self.device)
         
         def make_actor(out_key: str):
             modules = [
@@ -116,7 +124,7 @@ class PPOADPolicy(TensorDictModuleBase):
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["a_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["a_ref_motion_"]),
                     TensorDictModule(make_mlp([256]), ["pred_priv"], ["a_priv"]),
-                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_priv"], out_key),
+                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_priv", "latent"], out_key),
                 ]
             return modules
         
@@ -168,6 +176,8 @@ class PPOADPolicy(TensorDictModuleBase):
         self.opt_est = torch.optim.Adam(
             [
                 {"params": self.encoder.parameters()},
+                {"params": self._target.parameters()},
+                {"params": self._proto.parameters()},
             ]
         )
         
@@ -183,12 +193,18 @@ class PPOADPolicy(TensorDictModuleBase):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
         num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        num_target_params = sum(p.numel() for p in self._target.parameters() if p.requires_grad)
+        num_proto_params = sum(p.numel() for p in self._proto.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
         encoder_params_m = num_encoder_params / 1e3
+        target_params_m = num_target_params / 1e3
+        proto_params_m = num_proto_params / 1e3
         print(f'Number of actor parameters: {actor_params_m:.2f}M')
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
         print(f'Number of encoder parameters: {encoder_params_m:.2f}K')
+        print(f'Number of target parameters: {target_params_m:.2f}K')
+        print(f'Number of proto parameters: {proto_params_m:.2f}K')
     
     def get_rollout_policy(self, mode: str="train"):
         if mode == "train":
@@ -301,6 +317,26 @@ class PPOADPolicy(TensorDictModuleBase):
     def _update_estimation(self, tensordict: TensorDict):
         self.encoder(tensordict)
 
+        z_s = tensordict["latent"]
+        z_t = self._target(tensordict["next", OBS_KEY])
+                           
+        with torch.no_grad():
+            w = self._proto.weight.data.clone()
+            w = F.normalize(w, dim=-1, p=2)
+            self._proto.weight.copy_(w)
+        
+        score_s = F.normalize(z_s, dim=-1, p=2) @ self._proto.weight.T
+        score_t = F.normalize(z_t, dim=-1, p=2) @ self._proto.weight.T
+
+        with torch.no_grad():
+            q_s = sinkhorn(score_s)
+            q_t = sinkhorn(score_t)
+
+        log_p_s = F.log_softmax(score_s / self.cfg.temperature, dim=-1)
+        log_p_t = F.log_softmax(score_t / self.cfg.temperature, dim=-1)
+
+        swap_loss = -0.5 * (q_s * log_p_t + q_t * log_p_s).mean()
+
         aux_pred = tensordict["pred_priv"]
         aux_pred_target = tensordict[OBS_PRIV_KEY]
         aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
@@ -308,14 +344,15 @@ class PPOADPolicy(TensorDictModuleBase):
         linear_vel_err = torch.abs(tensordict["pred_priv"][:, :3] - tensordict[OBS_PRIV_KEY][:, :3]).mean()
         angular_vel_err = torch.abs(tensordict["pred_priv"][:, 3:] - tensordict[OBS_PRIV_KEY][:, 3:]).mean()
 
-        loss = aux_pred_loss
+        loss = aux_pred_loss + swap_loss
         self.opt_est.zero_grad()
         loss.backward()
         self.opt_est.step()
         return {
+            "estimation/swap_loss": swap_loss,
             "estimation/pred_loss": aux_pred_loss,
-            "estimation/linear_vel_error": linear_vel_err,
-            "estimation/angular_vel_error": angular_vel_err,
+            "estimation/linear_vel_loss": linear_vel_err,
+            "estimation/angular_vel_loss": angular_vel_err,
         }
 
     def state_dict(self):
@@ -350,3 +387,19 @@ def sample(mu, logvar):
     std = torch.exp(0.5 * logvar)
     eps = torch.randn_like(std)
     return mu + eps * std
+
+@torch.no_grad()
+def sinkhorn(out, eps=0.05, iters=3):
+    Q = torch.exp(out / eps).T
+    K, B = Q.shape[0], Q.shape[1]
+    Q /= Q.sum()
+
+    for it in range(iters):
+        # normalize each row: total weight per prototype must be 1/K
+        Q /= torch.sum(Q, dim=1, keepdim=True)
+        Q /= K
+
+        # normalize each column: total weight per sample must be 1/B
+        Q /= torch.sum(Q, dim=0, keepdim=True)
+        Q /= B
+    return (Q * B).T

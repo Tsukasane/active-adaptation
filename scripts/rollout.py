@@ -42,8 +42,9 @@ def main(cfg):
     state_keys = [
         "robot",
         "history",
+        "long_history",
         "ref_motion_",
-        "priv_"
+        "priv"
     ]
     action_keys = [
         "loc",

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
 class MotionClip(Command):
+    freq: int = 50
     def __init__(
             self, 
             env,
@@ -164,5 +165,14 @@ class MotionClip(Command):
         pad_keypoints = default_body_pos.expand(pad_frames - interpolate_frames, -1)
         self.ref_keypoints = torch.cat([self.ref_keypoints, pad_keypoints], dim=0)
 
+        self.ref_qvel = torch.diff(self.ref_qpos, 
+                                    dim=0, 
+                                    append=torch.zeros(1, 23, device=self.device)
+                                    ) * self.freq
+        
+        self.ref_keypoints_vel = torch.diff(self.ref_keypoints, 
+                                            dim=0, 
+                                            append=torch.zeros(1, 12 * 3, device=self.device)
+                                            ) * self.freq
 
 idx = [0, 6, 12, 1, 7, 13, 19, 2, 8, 14, 20, 3, 9, 15, 21, 4, 10, 16, 22, 5, 11, 17, 23, 18, 24]
