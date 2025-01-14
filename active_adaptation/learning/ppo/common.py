@@ -162,7 +162,6 @@ class ReplayBuffer:
                 replay_buffer = torch.cat((replay_buffer, buffer), dim=0)
         replay_buffer.rename_key_("loc", "replay_loc")
         replay_buffer.rename_key_("scale", "replay_scale")
-        replay_buffer.rename_key_("action", "replay_action")
         return replay_buffer
     
     def sample_batch(self, sample_shape: int, num_minibatches: int):
