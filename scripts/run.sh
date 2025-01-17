@@ -1,18 +1,3 @@
-# # Single Oracle Policy
-python test_env.py task=MotionTracking/walk
-python test_env.py task=MotionTracking/backwalk
-python test_env.py task=MotionTracking/joint_walk
-python test_env.py task=MotionTracking/mickey_walk
-python test_env.py task=MotionTracking/cat_walk
-python test_env.py task=MotionTracking/angry_walk
-python test_env.py task=MotionTracking/stealthy_walk      
-python test_env.py task=MotionTracking/jog 
-python test_env.py task=MotionTracking/trot
-python test_env.py task=MotionTracking/boxing
-python test_env.py task=MotionTracking/indian
-python test_env.py task=MotionTracking/chacha
-python test_env.py task=MotionTracking/lambada
-
 # # Amp with privileged information
 python test_env.py task=MotionTracking/amp algo=amp total_frames=600000000
 

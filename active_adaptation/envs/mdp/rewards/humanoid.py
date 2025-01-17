@@ -542,15 +542,6 @@ class tracking_end_effector(Reward):
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
 
-class episode_length_ratio(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True):
-        super().__init__(env, weight, enabled)
-        self.max_episode_length = torch.tensor(self.env.max_episode_length).float().to(self.device)
-    
-    def compute(self) -> torch.Tensor:
-        ratio = self.env.episode_length_buf.float() / self.max_episode_length
-        return ratio.unsqueeze(1)
-
 class mean_qpos_error(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
         super().__init__(env, weight, enabled)
@@ -571,9 +562,9 @@ class mean_qpos_error(Reward):
         ref_qpos = ref_qpos[:, indice]
         err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).abs()    # torch.Size([num_envs, num_joints])
         
-        self.cum_error += err.sum(-1, True)
-        self.cum_error /= timestep + 1
-        return self.cum_error
+        self.cum_error += err.mean(-1, True)
+        self.env.qpos_error = self.cum_error
+        return err.mean(1, True)
 
 class mean_kp_error(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, 
@@ -600,6 +591,6 @@ class mean_kp_error(Reward):
         err = (body_pos_b - ref_keypoints).norm(dim=-1)         # torch.Size([num_envs, num_bodies])
         
 
-        self.cum_error += err.sum(-1, True)
-        self.cum_error /= timestep + 1
-        return self.cum_error
+        self.cum_error += err.mean(-1, True)
+        self.env.kp_error = self.cum_error
+        return err.mean(1, True)
