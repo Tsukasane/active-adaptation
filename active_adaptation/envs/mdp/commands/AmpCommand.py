@@ -65,6 +65,10 @@ class MultiCommand(Command):
 
         self.motion_clips_len = self.motion_clips_len[self.motion_ids] # [num_envs]
 
+        self.decay = decay
+        self._cum_error_qpos = torch.zeros(self.num_envs, 1, device=self.device)
+        self._cum_error_keypoint = torch.zeros(self.num_envs, 1, device=self.device)
+
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
         init_root_state = self.init_root_state[env_ids]         # [num_envs, 3 + 4 + 3 + 3]
         init_root_state[:, :3] = self.ref_root_trans[env_ids, 0]     # [num_envs, 3]

@@ -20,7 +20,9 @@ class AMPLoader:
             trajectory = joblib.load(file)
             body_pose = torch.tensor(trajectory["keypoints"], dtype=torch.float32)
             joint_pos = torch.tensor(trajectory["qpos"], dtype=torch.float32)
-            amp_data = torch.cat([body_pose, joint_pos], dim=-1) # [T, 12 * 3 + 23]
+            linear_vel = torch.tensor(trajectory["root_linear_velocity"], dtype=torch.float32)
+            angular_vel = torch.tensor(trajectory["root_angular_velocity"], dtype=torch.float32)
+            amp_data = torch.cat([body_pose, joint_pos, linear_vel, angular_vel], dim=-1) # [T, 12 * 3 + 23 + 3 + 3]
             data.append(amp_data)
         data = torch.cat(data, dim=0)
         return data
@@ -37,7 +39,7 @@ class AMPLoader:
     
     def sample_batch(self, batch_size):
         seg_idx = torch.randint(0, len(self.segments), (batch_size,))
-        amp_batch = self.segments[seg_idx].to(self.device)     # [B, amp_length, 12 * 3 + 23]
+        amp_batch = self.segments[seg_idx].to(self.device)     # [B, amp_length, 12 * 3 + 23 + 3 + 3]
         tensordict = TensorDict()
         tensordict.set(self.key, amp_batch.reshape(batch_size, -1))
         return tensordict

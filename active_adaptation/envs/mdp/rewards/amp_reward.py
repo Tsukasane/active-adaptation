@@ -91,7 +91,7 @@ class m_tracking_qpos(Reward):
         ref_qpos = ref_qpos[:, indice]
         assert ref_qpos.shape == self.asset.data.joint_pos[:, self.joint_ids].shape
         err = (self.asset.data.joint_pos[:, self.joint_ids] - ref_qpos).square()    # torch.Size([num_envs, num_joints])
-        
+        self.env.command_manager._cum_error_qpos.mul_(self.decay).add_(err.mean(-1, True) * self.env.step_dt)
         reward = torch.exp(- err.mean(-1, True) / self.sigma)
         return reward
     
@@ -136,7 +136,7 @@ class m_tracking_keypoints(Reward):
         err_low = diff_per_kp_low.square().sum(-1, True)
 
         err = err_up * self.upper_body_err_weight + err_low * self.lower_body_err_weight
-        
+        self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
     
@@ -202,6 +202,6 @@ class m_tracking_end_effector(Reward):
         err_low = diff_per_kp_low.square().sum(-1, True)
 
         err = err_up * self.upper_body_err_weight + err_low * self.lower_body_err_weight
-        
+        self.env.command_manager._cum_error_keypoint.mul_(self.decay).add_(err * self.env.step_dt)
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
