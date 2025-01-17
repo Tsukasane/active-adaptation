@@ -542,6 +542,14 @@ class tracking_end_effector(Reward):
         reward = torch.exp(- err.sqrt() / self.sigma)
         return reward
 
+class episode_length_ratio(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.max_episode_length = torch.tensor(self.env.max_episode_length).float().to(self.device)
+    
+    def compute(self) -> torch.Tensor:
+        ratio = self.env.episode_length_buf.float() / self.max_episode_length
+        return ratio.unsqueeze(1)
 
 class mean_qpos_error(Reward):
     def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
