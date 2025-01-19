@@ -389,8 +389,9 @@ class Env(EnvBase):
         self.stats["episode_len"][:] = self.episode_length_buf.unsqueeze(1)
         self.stats["success"][:] = (self.episode_length_buf >= self.max_episode_length * 0.9).unsqueeze(1).float()
         self.stats["episode_len_ratio"][:] = (self.episode_length_buf.float() / self.max_episode_length).unsqueeze(1)
-        self.stats["mean_qpos_error"][:] = self.qpos_error / self.episode_length_buf.unsqueeze(1).float()
-        self.stats["mean_kp_error"][:] = self.kp_error / self.episode_length_buf.unsqueeze(1).float()
+        if hasattr(self, "qpos_error"):
+            self.stats["mean_qpos_error"][:] = self.qpos_error / self.episode_length_buf.unsqueeze(1).float()
+            self.stats["mean_kp_error"][:] = self.kp_error / self.episode_length_buf.unsqueeze(1).float()
         return {"reward": rewards}
     
     def _compute_termination(self) -> TensorDictBase:

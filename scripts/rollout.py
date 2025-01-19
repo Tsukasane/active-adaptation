@@ -54,6 +54,7 @@ def main(cfg):
     next_keys = ("next", "robot")
 
     rollout = []
+    embedding = []
 
     td_ = env.reset()
     
@@ -61,6 +62,8 @@ def main(cfg):
         rollout.append(td_.select(*state_keys, strict=False).cpu()) # record state
         td_ = policy(td_)
         rollout[-1].update(td_.select(*action_keys, strict=False).cpu())
+        if "mu" in td_.keys():
+            embedding.append(td_["mu"].cpu())
         td, td_ = env.step_and_maybe_reset(td_)
         rollout[-1].update(td.select(next_keys, strict=False).cpu())
     
@@ -71,7 +74,13 @@ def main(cfg):
     print(f"Rollout shape: {rollout.shape}")
     print(rollout)
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
-    torch.save(rollout, path)
+    # torch.save(rollout, path)
+
+    if len(embedding) > 0:
+        embedding = torch.stack(embedding, dim=1)[truncated][:need_envs]
+        print(f"Embedding shape: {embedding.shape}")
+        path = os.path.join(os.path.dirname(__file__), f"embedding-{cfg.task.name}.pt")
+        torch.save(embedding, path)
     
     env.close()
     simulation_app.close()

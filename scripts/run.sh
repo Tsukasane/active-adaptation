@@ -1,6 +1,3 @@
-# # Amp with privileged information
-python test_env.py task=MotionTracking/amp algo=amp total_frames=600000000
-
 # # Reset & Distill
 python rollout.py task=MotionTracking/walk task.num_envs=4 algo=ppo checkpoint_path=ckpt_path
 python distill.py checkpoint_path=ckpt_path
