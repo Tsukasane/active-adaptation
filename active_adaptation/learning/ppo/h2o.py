@@ -42,13 +42,14 @@ from collections import OrderedDict
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
 from .common import *
+from .amp_utils import *
 
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
-    name: str = "ppo"
+class H2OConfig:
+    _target_: str = "active_adaptation.learning.ppo.h2o.H2OPolicy"
+    name: str = "h2o"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -57,19 +58,23 @@ class PPOConfig:
     entropy_coef: float = 0.001
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
+    vecnorm: Union[str, None] = None
 
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_AMP_KEY, OBS_HIST_KEY, OBS_REF_KEY])
+
+    data_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/reference_motions"
+    amp_length: int = 8
 
 cs = ConfigStore.instance()
-cs.store("ppo", node=PPOConfig, group="algo")
+cs.store("h2o", node=H2OConfig, group="algo")
 
 
-class PPOPolicy(TensorDictModuleBase):
+class H2OPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOConfig, 
+        cfg: H2OConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -85,7 +90,7 @@ class PPOPolicy(TensorDictModuleBase):
         self.critic_loss_fn = nn.MSELoss(reduction="none")
         self.action_dim = action_spec.shape[-1]
         self.gae = GAE(0.99, 0.95)
-        
+
         if cfg.value_norm:
             value_norm_cls = ValueNorm1
         else:
@@ -94,45 +99,19 @@ class PPOPolicy(TensorDictModuleBase):
 
         fake_input = observation_spec.zero()
         print(fake_input)
-
-        transformer_cfg = TransformerConfig()
         
-        def make_encoder(out_key: str, is_actor: bool=True):
-            if "height_scan" in observation_spec.keys(True, True):
-                cnn = nn.Sequential(
-                    make_conv(num_channels=[8, 8, 8]),
-                    nn.LazyLinear(64),
-                    nn.LayerNorm(64),
-                )
-                modules = [
-                    TensorDictModule(cnn, ["height_scan"], ["_cnn"]),
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_mlp"]),
-                    CatTensors(["_cnn", "_mlp"], out_key),
-                ]
-            elif OBS_REF_KEY in observation_spec.keys(True, True):
-                if is_actor:
-                    modules = [
-                        TensorDictModule(Tokenizer([], num_tokens=transformer_cfg.robot_tokens, token_dim=transformer_cfg.token_dim), [OBS_KEY], ["robot_tokens"]),
-                        TensorDictModule(Tokenizer([], num_tokens=transformer_cfg.hist_tokens, token_dim=transformer_cfg.token_dim), [OBS_HIST_KEY], ["hist_tokens"]),
-                        TensorDictModule(Tokenizer([], num_tokens=transformer_cfg.ref_motion_tokens, token_dim=transformer_cfg.token_dim), [OBS_REF_KEY], ["ref_motion_tokens"]),
-                        CatTokens(["robot_tokens", "hist_tokens", "ref_motion_tokens"], out_key),               # [B, num_tokens, token_dim]
-                    ]
-                else:       # critic
-                    modules = [
-                        TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
-                        TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
-                        TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
-                        CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
-                ]
-            else:
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
-                ]
+        def make_encoder(out_key: str):
+            modules = [
+                TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
+                TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
+                TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
+                CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
+            ]
             return modules
-        _actor_transformer = Transformer(transformer_cfg)     # [B, num_tokens, input_dim] -> [B, output_dim]
-        _actor = nn.Sequential(_actor_transformer, Actor(self.action_dim))  # [B, output_dim] -> [B, action_dim]
+
+        _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
-            *make_encoder("_actor_feature", is_actor=True),
+            *make_encoder("_actor_feature"),
             TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
@@ -145,19 +124,22 @@ class PPOPolicy(TensorDictModuleBase):
         
         _critic = nn.Sequential(make_mlp([256, 128]), nn.Linear(128, 1))
         self.critic = TensorDictSequential(
-            *make_encoder("_critic_feature", is_actor=False),
+            *make_encoder("_critic_feature"),
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
         self.actor(fake_input)
         self.critic(fake_input)
 
+        # self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY], decay=0.9999)
+        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY, OBS_AMP_KEY], decay=0.9999)
+
         self.count_parameters()
 
         self.opt = torch.optim.Adam(
             [
                 {"params": self.actor.parameters()},
-                {"params": self.critic.parameters()},
+                {"params": self.critic.parameters()}
             ],
             lr=cfg.lr
         )
@@ -179,9 +161,16 @@ class PPOPolicy(TensorDictModuleBase):
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
-        policy = TensorDictSequential(
-            self.actor,
-        )
+        if mode == "train":
+            policy = TensorDictSequential(
+                self.vecnorm,
+                self.actor,
+            )
+        else:
+            policy = TensorDictSequential(
+                self.vecnorm.to_observation_norm(),
+                self.actor,
+            )
         return policy
 
     # @torch.compile
@@ -211,14 +200,15 @@ class PPOPolicy(TensorDictModuleBase):
     ):
         with tensordict.view(-1) as tensordict_flat:
             critic(tensordict_flat)
+            self.vecnorm.freeze()
+            self.vecnorm(tensordict_flat["next"])
             critic(tensordict_flat["next"])
+            self.vecnorm.unfreeze()
 
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)
-        # dones = tensordict["next", "done"]
-        # rewards = torch.where(dones, rewards + values * self.gae.gamma, rewards)
+        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)      # [batch_size, train_every, 1]
         terms = tensordict[TERM_KEY]
         dones = tensordict[DONE_KEY]
         values = self.value_norm.denormalize(values)
@@ -258,6 +248,7 @@ class PPOPolicy(TensorDictModuleBase):
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.opt.step()
+
         explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
         return {
             "actor/policy_loss": policy_loss,
@@ -274,6 +265,7 @@ class PPOPolicy(TensorDictModuleBase):
         state_dict = OrderedDict()
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
+        state_dict["vecnorm"] = self.vecnorm.state_dict()
         return state_dict
     
     def load_state_dict(self, state_dict, strict=True):

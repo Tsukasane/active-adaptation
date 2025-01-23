@@ -29,7 +29,7 @@ torch.backends.cudnn.benchmark = False
 
 FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(FILE_PATH, "..", "cfg")
-BUFFER_PATH = os.path.join(FILE_PATH, "replay_buffer")
+BUFFER_PATH = os.path.join(FILE_PATH, "checkpoints", "replay_buffer_64")
 
 keys = [
     "robot",
@@ -68,7 +68,7 @@ def main(cfg: DictConfig):
                 indice = self.perm[:, torch.randint(self.perm.shape[1], (1,))].squeeze()
                 yield self.data[indice].to(self.device)
         
-    run_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
+    run_dir = os.path.join(os.path.dirname(__file__), "checkpoints", "reset_distill")
     if not os.path.exists(run_dir):
         os.mkdir(run_dir)
     def save(policy, checkpoint_name: str, artifact: bool=False):

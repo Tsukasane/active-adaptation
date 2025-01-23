@@ -59,8 +59,6 @@ class PPOADVConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    history_length: int = 10
-
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
 
@@ -99,8 +97,6 @@ class PPOADVPolicy(TensorDictModuleBase):
 
         fake_input = observation_spec.zero()
         print(fake_input)
-
-        T = cfg.history_length
 
         def _make_mlp(num_units):
             return nn.Sequential(make_mlp(num_units[:-1]), nn.LazyLinear(num_units[-1]))

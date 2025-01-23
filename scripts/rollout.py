@@ -74,13 +74,13 @@ def main(cfg):
     print(f"Rollout shape: {rollout.shape}")
     print(rollout)
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
-    # torch.save(rollout, path)
+    torch.save(rollout, path)
 
-    if len(embedding) > 0:
-        embedding = torch.stack(embedding, dim=1)[truncated][:need_envs]
-        print(f"Embedding shape: {embedding.shape}")
-        path = os.path.join(os.path.dirname(__file__), f"embedding-{cfg.task.name}.pt")
-        torch.save(embedding, path)
+    # if len(embedding) > 0:
+    #     embedding = torch.stack(embedding, dim=1)[truncated][:need_envs]
+    #     print(f"Embedding shape: {embedding.shape}")
+    #     path = os.path.join(os.path.dirname(__file__), f"embedding-{cfg.task.name}.pt")
+    #     torch.save(embedding, path)
     
     env.close()
     simulation_app.close()

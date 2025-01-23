@@ -46,9 +46,9 @@ from .common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOADConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo_ad.PPOADPolicy"
-    name: str = "ppo_ad"
+class PPOVConfig:
+    _target_: str = "active_adaptation.learning.ppo.ppo_v.PPOVPolicy"
+    name: str = "ppo_v"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -63,14 +63,13 @@ class PPOADConfig:
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
-cs.store("ppo_ad", node=PPOADConfig, group="algo")
+cs.store("ppo_v", node=PPOVConfig, group="algo")
 
-
-class PPOADPolicy(TensorDictModuleBase):
+class PPOVPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOADConfig, 
+        cfg: PPOVConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -104,19 +103,24 @@ class PPOADPolicy(TensorDictModuleBase):
 
         self.encoder = TensorDictModule(
             nn.Sequential(
-                _make_mlp([512, 256, self.estimate_dim]),
+                _make_mlp([512, 256, 64 * 2]),
+                Split([64, 64]),
             ),
             [OBS_LONG_HIST_KEY],
-            ["pred_priv"]
+            ["mu", "logvar"]
         ).to(self.device)
-        
+
+        self.decoder = TensorDictSequential(
+            CatTensors(["latent", "action"], "_decode_input"),
+            TensorDictModule(_make_mlp([512, 256, self.decode_dim]), ["_decode_input"], ["_decode_output"])
+        ).to(self.device)
+
         def make_actor(out_key: str):
             modules = [
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["a_robot"]),
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["a_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["a_ref_motion_"]),
-                    TensorDictModule(make_mlp([256]), ["pred_priv"], ["a_priv"]),
-                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_priv"], out_key),
+                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "mu"], out_key),
                 ]
             return modules
         
@@ -149,7 +153,11 @@ class PPOADPolicy(TensorDictModuleBase):
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
+        fake_input["latent"] = torch.randn(fake_input.shape[0], 64).to(self.device)
+        fake_input["action"] = torch.randn(fake_input.shape[0], self.action_dim).to(self.device)
+
         self.encoder(fake_input)
+        self.decoder(fake_input)
         self.actor(fake_input)
         self.critic(fake_input)
 
@@ -168,6 +176,7 @@ class PPOADPolicy(TensorDictModuleBase):
         self.opt_est = torch.optim.Adam(
             [
                 {"params": self.encoder.parameters()},
+                {"params": self.decoder.parameters()},
             ]
         )
         
@@ -183,12 +192,15 @@ class PPOADPolicy(TensorDictModuleBase):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
         num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        num_decoder_params = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
         encoder_params_m = num_encoder_params / 1e3
+        decoder_params_m = num_decoder_params / 1e3
         print(f'Number of actor parameters: {actor_params_m:.2f}M')
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
         print(f'Number of encoder parameters: {encoder_params_m:.2f}K')
+        print(f'Number of decoder parameters: {decoder_params_m:.2f}K')
     
     def get_rollout_policy(self, mode: str="train"):
         if mode == "train":
@@ -260,9 +272,6 @@ class PPOADPolicy(TensorDictModuleBase):
 
     # @torch.compile
     def _update(self, tensordict: TensorDict):
-        ids = torch.randint(0, tensordict.shape[0], (tensordict.shape[0] // 2,))
-        tensordict[ids]["pred_priv"] = tensordict[ids][OBS_PRIV_KEY]
-        
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
         entropy = dist.entropy().mean()
@@ -301,16 +310,21 @@ class PPOADPolicy(TensorDictModuleBase):
     def _update_estimation(self, tensordict: TensorDict):
         self.encoder(tensordict)
 
-        aux_pred = tensordict["pred_priv"]
-        aux_pred_target = tensordict[OBS_PRIV_KEY]
-        aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
+        mu, logvar = tensordict["mu"], tensordict["logvar"]
+        tensordict["latent"] = sample(mu, logvar)
+        decode = self.decoder(tensordict)["_decode_output"]
+        decode_target = tensordict["next", OBS_KEY]
+        decode_loss = F.mse_loss(decode, decode_target)
 
-        loss = aux_pred_loss
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+
+        loss = decode_loss + 2.0 * kl_loss
         self.opt_est.zero_grad()
         loss.backward()
         self.opt_est.step()
         return {
-            "estimation/pred_loss": aux_pred_loss,
+            "estimation/decode_loss": decode_loss,
+            "estimation/kl_loss": kl_loss,
         }
 
     def state_dict(self):
@@ -347,9 +361,9 @@ def sample(mu, logvar):
     return mu + eps * std
 
 @dataclass
-class PPOADABConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo_ad.PPOADABPolicy"
-    name: str = "ppo_ad_ab"
+class PPOVABConfig:
+    _target_: str = "active_adaptation.learning.ppo.ppo_v.PPOVABPolicy"
+    name: str = "ppo_v_ab"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -360,22 +374,22 @@ class PPOADABConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_ablation_wor"
+    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_ablation_wop"
     im_loss_type: str = "kl"    # "wasserstein", "mse"
     im_coef: float = 2.0
 
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
 
+
 cs = ConfigStore.instance()
-cs.store("ppo_ad_ab", node=PPOADABConfig, group="algo")
+cs.store("ppo_v_ab", node=PPOVABConfig, group="algo")
 
-
-class PPOADABPolicy(TensorDictModuleBase):
+class PPOVABPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOADABConfig, 
+        cfg: PPOVABConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -413,19 +427,24 @@ class PPOADABPolicy(TensorDictModuleBase):
 
         self.encoder = TensorDictModule(
             nn.Sequential(
-                _make_mlp([512, 256, self.estimate_dim]),
+                _make_mlp([512, 256, 64 * 2]),
+                Split([64, 64]),
             ),
             [OBS_LONG_HIST_KEY],
-            ["pred_priv"]
+            ["mu", "logvar"]
         ).to(self.device)
-        
+
+        self.decoder = TensorDictSequential(
+            CatTensors(["latent", "action"], "_decode_input"),
+            TensorDictModule(_make_mlp([512, 256, self.decode_dim]), ["_decode_input"], ["_decode_output"])
+        ).to(self.device)
+
         def make_actor(out_key: str):
             modules = [
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["a_robot"]),
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["a_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["a_ref_motion_"]),
-                    TensorDictModule(make_mlp([256]), ["pred_priv"], ["a_priv"]),
-                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_priv"], out_key),
+                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "mu"], out_key),
                 ]
             return modules
         
@@ -458,7 +477,11 @@ class PPOADABPolicy(TensorDictModuleBase):
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
+        fake_input["latent"] = torch.randn(fake_input.shape[0], 64).to(self.device)
+        fake_input["action"] = torch.randn(fake_input.shape[0], self.action_dim).to(self.device)
+
         self.encoder(fake_input)
+        self.decoder(fake_input)
         self.actor(fake_input)
         self.critic(fake_input)
 
@@ -477,6 +500,7 @@ class PPOADABPolicy(TensorDictModuleBase):
         self.opt_est = torch.optim.Adam(
             [
                 {"params": self.encoder.parameters()},
+                {"params": self.decoder.parameters()},
             ]
         )
         
@@ -492,12 +516,15 @@ class PPOADABPolicy(TensorDictModuleBase):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
         num_encoder_params = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        num_decoder_params = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
         actor_params_m = num_actor_params / 1e6
         critic_params_m = num_critic_params / 1e6
         encoder_params_m = num_encoder_params / 1e3
+        decoder_params_m = num_decoder_params / 1e3
         print(f'Number of actor parameters: {actor_params_m:.2f}M')
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
         print(f'Number of encoder parameters: {encoder_params_m:.2f}K')
+        print(f'Number of decoder parameters: {decoder_params_m:.2f}K')
     
     def get_rollout_policy(self, mode: str="train"):
         if mode == "train":
@@ -514,7 +541,6 @@ class PPOADABPolicy(TensorDictModuleBase):
             )
         return policy
 
-    # @torch.compile
     def train_op(self, tensordict: TensorDict):
         tensordict = tensordict.copy()
         infos = []
@@ -571,10 +597,7 @@ class PPOADABPolicy(TensorDictModuleBase):
         tensordict.set(ret_key, ret)
         return tensordict
 
-    # @torch.compile
     def _update(self, tensordict: TensorDict, replay_tensordict: TensorDict):
-        ids = torch.randint(0, tensordict.shape[0], (tensordict.shape[0] // 2,))
-        tensordict[ids]["pred_priv"] = tensordict[ids][OBS_PRIV_KEY]
         
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
@@ -592,7 +615,7 @@ class PPOADABPolicy(TensorDictModuleBase):
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
         value_loss = (value_loss * (~tensordict["is_init"])).mean()
-        
+
         self.encoder(replay_tensordict)
         loc, scale = self.actor(replay_tensordict)["loc"], self.actor(replay_tensordict)["scale"]
         replay_loc, replay_scale = replay_tensordict["replay_loc"], replay_tensordict["replay_scale"]
@@ -633,7 +656,8 @@ class PPOADABPolicy(TensorDictModuleBase):
         }
     
     def _update_estimation(self, tensordict: TensorDict, replay_tensordict: TensorDict):
-        vae_keys = [OBS_LONG_HIST_KEY, OBS_PRIV_KEY]
+
+        vae_keys = [OBS_LONG_HIST_KEY, ACTION_KEY, ("next", OBS_KEY)]
         tensordict = tensordict.select(*vae_keys)
         replay_tensordict = replay_tensordict.select(*vae_keys)
         tensordict = torch.cat([tensordict, replay_tensordict], dim=0)
@@ -641,18 +665,23 @@ class PPOADABPolicy(TensorDictModuleBase):
         for _ in range(2):
             self.encoder(tensordict)
 
-            aux_pred = tensordict["pred_priv"]
-            aux_pred_target = tensordict[OBS_PRIV_KEY]
-            aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
+            mu, logvar = tensordict["mu"], tensordict["logvar"]
+            tensordict["latent"] = sample(mu, logvar)
+            decode = self.decoder(tensordict)["_decode_output"]
+            decode_target = tensordict["next", OBS_KEY]
+            decode_loss = F.mse_loss(decode, decode_target)
 
-            loss = aux_pred_loss
+            kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+
+            loss = decode_loss + 2.0  * kl_loss
 
             self.opt_est.zero_grad()
             loss.backward()
             self.opt_est.step()
 
         return {
-            "estimation/pred_loss": aux_pred_loss
+            "estimation/decode_loss": decode_loss,
+            "estimation/kl_loss": kl_loss,
         }
 
     def state_dict(self):
@@ -675,3 +704,4 @@ class PPOADABPolicy(TensorDictModuleBase):
                 failed_keys.append(name)
         print(f"Successfully loaded {succeed_keys}.")
         return failed_keys
+    
