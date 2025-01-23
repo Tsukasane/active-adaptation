@@ -43,6 +43,10 @@ from ..utils.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
 from .common import *
 
+import importlib.util
+spec = importlib.util.find_spec("active_adaptation")
+package_path = spec.origin
+
 torch.set_float32_matmul_precision('high')
 
 @dataclass
@@ -59,7 +63,7 @@ class PPOVIMConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_wop_64"
+    replay_dir: str = "scripts/checkpoints/replay-cosmo-64"
     im_loss_type: str = "kl"    # "wasserstein", "mse"
     im_coef: float = 2.0
 
@@ -93,7 +97,8 @@ class PPOVIMPolicy(TensorDictModuleBase):
         self.estimate_dim = observation_spec[OBS_PRIV_KEY].shape[-1]
         self.decode_dim = observation_spec[OBS_KEY].shape[-1]
 
-        self.replay_buffer = ReplayBuffer(cfg.replay_dir, device=device)
+        replay_dir = os.path.join(os.path.dirname(package_path), "..", cfg.replay_dir)
+        self.replay_buffer = ReplayBuffer(replay_dir, device=device)
         self.im_coef = cfg.im_coef  # self.im_coef = self.replay_buffer.replay_buffer_length * 1.0
         self.im_loss_type = cfg.im_loss_type
         
@@ -367,7 +372,7 @@ class PPOVIMPolicy(TensorDictModuleBase):
 
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-            loss = aux_pred_loss + decode_loss + 2.0  * kl_loss
+            loss = 1.5 * aux_pred_loss + decode_loss + 2.0  * kl_loss
 
             self.opt_est.zero_grad()
             loss.backward()

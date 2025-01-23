@@ -1,3 +1,13 @@
+# # Single Oracle Policy
+for seed in 0 3 2025
+do
+    for task in walk backwalk joint_walk mickey_walk cat_walk angry_walk stealthy_walk \
+                jog trot boxing indian chacha lambada
+        do
+            python test_env.py task=MotionTracking/$task seed=$seed task.name=$task-$seed
+        done
+done
+
 # Amp with privileged information
 for seed in 0 3 2025
 do

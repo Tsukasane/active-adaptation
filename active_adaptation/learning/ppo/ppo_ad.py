@@ -43,6 +43,10 @@ from ..utils.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
 from .common import *
 
+import importlib.util
+spec = importlib.util.find_spec("active_adaptation")
+package_path = spec.origin
+
 torch.set_float32_matmul_precision('high')
 
 @dataclass
@@ -360,7 +364,7 @@ class PPOADABConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    replay_dir: str = "/home/ubuntu/Desktop/workspace/active-adaptation/scripts/checkpoints/replay_buffer_ablation_wor"
+    replay_dir: str = "scripts/checkpoints/replay_buffer_ablation_wor"
     im_loss_type: str = "kl"    # "wasserstein", "mse"
     im_coef: float = 2.0
 
@@ -401,7 +405,8 @@ class PPOADABPolicy(TensorDictModuleBase):
             value_norm_cls = ValueNormFake
         self.value_norm = value_norm_cls(input_shape=1).to(self.device)
 
-        self.replay_buffer = ReplayBuffer(cfg.replay_dir, device=device)
+        replay_dir = os.path.join(os.path.dirname(package_path), "..", cfg.replay_dir)
+        self.replay_buffer = ReplayBuffer(replay_dir, device=device)
         self.im_coef = cfg.im_coef  # self.im_coef = self.replay_buffer.replay_buffer_length * 1.0
         self.im_loss_type = cfg.im_loss_type
 

@@ -14,10 +14,14 @@ from .base import Command
 
 import joblib
 import os
+import importlib.util
 from scipy.spatial.transform import Rotation as R
 
 if TYPE_CHECKING:
     from active_adaptation.envs.base import Env
+
+spec = importlib.util.find_spec("active_adaptation")
+package_path = spec.origin
 
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
@@ -34,6 +38,9 @@ class MotionClip(Command):
         ):
         super().__init__(env, teleop=teleop)
         self.robot: Articulation = env.scene["robot"]
+
+        package_dir = os.path.dirname(package_path)
+        motion_clip = os.path.join(package_dir, "..", motion_clip)
         
         data = joblib.load(motion_clip)
         self.root_translations = data['root_trans'] # [T, 3] translation vector
