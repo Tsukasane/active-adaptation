@@ -326,7 +326,7 @@ class PPOADVPolicy(TensorDictModuleBase):
 
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-        loss = 1.5 * aux_pred_loss + decode_loss + 2.0 * kl_loss
+        loss = aux_pred_loss + decode_loss + 2.0 * kl_loss
         self.opt_est.zero_grad()
         loss.backward()
         self.opt_est.step()

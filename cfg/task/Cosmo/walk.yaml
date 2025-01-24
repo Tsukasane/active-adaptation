@@ -43,7 +43,7 @@ observation:
     history_sensor_io:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   long_history:
     long_history_sensor: {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
-  ref_motion_:         # future reference motions
+  ref_motion_:
     ref_keypoints:      {steps: 5}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   priv:
