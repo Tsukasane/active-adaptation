@@ -45,6 +45,13 @@ class MotionClip(Command):
         data = joblib.load(motion_clip)
         self.root_translations = data['root_trans'] # [T, 3] translation vector
         self.ref_root_translations = torch.tensor(self.root_translations, dtype=torch.float32, device=self.device)
+        
+        # calculate root linear velocity by the diff of root translation
+        self.ref_root_linear = torch.diff(self.ref_root_translations, 
+                                          dim=0, 
+                                          append=torch.zeros(1, 3, device=self.device)
+                                          ) * self.freq             # [T, 3] linear velocity
+
         self.ref_root_translations = self.ref_root_translations.unsqueeze(0).repeat(self.num_envs, 1, 1) # [num_envs, T, 3]
         origin = self.env.scene.env_origins             # [num_envs, 3]
         self.ref_root_translations += origin.unsqueeze(1)
@@ -52,12 +59,6 @@ class MotionClip(Command):
         self.ref_root_orient = R.from_rotvec(data['root_orient']).as_quat() # [T, 4] (x, y, z, w) quaternion
         self.ref_root_orient = torch.tensor(self.ref_root_orient, dtype=torch.float32, device=self.device)
         self.ref_root_orient = self.ref_root_orient[:, [3, 0, 1, 2]]        # [T, 4] (w, x, y, z) quaternion
-
-        self.ref_root_linear = data['root_linear_velocity'] # [T, 3] linear velocity
-        self.ref_root_linear = torch.tensor(self.ref_root_linear, dtype=torch.float32, device=self.device)
-
-        self.ref_root_angular = data['root_angular_velocity'] # [T, 3] angular velocity
-        self.ref_root_angular = torch.tensor(self.ref_root_angular, dtype=torch.float32, device=self.device)
 
         self.ref_qpos = torch.tensor(data['qpos'], dtype=torch.float32, device=self.device)                # [T, 23] qpos
         self.ref_keypoints = torch.tensor(data['keypoints'], dtype=torch.float32, device=self.device)      # [T, 12 * 3] keypoints                                       # [N, 12, 3] keypoints
@@ -144,9 +145,6 @@ class MotionClip(Command):
 
         pad_linear = torch.zeros(pad_frames, 3, device=self.device)
         self.ref_root_linear = torch.cat([self.ref_root_linear, pad_linear], dim=0)
-
-        pad_angular = torch.zeros(pad_frames, 3, device=self.device)
-        self.ref_root_angular = torch.cat([self.ref_root_angular, pad_angular], dim=0)
 
         # padding qpos by default joint values
         joint_id, joint_names = self.asset.find_joints(self.joint_names, preserve_order=True)
