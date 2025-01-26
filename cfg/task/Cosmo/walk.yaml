@@ -35,8 +35,8 @@ command:
 
 observation:
   robot:
-    body_pos:         {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
-    projected_gravity_b: {noise_std: 0.01}
+    root_quat_w:      {noise_std: 0.02}
+    root_angvel_b:    {noise_std: 0.05}
     joint_pos:        {noise_std: 0.05}
     joint_vel:        {noise_std: 0.2}
   history:
@@ -44,14 +44,15 @@ observation:
   long_history:
     long_history_sensor: {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   ref_motion_:
+    ref_orient:         {steps: 5}
+    ref_height:         {steps: 5}
     ref_keypoints:      {steps: 5}
+    ref_root_linear:    {steps: 5}
+    ref_trans_gap:      {steps: 3}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   priv:
-    root_height:
-    root_quat_w:
+    root_height:      
     root_linvel_b:    {yaw_only: false}
-    root_angvel_b:    {noise_std: 0.05}
-    ref_trans_gap:    {steps: 3}
 
 
 reward:

@@ -303,11 +303,6 @@ def observation_func(func):
     return ObsFunc
 
 
-@observation_func
-def root_quat_w(self):
-    return self.scene["robot"].data.root_quat_w
-
-
 class command(Observation):
     def __init__(self, env, mask_ratio: float = 0):
         super().__init__(env, mask_ratio)
@@ -1349,12 +1344,13 @@ class root_height(Observation):
         return self.asset.data.root_pos_w[:, 2].unsqueeze(1)
 
 class root_quat_w(Observation):
-    def __init__(self, env):
+    def __init__(self, env, noise_std: float=0.):
         super().__init__(env)
-        self.asset: Quadruped = self.env.scene["robot"]
+        self.asset = self.env.scene["robot"]
+        self.noise_std = noise_std
 
     def compute(self):
-        return self.asset.data.root_quat_w
+        return random_noise(self.asset.data.root_quat_w, self.noise_std)
 
 class impact_point_w(Observation):
     def __init__(self, env):
@@ -1376,6 +1372,25 @@ class feet_orientation(Observation):
         self.quat_feet = yaw_quat(self.asset.data.body_quat_w[:, self.feet_id])
         feet_fwd = quat_rotate(self.quat_feet, self.heading_feet)
         return feet_fwd.reshape(self.num_envs, -1)
+    
+class ref_orient(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_orient = self.env.command_manager.ref_root_orient
+
+    def compute(self):
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range  # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+        assert indices.max() < self.ref_orient.shape[0], f"{indices.max()} >= {self.ref_orient.shape[0]}"
+        ref_orient = self.ref_orient[indices]
+        return ref_orient.reshape(self.num_envs, -1)
 
 class ref_keypoints(Observation):
     def __init__(self, env, steps: int=1):
@@ -1395,6 +1410,47 @@ class ref_keypoints(Observation):
         assert indices.max() < self.keypoints.shape[0], f"{indices.max()} >= {self.keypoints.shape[0]}"
         keypoints = self.keypoints[indices]
         return keypoints.reshape(self.num_envs, -1)
+    
+class ref_height(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_root_trans = self.env.command_manager.ref_root_translations     # [N, T, 3]
+
+    def compute(self) -> torch.Tensor:
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+
+        batch_indices = torch.arange(self.num_envs, device=self.device)[:, None]    # Shape: [num_envs, 1]
+        ref_root_trans = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
+
+        ref_height = ref_root_trans[:, :, 2]
+        return ref_height.reshape(self.num_envs, -1)
+    
+class ref_root_linear(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_root_linear = self.env.command_manager.ref_root_linear      
+
+    def compute(self):
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range  # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+        assert indices.max() < self.ref_root_linear.shape[0], f"{indices.max()} >= {self.ref_root_linear.shape[0]}"
+        ref_root_linear = self.ref_root_linear[indices]
+        return ref_root_linear.reshape(self.num_envs, -1)
     
 class ref_trans_gap(Observation):
     def __init__(self, env, steps: int=1):
