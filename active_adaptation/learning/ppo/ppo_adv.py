@@ -60,7 +60,8 @@ class PPOADVConfig:
     vecnorm: Union[str, None] = None
 
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_LONG_HIST_KEY, 
+                                                        OBS_REF_KEY, OBS_PRIV_KEY, "aux_target_"])
 
 cs = ConfigStore.instance()
 cs.store("ppo_adv", node=PPOADVConfig, group="algo")
@@ -86,7 +87,7 @@ class PPOADVPolicy(TensorDictModuleBase):
         self.action_dim = action_spec.shape[-1]
         self.gae = GAE(0.99, 0.95)
 
-        self.estimate_dim = observation_spec[OBS_PRIV_KEY].shape[-1]
+        self.estimate_dim = observation_spec["aux_target_"].shape[-1]
         self.decode_dim = observation_spec[OBS_KEY].shape[-1]
         
         if cfg.value_norm:
@@ -107,7 +108,7 @@ class PPOADVPolicy(TensorDictModuleBase):
                 Split([self.estimate_dim, 64, 64]),
             ),
             [OBS_LONG_HIST_KEY],
-            ["pred_priv", "mu", "logvar"]
+            ["aux_pred", "mu", "logvar"]
         ).to(self.device)
 
         self.decoder = TensorDictSequential(
@@ -120,8 +121,8 @@ class PPOADVPolicy(TensorDictModuleBase):
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["a_robot"]),
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["a_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["a_ref_motion_"]),
-                    TensorDictModule(make_mlp([256]), ["pred_priv"], ["a_priv"]),
-                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_priv", "mu"], out_key),
+                    TensorDictModule(make_mlp([256]), ["aux_pred"], ["a_pred"]),
+                    CatTensors(["a_robot", "a_hist", "a_ref_motion_", "a_pred", "mu"], out_key),
                 ]
             return modules
         
@@ -273,8 +274,6 @@ class PPOADVPolicy(TensorDictModuleBase):
 
     # @torch.compile
     def _update(self, tensordict: TensorDict):
-        ids = torch.randint(0, tensordict.shape[0], (tensordict.shape[0] // 2,))
-        tensordict[ids]["pred_priv"] = tensordict[ids][OBS_PRIV_KEY]
         
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
@@ -314,8 +313,8 @@ class PPOADVPolicy(TensorDictModuleBase):
     def _update_estimation(self, tensordict: TensorDict):
         self.encoder(tensordict)
 
-        aux_pred = tensordict["pred_priv"]
-        aux_pred_target = tensordict[OBS_PRIV_KEY]
+        aux_pred = tensordict["aux_pred"]
+        aux_pred_target = tensordict["aux_target_"]
         aux_pred_loss = F.mse_loss(aux_pred, aux_pred_target)
 
         mu, logvar = tensordict["mu"], tensordict["logvar"]

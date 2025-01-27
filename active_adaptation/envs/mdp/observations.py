@@ -539,7 +539,6 @@ class applied_torques(JointObs):
     def compute(self) -> torch.Tensor:
         # TODO: deprecate normalization to avoid division by zero
         applied_efforts = self.asset.data.applied_torque
-        print(applied_efforts)
         return applied_efforts[:, self.joint_indices] / self.effort_limit
 
 

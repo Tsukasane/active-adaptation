@@ -52,8 +52,18 @@ observation:
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   priv:
     root_height:      
-    root_linvel_b:    {yaw_only: false}
-
+    root_linvel_b:   {yaw_only: false}
+    body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+    body_vel:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+    applied_torques: {actuator_name: base_legs}
+    joint_forces:    {}
+    jacobians:       {body_names: [base_link, .*arm_link6, .*leg_link5]}
+    contact_indicator: {body_names: [.*leg_link6], timing: false}
+    motor_params:    {actuator_name: base_legs}
+    body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
+  aux_target_:
+    root_linvel_b:   {yaw_only: false}
+    body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
 
 reward:
   loco:
@@ -99,8 +109,8 @@ reward:
     joint_acc_l2:       {weight: 1.0e-8, enabled: true}
     joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: .*}
     joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*arm_joint.*}
-    action_rate_l2:     {weight: 0.1, enabled: true}
-    action_rate2_l2:    {weight: 0.05, enabled: true}
+    action_rate_l2:     {weight: 0.02, enabled: true}
+    action_rate2_l2:    {weight: 0.01, enabled: true}
 
     # for evaluation
     mean_qpos_error:    {weight: 1.0, enabled: false,
