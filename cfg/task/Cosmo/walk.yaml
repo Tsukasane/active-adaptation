@@ -40,9 +40,9 @@ observation:
     joint_pos:        {noise_std: 0.05}
     joint_vel:        {noise_std: 0.2}
   history:
-    history_sensor_io:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
+    history_sensor_io:  {steps: 3}
   long_history:
-    long_history_sensor: {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
+    long_history_sensor: {steps: 6}
   ref_motion_:
     ref_orient:         {steps: 5}
     ref_height:         {steps: 5}
@@ -51,7 +51,7 @@ observation:
     ref_trans_gap:      {steps: 3}
     ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   priv:
-    root_height:      
+    root_pos_w:      
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
     body_vel:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}

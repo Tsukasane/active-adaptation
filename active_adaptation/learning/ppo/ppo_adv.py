@@ -131,7 +131,7 @@ class PPOADVPolicy(TensorDictModuleBase):
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["c_robot"]),
                     TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["c_hist"]),
                     TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["c_ref_motion_"]),
-                    TensorDictModule(make_mlp([256]), [OBS_PRIV_KEY], ["c_priv"]),
+                    TensorDictModule(make_mlp([512, 256]), [OBS_PRIV_KEY], ["c_priv"]),
                     CatTensors(["c_robot", "c_hist", "c_ref_motion_", "c_priv"], out_key),
                 ]
             return modules

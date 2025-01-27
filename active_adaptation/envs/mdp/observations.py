@@ -1584,29 +1584,34 @@ class history_io(Observation):
         return features_over_time.reshape(self.num_envs, -1)
         
 class history_sensor_io(Observation):
-    def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
+    def __init__(self, env, joint_names: str = ".*", steps: int=1):
         super().__init__(env)
-        self.body_pos = body_pos(env, body_names)
-        self.joint_pos = joint_pos(env, joint_names)
-        self.joint_vel = joint_vel(env, joint_names)
+        self.root_quat_w = root_quat_w(env, noise_std=0.02)
+        self.root_angvel_b = root_angvel_b(env, noise_std=0.05)
+        self.joint_pos = joint_pos(env, joint_names, noise_std=0.05)
+        self.joint_vel = joint_vel(env, joint_names, noise_std=0.2)
 
-        self.body_ids = self.body_pos.body_indices
         self.joint_ids = self.joint_pos.joint_ids
 
         self.steps = steps + 1
-        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, self.steps, device=self.device)
+        self.root_quat_w_hist = torch.zeros(self.num_envs, 4, self.steps, device=self.device)
+        self.root_angvel_b_hist = torch.zeros(self.num_envs, 3, self.steps, device=self.device)
         self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
         self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
 
     def reset(self, env_ids: torch.Tensor):
-        self.body_pos_hist[env_ids] = 0.
+        self.root_quat_w_hist[env_ids] = 0.
+        self.root_angvel_b_hist[env_ids] = 0.
         self.joint_pos_hist[env_ids] = 0.
         self.joint_vel_hist[env_ids] = 0.
 
 
     def update(self):
-        self.body_pos_hist[:, :, :, 1:] = self.body_pos_hist[:, :, :, :-1]
-        self.body_pos_hist[:, :, :, 0] = self.body_pos.compute().reshape(self.num_envs, -1, 3)
+        self.root_quat_w_hist[:, :, 1:] = self.root_quat_w_hist[:, :, :-1]
+        self.root_quat_w_hist[:, :, 0] = self.root_quat_w.compute().reshape(self.num_envs, -1)
+
+        self.root_angvel_b_hist[:, :, 1:] = self.root_angvel_b_hist[:, :, :-1]
+        self.root_angvel_b_hist[:, :, 0] = self.root_angvel_b.compute().reshape(self.num_envs, -1)
 
         self.joint_pos_hist[:, :, 1:] = self.joint_pos_hist[:, :, :-1]
         self.joint_pos_hist[:, :, 0] = self.joint_pos.compute().reshape(self.num_envs, -1)
@@ -1615,25 +1620,28 @@ class history_sensor_io(Observation):
         self.joint_vel_hist[:, :, 0] = self.joint_vel.compute().reshape(self.num_envs, -1)
 
     def compute(self):
-        body_pos_hist = self.body_pos_hist.permute(0, 3, 1, 2).reshape(self.num_envs, self.steps, -1)                             
+        root_quat_w_hist = self.root_quat_w_hist.permute(0, 2, 1)
+        root_angvel_b_hist = self.root_angvel_b_hist.permute(0, 2, 1)                            
         joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)                                          
         joint_vel_hist = self.joint_vel_hist.permute(0, 2, 1)           
         obs_per_time = torch.cat([
-                    body_pos_hist,              # [N, steps, 3 * num_bodies]
+                    root_quat_w_hist,           # [N, steps, 4]
+                    root_angvel_b_hist,         # [N, steps, 3]
                     joint_pos_hist,             # [N, steps, num_joints]
                     joint_vel_hist],            # [N, steps, num_joints]
-                dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
+                dim=2)                          # [N, steps, 4 + 3 + 2 * num_joints]
         
-        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 3 * num_bodies + 6 + 2 * num_joints]
+        obs_per_time = obs_per_time[:, 1:, :]     # [N, steps-1, 4 + 3 + 2 * num_joints]
         action_per_time = self.env.action_manager.action_buf[:, :, :self.steps-1].permute(0, 2, 1)  # [N, steps-1, num_joints]
         features_over_time = torch.cat([obs_per_time, action_per_time], dim=2)
         return features_over_time.reshape(self.num_envs, -1)
     
 class long_history_sensor(history_sensor_io):
-    def __init__(self, env, body_names: str, joint_names: str = ".*", steps: int=1):
-        super().__init__(env, body_names, joint_names, steps)
+    def __init__(self, env, joint_names: str = ".*", steps: int=1):
+        super().__init__(env, joint_names, steps)
         self.steps = steps
-        self.body_pos_hist = torch.zeros(self.num_envs, len(self.body_ids), 3, self.steps, device=self.device)
+        self.root_quat_w_hist = torch.zeros(self.num_envs, 4, self.steps, device=self.device)
+        self.root_angvel_b_hist = torch.zeros(self.num_envs, 3, self.steps, device=self.device)
         self.joint_pos_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
         self.joint_vel_hist = torch.zeros(self.num_envs, len(self.joint_ids), self.steps, device=self.device)
 
@@ -1644,14 +1652,16 @@ class long_history_sensor(history_sensor_io):
         super().update()
 
     def compute(self):
-        body_pos_hist = self.body_pos_hist.permute(0, 3, 1, 2).reshape(self.num_envs, self.steps, -1)                             
+        root_quat_w_hist = self.root_quat_w_hist.permute(0, 2, 1)
+        root_angvel_b_hist = self.root_angvel_b_hist.permute(0, 2, 1)                            
         joint_pos_hist = self.joint_pos_hist.permute(0, 2, 1)                                          
         joint_vel_hist = self.joint_vel_hist.permute(0, 2, 1)           
         obs_per_time = torch.cat([
-                    body_pos_hist,              # [N, steps, 3 * num_bodies]
+                    root_quat_w_hist,           # [N, steps, 4]
+                    root_angvel_b_hist,         # [N, steps, 3]
                     joint_pos_hist,             # [N, steps, num_joints]
                     joint_vel_hist],            # [N, steps, num_joints]
-                dim=2)                          # [N, steps, 3 * num_bodies + 6 + 2 * num_joints]
+                dim=2)                          # [N, steps, 4 + 3 + 2 * num_joints]
         return obs_per_time.reshape(self.num_envs, -1)
 
 class amp_traj(Observation):
