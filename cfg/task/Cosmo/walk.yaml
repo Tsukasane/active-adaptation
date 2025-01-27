@@ -49,7 +49,6 @@ observation:
     ref_keypoints:      {steps: 5}
     ref_root_linear:    {steps: 5}
     ref_trans_gap:      {steps: 3}
-    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 5}
   priv:
     root_pos_w:      
     root_linvel_b:   {yaw_only: false}
@@ -61,6 +60,8 @@ observation:
     contact_indicator: {body_names: [.*leg_link6], timing: false}
     motor_params:    {actuator_name: base_legs}
     body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
+    # reference motion part
+    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   aux_target_:
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
