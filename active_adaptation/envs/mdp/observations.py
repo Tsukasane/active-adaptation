@@ -405,16 +405,16 @@ class root_linvel_b(Observation):
     def fliplr(self, obs: torch.Tensor) -> torch.Tensor:
         return obs * torch.tensor([1., -1., 1.], device=self.device)
 
-    def debug_draw(self):
-        if self.body_ids is None:
-            linvel = self.asset.data.root_lin_vel_w
-        else:
-            linvel = (self.asset.data.body_lin_vel_w[:, self.body_ids] * self.body_masses).mean(1)
-        self.env.debug_draw.vector(
-            self.asset.data.root_pos_w + torch.tensor([0., 0., 0.2], device=self.device),
-            linvel,
-            color=(0.8, 0.1, 0.1, 1.)
-        )
+    # def debug_draw(self):
+    #     if self.body_ids is None:
+    #         linvel = self.asset.data.root_lin_vel_w
+    #     else:
+    #         linvel = (self.asset.data.body_lin_vel_w[:, self.body_ids] * self.body_masses).mean(1)
+    #     self.env.debug_draw.vector(
+    #         self.asset.data.root_pos_w + torch.tensor([0., 0., 0.2], device=self.device),
+    #         linvel,
+    #         color=(0.8, 0.1, 0.1, 1.)
+    #     )
     
 class JointObs(Observation):
     def __init__(
