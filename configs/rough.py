@@ -3,9 +3,11 @@ from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.terrains import TerrainImporterCfg
 from omni.isaac.lab.envs import ViewerCfg
-from omni.isaac.lab.assets import AssetBaseCfg
+from omni.isaac.lab.assets import AssetBaseCfg, RigidObjectCfg
 from omni.isaac.lab.sensors import ContactSensorCfg, RayCasterCfg, patterns, TiledCameraCfg, ImuCfg
 import omni.isaac.lab.sim as sim_utils
+from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+from omni.isaac.lab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 
 from dataclasses import MISSING
 from typing import Dict, List
@@ -19,6 +21,22 @@ class ManipulationSceneCfg(InteractiveSceneCfg):
     env_spacing: float = 2.5
 
     robot: ArticulationCfg = MISSING
+
+    cube = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Cube",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.0, 0.0, 0.5], rot=[1, 0, 0, 0]),
+        spawn=UsdFileCfg(
+            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
+            scale=(1.0, 1.0, 1.0),
+            rigid_props=sim_utils.schemas_cfg.RigidBodyPropertiesCfg(
+                            solver_position_iteration_count=16,
+                            solver_velocity_iteration_count=1,
+                            disable_gravity=False,
+                        ),
+        )
+    )
+    
+    contact_forces = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True)
     
     light_0: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/light_0",

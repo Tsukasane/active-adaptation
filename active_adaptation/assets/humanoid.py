@@ -62,7 +62,6 @@ CY1_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{ASSET_PATH}/ORCA/orca_stable_mesh.usd",
         usd_path=f"{ASSET_PATH}/ORCA/orca_stable_fix_arm_limit.usd",
-        # usd_path=f"{ASSET_PATH}/ORCA/orca_stable_fix_arm_joint.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             # disable_gravity=True,           # for sanity check
