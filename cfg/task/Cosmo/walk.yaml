@@ -60,8 +60,6 @@ observation:
     contact_indicator: {body_names: [.*leg_link6], timing: false}
     motor_params:    {actuator_name: base_legs}
     body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
-    # reference motion part
-    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   aux_target_:
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
@@ -69,7 +67,7 @@ observation:
 reward:
   loco:
     # for tracking the reference motion
-    tracking_root_trans:    {weight: 1.5, enabled: true, sigma: 0.81}
+    tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
     tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
     tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.64,
                           joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
@@ -110,8 +108,8 @@ reward:
     joint_acc_l2:       {weight: 1.0e-8, enabled: true}
     joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: .*}
     joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*arm_joint.*}
-    action_rate_l2:     {weight: 0.02, enabled: true}
-    action_rate2_l2:    {weight: 0.01, enabled: true}
+    action_rate_l2:     {weight: 0.1, enabled: true}
+    action_rate2_l2:    {weight: 0.05, enabled: true}
 
     # for evaluation
     mean_qpos_error:    {weight: 1.0, enabled: false,
