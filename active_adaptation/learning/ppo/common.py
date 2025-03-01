@@ -33,6 +33,12 @@ from dataclasses import dataclass, field
 from .rotary import RotaryEmbedding
 import os
 
+from active_adaptation.utils.helpers import batchify
+from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
+
+quat_rotate = batchify(quat_rotate)
+quat_rotate_inverse = batchify(quat_rotate_inverse)
+
 
 OBS_KEY = "robot" # ("agents", "observation", "policy")
 OBS_PRIV_KEY = "priv"
@@ -190,6 +196,41 @@ def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
             layers.append(activation())
         if dropout > 0. :
             layers.append(nn.Dropout(dropout))
+    return nn.Sequential(*layers)
+
+class PermuteLayerNorm(nn.Module):
+    """Helper to apply LayerNorm on channel dimension for Conv1D outputs"""
+    def __init__(self, normalized_shape):
+        super().__init__()
+        self.norm = nn.LayerNorm(normalized_shape)
+        
+    def forward(self, x):
+        # Input shape: (Batch, Channels, Length)
+        x = x.permute(0, 2, 1)  # (Batch, Length, Channels)
+        x = self.norm(x)
+        x = x.permute(0, 2, 1)  # (Batch, Channels, Length)
+        return x
+
+def make_cnn1d(num_channels, kernel_size=2, activation=nn.Mish, norm="before", dropout=0.):
+    assert norm in ("before", "after", None)
+    layers = []
+    for n in num_channels[:-1]:
+        layers.append(nn.LazyConv1d(n, kernel_size, padding=kernel_size//2))
+        if norm == "before":
+            layers.append(PermuteLayerNorm(n))
+            layers.append(activation())
+        elif norm == "after":
+            layers.append(activation())
+            layers.append(PermuteLayerNorm(n))
+        else:
+            layers.append(activation())
+        if dropout > 0. :
+            layers.append(nn.Dropout(dropout))
+
+    layers.extend([
+        nn.Flatten(),
+        nn.LazyLinear(num_channels[-1])
+    ])
     return nn.Sequential(*layers)
 
 
@@ -449,6 +490,31 @@ class NormalExtractor(nn.Module):
             x_sample = torch.cat([x_sample, x_loc.unsqueeze(-2)], dim=-2)
         return x_sample.flatten(-2), x_loc, x_scale
 
+class InferRefGap(ModBase):
+    def __init__(self, infer_key="infer_", ref_key=OBS_REF_KEY):
+        super().__init__()
+        self.infer_key = infer_key
+        self.ref_key = ref_key
+
+        self.get_root_quat = lambda x: x[:, 0:4]
+        self.get_ref_translation = lambda x: x[:, 4:19]
+        self.get_xyz = lambda x: x[:, 19:22]
+
+    def forward(self, tensordict: TensorDictBase):
+        N = tensordict.shape[0]
+        infer = tensordict.get(self.infer_key)
+        ref = tensordict.get(self.ref_key)
+        root_quat = self.get_root_quat(infer).unsqueeze(1)
+        ref_translation = self.get_ref_translation(ref).reshape(N, -1, 3)
+        xyz = self.get_xyz(infer).unsqueeze(1)
+
+        gap = ref_translation - xyz
+        gap = quat_rotate_inverse(root_quat, gap).reshape(N, -1)
+
+        dim = gap.shape[-1]
+        ref[:, -dim:] = gap
+        tensordict.set(self.ref_key, ref)
+        return tensordict
 
 class CatTensors(ModBase):
     def __init__(self, in_keys, out_key, del_keys=False, sort=True):

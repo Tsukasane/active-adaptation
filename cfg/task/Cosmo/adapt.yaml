@@ -41,15 +41,15 @@ observation:
     joint_vel:        {noise_std: 0.2}
     prev_actions:     {steps: 1}
   history:
-    history_sensor_io:  {steps: 3}
-  long_history:
-    long_history_sensor: {steps: 6}
+    history_sensor_io:  {steps: 5}
   ref_motion_:
+    root_quat_w:        {noise_std: 0.02}
     ref_orient:         {steps: 5}
     ref_height:         {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_root_linear:    {steps: 5}
-    ref_trans_gap:      {steps: 3}
+    ref_translation:    {steps: 5}
+    # ref_trans_gap:      {steps: 3}
   priv:
     root_pos_w:      
     root_linvel_b:   {yaw_only: false}
@@ -62,7 +62,8 @@ observation:
     motor_params:    {actuator_name: base_legs}
     body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
   aux_target_:
-    x_y:
+    x_y_z_origin:
+    ref_trans_gap:   {steps: 3}
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
 

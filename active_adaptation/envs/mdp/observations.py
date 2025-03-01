@@ -1334,6 +1334,23 @@ class root_pos_w(Observation):
     def compute(self):
         return self.asset.data.root_pos_w
     
+class x_y_z_origin(Observation):
+    def __init__(self, env):
+        super().__init__(env)
+        self.asset = self.env.scene["robot"]
+        self.origin = env.scene.env_origins
+
+    def compute(self):
+        root_pos_xy = self.asset.data.root_pos_w - self.origin
+        return root_pos_xy
+    
+    def debug_draw(self):
+        self.env.debug_draw.point(
+            self.asset.data.root_pos_w,
+            color=(1., 0., 1., 1.),
+            size=20
+        )
+    
 class root_height(Observation):
     def __init__(self, env):
         super().__init__(env)
@@ -1452,10 +1469,11 @@ class ref_root_linear(Observation):
         return ref_root_linear.reshape(self.num_envs, -1)
     
 class ref_trans_gap(Observation):
-    def __init__(self, env, steps: int=1):
+    def __init__(self, env, steps: int=1, noise_std: float=0.):
         super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
         self.steps = steps
+        self.noise_std = noise_std
         self.ref_root_trans = self.env.command_manager.ref_root_translations     # [N, T, 3]
 
     def compute(self) -> torch.Tensor:
@@ -1470,8 +1488,8 @@ class ref_trans_gap(Observation):
         batch_indices = torch.arange(self.num_envs, device=self.device)[:, None]    # Shape: [num_envs, 1]
         ref_root_trans = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
 
-        quat = self.asset.data.root_quat_w.unsqueeze(1)
-        self.current_root_pos = self.asset.data.root_pos_w.unsqueeze(1)          # [num_envs, 1, 3]
+        quat = random_noise(self.asset.data.root_quat_w, self.noise_std).unsqueeze(1)
+        self.current_root_pos = random_noise(self.asset.data.root_pos_w, self.noise_std).unsqueeze(1)          # [num_envs, 1, 3]
         self.gap = ref_root_trans - self.current_root_pos                        # [num_envs, steps, 3]
         gap_b = quat_rotate_inverse(quat, self.gap)
         return gap_b.reshape(self.num_envs, -1)
@@ -1483,6 +1501,36 @@ class ref_trans_gap(Observation):
             color=(1., 0., 1., 1.),
             size=1.
         )
+    
+class ref_translation(Observation):
+    def __init__(self, env, steps: int=1):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.steps = steps
+        self.ref_root_trans = self.env.command_manager.ref_root_translations     # [N, T, 3]
+        self.origin = self.env.scene.env_origins             # [num_envs, 3]
+        self.ref_root_trans = self.ref_root_trans - self.origin.unsqueeze(1)
+
+    def compute(self) -> torch.Tensor:
+        frame = self.env.episode_length_buf                                 # [num_envs]
+        max_frame = self.env.max_episode_length
+        max_frame = torch.tensor(max_frame, dtype=int, device=self.device).expand_as(frame) # [num_envs]
+
+        step_range = torch.arange(self.steps, device=self.device)
+        indices = frame[:, None] + step_range                               # Shape: [num_envs, steps]
+        indices = torch.min(indices, max_frame[:, None] - 1)
+
+        batch_indices = torch.arange(self.num_envs, device=self.device)[:, None]    # Shape: [num_envs, 1]
+        self.ret = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
+
+        return self.ret.reshape(self.num_envs, -1)
+    
+    def debug_draw(self):
+        for i in range(self.ref_root_trans.shape[1]):
+            self.env.debug_draw.points(
+                self.ret[:, i] + self.origin,
+                color=(0.1, 1.0, 0.1, 0.8), size=20
+            )
 
 class ref_keypoints_gap(CartesianObs):
     def __init__(

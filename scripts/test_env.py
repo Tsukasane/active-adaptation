@@ -89,7 +89,8 @@ def main(cfg: DictConfig):
     wandb.save(target_path, policy="now")
 
     frames_per_batch = env.num_envs * cfg.algo.train_every
-    total_frames = cfg.get("total_frames", -1) // frames_per_batch * frames_per_batch
+    # total_frames = cfg.get("total_frames", -1) // frames_per_batch * frames_per_batch
+    total_frames = cfg.algo.total_frames // frames_per_batch * frames_per_batch
     total_iters = total_frames // frames_per_batch
     eval_interval = cfg.get("eval_interval", -1)
     render_interval = cfg.get("render_interval", -1)

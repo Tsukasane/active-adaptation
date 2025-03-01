@@ -347,7 +347,7 @@ class JointPosition(ActionManager):
         self.decimation = int(self.env.step_dt / self.env.physics_dt)
 
         with torch.device(self.device):
-            action_buf_hist = max(max_delay + 1, 3) if max_delay is not None else 3
+            action_buf_hist = max(max_delay + 1, 5) if max_delay is not None else 5
             self.action_buf = torch.zeros(self.num_envs, self.action_dim, action_buf_hist) # at least 3 for action_rate_2_l2 reward
             self.applied_action = torch.zeros(self.num_envs, self.action_dim)
             self.alpha = torch.ones(self.num_envs, self.action_dim)
