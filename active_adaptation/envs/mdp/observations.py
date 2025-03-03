@@ -1524,13 +1524,6 @@ class ref_translation(Observation):
         self.ret = self.ref_root_trans[batch_indices, indices]                # [num_envs, steps, 3]
 
         return self.ret.reshape(self.num_envs, -1)
-    
-    def debug_draw(self):
-        for i in range(self.ref_root_trans.shape[1]):
-            self.env.debug_draw.points(
-                self.ret[:, i] + self.origin,
-                color=(0.1, 1.0, 0.1, 0.8), size=20
-            )
 
 class ref_keypoints_gap(CartesianObs):
     def __init__(

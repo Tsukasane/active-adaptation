@@ -124,12 +124,12 @@ class PPOConfig:
     value_norm: bool = False
     vecnorm: Union[str, None] = None
 
-    mode: str = "train" # train or infer
-    total_frames: int = 500_000_000
+    total_frames: int = 300_000_000
 
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, 
-                                                        OBS_PRIV_KEY, "aux_target_"])
+                                                        OBS_PRIV_KEY, "priv_", 
+                                                        "aux_target_"])
 
 cs = ConfigStore.instance()
 cs.store("ppo_adapt", node=PPOConfig, group="algo")
@@ -168,7 +168,6 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         with torch.device(self.device):
             fake_input["is_init"] = torch.ones(fake_input.shape[0], 1, dtype=torch.bool)
             fake_input["context_adapt_hx"] = torch.zeros(fake_input.shape[0], 128)
-            fake_input["a_interp"] = torch.zeros(fake_input.shape[0], self.context_dim)
         print(fake_input)
 
         def make_adapt():
@@ -184,14 +183,14 @@ class PPOAdaptPolicy(TensorDictModuleBase):
              
         def make_actor(out_key: str):
             modules = [
-                    CatTensors([OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, "a_interp"], "a_in"),
+                    CatTensors([OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, "context_adapt"], "a_in"),
                     TensorDictModule(make_mlp([1024, 512]), ["a_in"], out_key),
                 ]
             return modules
         
         def make_critics(out_key: str):
             modules = [
-                    CatTensors([OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY, "aux_target_"], "c_in"),
+                    CatTensors([OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, OBS_PRIV_KEY, "priv_", "aux_target_"], "c_in"),
                     TensorDictModule(make_mlp([1024, 512]), ["c_in"], out_key),
                 ]
             return modules
@@ -248,7 +247,6 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         self.actor.apply(init_)
         self.critic.apply(init_)
 
-        self.p = 0. if cfg.mode == "train" else 1.
         self.step_cnt = 0
         frames_per_batch = self.cfg.train_every * self.observation_spec.shape[0]
         total_frames = self.cfg.total_frames // frames_per_batch * frames_per_batch
@@ -271,22 +269,16 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         return TensorDictPrimer({"context_adapt_hx": spec}, reset_key="done")
     
     def get_rollout_policy(self, mode: str="train"):
-        
-        def interp(gt, pred):
-            return gt * (1-self.p) + pred * self.p
-            
         if mode == "train":
             policy = TensorDictSequential(
                 self.vecnorm,
                 self.adapt,
-                TensorDictModule(interp, ["aux_target_", "context_adapt"], ["a_interp"]),
                 self.actor,
             )
         else:
             policy = TensorDictSequential(
                 self.vecnorm.to_observation_norm(),
                 self.adapt,
-                TensorDictModule(interp, ["aux_target_", "context_adapt"], ["a_interp"]),
                 self.actor,
             )
         return policy
@@ -323,9 +315,6 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         infos.update(train_actor_critic())
         infos.update(train_adaptation())
         infos["critic/value_mean"] = tensordict["ret"].mean().item()
-        infos["critic/p"] = self.p
-        self.step_cnt += 1
-        self.p = linearscheduler(self.step_cnt, int(3/5*self.total_iters), self.total_iters)
         return infos
 
     @torch.no_grad()
@@ -401,7 +390,6 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         }
     
     def _update_adaptation(self, tensordict: TensorDict):
-        N, T, D = tensordict[OBS_KEY].shape
         tdict_local = tensordict.copy()
         self.adapt(tdict_local)
         context_adapt = tdict_local["context_adapt"].reshape(-1, self.context_dim)
@@ -412,15 +400,11 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         loss.backward()
         self.opt_adapt.step()
 
-        x_y_error = (context_adapt[:, :3] - context_target[:, :3]).norm(dim=-1).mean()
-        ref_trans_gap_error = (context_adapt[:, 3:12] - context_target[:, 3:12]).norm(dim=-1).mean()
-        root_vel_error = (context_adapt[:, 12:15] - context_target[:, 12:15]).norm(dim=-1).mean()
-        body_pos_error = (context_adapt[:, 15:51] - context_target[:, 15:51]).norm(dim=-1).mean()
+        root_vel_error = (context_adapt[:, :3] - context_target[:, :3]).norm(dim=-1).mean()
+        body_pos_error = (context_adapt[:, 3:] - context_target[:, 3:]).norm(dim=-1).mean()
 
         return {
             "adapt/loss": loss,
-            "adapt/x_y_error": x_y_error,
-            "adapt/ref_trans_gap_error": ref_trans_gap_error,
             "adapt/root_vel_error": root_vel_error,
             "adapt/body_pos_error": body_pos_error,
         }
@@ -457,9 +441,3 @@ def sample(mu, logvar):
     std = torch.exp(0.5 * logvar)
     eps = torch.randn_like(std)
     return mu + eps * std
-
-def linearscheduler(timestep, t_mid, T):
-    if timestep < t_mid:
-        return 0
-    else:
-        return (timestep - t_mid) / (T - t_mid)

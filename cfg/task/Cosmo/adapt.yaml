@@ -49,7 +49,6 @@ observation:
     ref_keypoints:      {steps: 5}
     ref_root_linear:    {steps: 5}
     ref_translation:    {steps: 5}
-    # ref_trans_gap:      {steps: 3}
   priv:
     root_pos_w:      
     root_linvel_b:   {yaw_only: false}
@@ -61,9 +60,10 @@ observation:
     contact_indicator: {body_names: [.*leg_link6], timing: false}
     motor_params:    {actuator_name: base_legs}
     body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
+  priv_:
+    ref_trans_gap:      {steps: 3}
+    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   aux_target_:
-    x_y_z_origin:
-    ref_trans_gap:   {steps: 3}
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
 
@@ -159,7 +159,7 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
-  root_deviation: {max_distance: 0.5}
+  root_deviation: {max_distance: 2.0}
   root_rot_deviation: {max_theta: 60}
   cum_error_qpos: {thres: 0.2}
   # cum_error_kp: {thres: 0.2}
