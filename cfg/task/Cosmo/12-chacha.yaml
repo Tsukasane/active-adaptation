@@ -1,0 +1,167 @@
+# @package task
+
+name: chacha
+task: Humanoid
+
+defaults:
+  # see https://hydra.cc/docs/advanced/overriding_packages/
+  - /task/Velocity@_here_
+  - override /task/action@action: null
+  - _self_
+
+robot: cy1
+terrain: plane
+payload: false
+max_episode_length: 3500
+
+action:
+  _target_: active_adaptation.envs.mdp.action.JointPosition
+  # action_scaling: { "(?![l,r]arm_joint5).*" : 0.5}
+  action_scaling: 
+    .*arm_joint[1-4]: 0.5
+    waist_yaw_joint: 0.5
+    .*leg_joint[1-6]: 0.5
+  max_delay: 1
+  alpha: [0.5, 1.0]
+
+command:
+  _target_: active_adaptation.envs.mdp.MotionClip
+  motion_clip: "reference_motions/dance/0-SFU_0008_0008_ChaCha001_poses_retarget.pkl"
+  joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                waist_yaw_joint,
+                larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
+  body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5]
+
+observation:
+  robot:
+    root_quat_w:      {noise_std: 0.02}
+    root_angvel_b:    {noise_std: 0.05}
+    joint_pos:        {noise_std: 0.05}
+    joint_vel:        {noise_std: 0.2}
+    prev_actions:     {steps: 1}
+  history:
+    history_sensor_io:  {steps: 5}
+  ref_motion_:
+    root_quat_w:        {noise_std: 0.02}
+    ref_orient:         {steps: 5}
+    ref_height:         {steps: 5}
+    ref_keypoints:      {steps: 5}
+    ref_root_linear:    {steps: 5}
+    ref_translation:    {steps: 5}
+  priv:
+    root_pos_w:      
+    root_linvel_b:   {yaw_only: false}
+    body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+    body_vel:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+    applied_torques: {actuator_name: base_legs}
+    joint_forces:    {}
+    jacobians:       {body_names: [base_link, .*arm_link6, .*leg_link5]}
+    contact_indicator: {body_names: [.*leg_link6], timing: false}
+    motor_params:    {actuator_name: base_legs}
+    body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
+  priv_:
+    ref_trans_gap:      {steps: 3}
+    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
+  aux_target_:
+    root_linvel_b:   {yaw_only: false}
+    body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
+
+reward:
+  loco:
+    # for tracking the reference motion
+    tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
+    tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
+    tracking_qpos:      {weight: 2.0, enabled: true, sigma: 0.64,
+                          joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                                        rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                                        waist_yaw_joint,
+                                        larm_joint1, larm_joint2, larm_joint3, larm_joint4,
+                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]}            
+    tracking_keypoints: {weight: 2.0, enabled: true, sigma: 0.64,
+                          upper_body_names: [ larm_link2, rarm_link2,
+                                              larm_link4, rarm_link4],
+                          upper_body_err_weight: 2.0,
+                          lower_body_names: [ lleg_link1, rleg_link1,
+                                              lleg_link4, rleg_link4],
+                          lower_body_err_weight: 1.5}
+    tracking_end_effector: {weight: 3.0, enabled: true, sigma: 0.64,
+                          upper_body_names: [ larm_link6, rarm_link6],
+                          upper_body_err_weight: 1.5,
+                          lower_body_names: [ lleg_link5, rleg_link5],
+                          lower_body_err_weight: 1.0}
+
+    # task-done reward
+    # TODO
+
+    # for feet gesture
+    feet_slip:          {weight: 0.8, enabled: true, body_names: .*leg_link6}
+    feet_orientation:   {weight: 0.2, enabled: true, feet_names: .*leg_link5, body_name: waist_yaw_link}
+    max_feet_height:    {weight: 1.0, enabled: true, body_names: .*leg_link6, target_height: 0.15}
+
+    # for survival
+    survival:           {weight: 1.0, enabled: true}
+
+    # for stability
+    angvel_xy_l2:       {weight: 0.05, enabled: true}
+    
+    # for smoothness
+    energy_l1:          {weight: 5.0e-4, enabled: true}
+    joint_acc_l2:       {weight: 1.0e-8, enabled: true}
+    joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: .*}
+    joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*arm_joint.*}
+    action_rate_l2:     {weight: 0.1, enabled: true}
+    action_rate2_l2:    {weight: 0.05, enabled: true}
+
+    # for evaluation
+    mean_qpos_error:    {weight: 1.0, enabled: false,
+                          joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
+                                        rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
+                                        waist_yaw_joint,
+                                        # larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                                        # rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
+                                        larm_joint1, larm_joint2, larm_joint3, larm_joint4,
+                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
+                                        
+                        }
+    mean_kp_error: {weight: 1.0, enabled: false,
+                    body_names: [ larm_link2, rarm_link2,
+                                  larm_link4, rarm_link4,
+                                  larm_link6, rarm_link6,
+                                  lleg_link1, rleg_link1,
+                                  lleg_link4, rleg_link4,
+                                  lleg_link5, rleg_link5],
+                    }
+
+randomization:
+  push:     {body_names: ["base_link", "waist_yaw_link"], force_range: [0.0, 0.1]}
+  perturb_body_mass:
+    .*: [0.9, 1.1]
+  perturb_body_materials:
+    body_names: ".*leg_link6"
+    static_friction_range: [0.6, 4.0]
+    dynamic_friction_range: [0.6, 4.0]
+    restitution_range: [0.0, 0.2]
+  motor_params:
+    actuator_name:    base_legs
+    stiffness_range:  [0.7, 1.0]
+    damping_range:    [0.7, 1.0]
+  reset_joint_states_uniform:
+    pos_ranges:
+      .*arm_joint.*: [-0., 0.]
+      .*leg_joint.*: [-0.3, 0.3]
+      waist_yaw_joint: [-0.3, 0.3]
+    rel: true
+  # stumble:  {body_names: ".*leg_link6", stumble_height: 0.045, friction_range: [0.4, 1.8]}
+
+termination:
+  crash: 
+    body_names_expr: ["base_link", "[l,r]leg_link4", "[l,r]arm_link6"]
+    t_thres: 0.1
+    min_time: 0.5
+  fall_over: {xy_thres: 0.8}
+  root_deviation: {max_distance: 2.0}
+  root_rot_deviation: {max_theta: 60}
+  cum_error_qpos: {thres: 0.4}
+  cum_error_kp: {thres: 0.4}

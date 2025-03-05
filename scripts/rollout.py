@@ -42,19 +42,18 @@ def main(cfg):
     state_keys = [
         "robot",
         "history",
-        "long_history",
         "ref_motion_",
-        "priv"
+        "is_init",
+        "context_adapt_hx",
+        "aux_target_"
     ]
     action_keys = [
         "loc",
         "scale",
-        "action"
     ]
-    next_keys = ("next", "robot")
+    # next_keys = ("next", "robot")
 
     rollout = []
-    embedding = []
 
     td_ = env.reset()
     
@@ -62,10 +61,8 @@ def main(cfg):
         rollout.append(td_.select(*state_keys, strict=False).cpu()) # record state
         td_ = policy(td_)
         rollout[-1].update(td_.select(*action_keys, strict=False).cpu())
-        if "mu" in td_.keys():
-            embedding.append(td_["mu"].cpu())
         td, td_ = env.step_and_maybe_reset(td_)
-        rollout[-1].update(td.select(next_keys, strict=False).cpu())
+        # rollout[-1].update(td.select(next_keys, strict=False).cpu())
     
     truncated = td["next"]["truncated"].squeeze(-1).cpu()
     assert truncated.sum() > need_envs, f"Rollout env is not enough: {truncated.sum()}"
@@ -75,12 +72,6 @@ def main(cfg):
     print(rollout)
     path = os.path.join(os.path.dirname(__file__), f"rollout-{cfg.task.name}.pt")
     torch.save(rollout, path)
-
-    # if len(embedding) > 0:
-    #     embedding = torch.stack(embedding, dim=1)[truncated][:need_envs]
-    #     print(f"Embedding shape: {embedding.shape}")
-    #     path = os.path.join(os.path.dirname(__file__), f"embedding-{cfg.task.name}.pt")
-    #     torch.save(embedding, path)
     
     env.close()
     simulation_app.close()

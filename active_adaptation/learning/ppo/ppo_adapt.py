@@ -44,6 +44,10 @@ from ..modules.distributions import IndependentNormal
 from .common import *
 import einops
 
+import importlib.util
+spec = importlib.util.find_spec("active_adaptation")
+package_path = spec.origin
+
 from active_adaptation.utils.helpers import batchify
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 
@@ -126,6 +130,10 @@ class PPOConfig:
 
     total_frames: int = 300_000_000
 
+    replay: bool = False
+    replay_dir: str = "scripts/checkpoints/replay-cosmo-64"
+    im_coef: float = 2.0
+
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY, 
                                                         OBS_PRIV_KEY, "priv_", 
@@ -169,6 +177,11 @@ class PPOAdaptPolicy(TensorDictModuleBase):
             fake_input["is_init"] = torch.ones(fake_input.shape[0], 1, dtype=torch.bool)
             fake_input["context_adapt_hx"] = torch.zeros(fake_input.shape[0], 128)
         print(fake_input)
+
+        if cfg.replay == True:
+            replay_dir = os.path.join(os.path.dirname(package_path), "..", cfg.replay_dir)
+            self.replay_buffer = ReplayBuffer(replay_dir, device=device)
+            self.im_coef = cfg.im_coef
 
         def make_adapt():
             module = TensorDictSequential(
@@ -295,20 +308,38 @@ class PPOAdaptPolicy(TensorDictModuleBase):
             infos = []
             for epoch in range(self.cfg.ppo_epochs):
                 batch = make_batch(tensordict, self.cfg.num_minibatches)
-                for minibatch in batch:
-                    infos.append(TensorDict({
-                        **self._update(minibatch),
-                    }, []))
+                if hasattr(self, "replay_buffer"):
+                    replay_batch = self.replay_buffer.sample_batch(tensordict.reshape(-1).shape[0], 
+                                                                    self.cfg.num_minibatches)
+                    for minibatch, replay_minibatch in zip(batch, replay_batch):
+                        replay_minibatch = self.vecnorm(replay_minibatch)
+                        infos.append(TensorDict({
+                            **self._update(minibatch, replay_minibatch.clone()),
+                        }, []))
+                else:
+                    for minibatch in batch:
+                        infos.append(TensorDict({
+                            **self._update(minibatch),
+                        }, []))
             return {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
 
         def train_adaptation():
             infos = []
             for epoch in range(self.cfg.ppo_epochs):
                 batch = make_batch(tensordict_adapt, 8, self.cfg.train_every)
-                for minibatch in batch:
-                    infos.append(TensorDict({
-                        **self._update_adaptation(minibatch),
-                    }, []))
+                if hasattr(self, "replay_buffer"):
+                    replay_batch = self.replay_buffer.sample_seq_batch(tensordict.shape[0],
+                                                                       8, self.cfg.train_every)
+                    for minibatch, replay_minibatch in zip(batch, replay_batch):
+                        replay_minibatch = self.vecnorm(replay_minibatch)
+                        infos.append(TensorDict({
+                            **self._update_adaptation(minibatch, replay_minibatch.clone()),
+                        }, []))
+                else:
+                    for minibatch in batch:
+                        infos.append(TensorDict({
+                            **self._update_adaptation(minibatch),
+                        }, []))
             return {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
         
         infos = {}
@@ -352,7 +383,7 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         return tensordict
 
     # @torch.compile
-    def _update(self, tensordict: TensorDict):
+    def _update(self, tensordict: TensorDict, replay_tensordict: TensorDict = None):
         
         dist = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
@@ -372,13 +403,23 @@ class PPOAdaptPolicy(TensorDictModuleBase):
         value_loss = (value_loss * (~tensordict["is_init"])).mean()
         
         loss = policy_loss + entropy_loss + value_loss
+
+        if replay_tensordict is not None:
+            self.adapt(replay_tensordict)
+            loc, scale = self.actor(replay_tensordict)["loc"], self.actor(replay_tensordict)["scale"]
+            replay_loc, replay_scale = replay_tensordict["replay_loc"], replay_tensordict["replay_scale"]
+            im_dist = D.Normal(loc, scale)
+            replay_dist = D.Normal(replay_loc, replay_scale)
+            imitate_loss = D.kl_divergence(im_dist, replay_dist).mean() * self.im_coef
+            loss += imitate_loss
+
         self.opt.zero_grad()
         loss.backward()
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.opt.step()
         explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
-        return {
+        info =  {
             "actor/policy_loss": policy_loss,
             "actor/entropy": entropy,
             "actor/noise_std": tensordict["scale"].mean(),
@@ -388,9 +429,16 @@ class PPOAdaptPolicy(TensorDictModuleBase):
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
         }
+        if replay_tensordict is not None:
+            info["critic/imitation"] = imitate_loss
+        return info
     
-    def _update_adaptation(self, tensordict: TensorDict):
-        tdict_local = tensordict.copy()
+    def _update_adaptation(self, tensordict: TensorDict, replay_tensordict: TensorDict = None):
+        adapt_keys = [OBS_KEY, OBS_REF_KEY, "is_init", "context_adapt_hx", "aux_target_"]
+        tensordict = tensordict.select(*adapt_keys)
+        replay_tensordict = replay_tensordict.select(*adapt_keys)
+        tdict_local = torch.cat([tensordict, replay_tensordict], dim=0)
+
         self.adapt(tdict_local)
         context_adapt = tdict_local["context_adapt"].reshape(-1, self.context_dim)
         context_target = tdict_local["aux_target_"].reshape(-1, self.context_dim)

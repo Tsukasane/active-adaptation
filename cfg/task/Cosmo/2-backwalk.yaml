@@ -1,6 +1,6 @@
 # @package task
 
-name: walk
+name: backwalk
 task: Humanoid
 
 defaults:
@@ -12,10 +12,11 @@ defaults:
 robot: cy1
 terrain: plane
 payload: false
-max_episode_length: 2100
+max_episode_length: 800
 
 action:
   _target_: active_adaptation.envs.mdp.action.JointPosition
+  # action_scaling: { "(?![l,r]arm_joint5).*" : 0.5}
   action_scaling: 
     .*arm_joint[1-4]: 0.5
     waist_yaw_joint: 0.5
@@ -25,7 +26,7 @@ action:
 
 command:
   _target_: active_adaptation.envs.mdp.MotionClip
-  motion_clip: "reference_motions/walk/0-SFU_0007_0007_Walking001_poses_retarget.pkl"
+  motion_clip: "reference_motions/walk/0-SFU_0005_0005_BackwardsWalk001_poses_retarget.pkl"
   joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                 rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                 waist_yaw_joint,
@@ -41,15 +42,14 @@ observation:
     joint_vel:        {noise_std: 0.2}
     prev_actions:     {steps: 1}
   history:
-    history_sensor_io:  {steps: 3}
-  long_history:
-    long_history_sensor: {steps: 6}
+    history_sensor_io:  {steps: 5}
   ref_motion_:
+    root_quat_w:        {noise_std: 0.02}
     ref_orient:         {steps: 5}
     ref_height:         {steps: 5}
     ref_keypoints:      {steps: 5}
     ref_root_linear:    {steps: 5}
-    ref_trans_gap:      {steps: 3}
+    ref_translation:    {steps: 5}
   priv:
     root_pos_w:      
     root_linvel_b:   {yaw_only: false}
@@ -61,11 +61,14 @@ observation:
     contact_indicator: {body_names: [.*leg_link6], timing: false}
     motor_params:    {actuator_name: base_legs}
     body_mass:       {body_names: [base_link, waist_yaw_link, .*arm_link6, .*leg_link5]}
+  priv_:
+    ref_trans_gap:      {steps: 3}
+    ref_keypoints_gap:  {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], steps: 3}
   aux_target_:
-    x_y:
     root_linvel_b:   {yaw_only: false}
     body_pos:        {body_names: [.*arm_link2, .*arm_link4, .*arm_link6, .*leg_link1, .*leg_link4, .*leg_link5], yaw_only: false}
 
+    
 reward:
   loco:
     # for tracking the reference motion
@@ -76,9 +79,7 @@ reward:
                                         rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                         waist_yaw_joint,
                                         larm_joint1, larm_joint2, larm_joint3, larm_joint4,
-                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
-                                        
-                        }
+                                        rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]}
     tracking_keypoints: {weight: 2.0, enabled: true, sigma: 0.64,
                           upper_body_names: [ larm_link2, rarm_link2,
                                               larm_link4, rarm_link4],
@@ -93,6 +94,7 @@ reward:
                           lower_body_err_weight: 1.0}
 
     # task-done reward
+    # TODO
 
     # for feet gesture
     feet_slip:          {weight: 0.8, enabled: true, body_names: .*leg_link6}
@@ -118,6 +120,8 @@ reward:
                           joint_names: [lleg_joint1, lleg_joint2, lleg_joint3, lleg_joint4, lleg_joint5,
                                         rleg_joint1, rleg_joint2, rleg_joint3, rleg_joint4, rleg_joint5,
                                         waist_yaw_joint,
+                                        # larm_joint1, larm_joint2, larm_joint3, larm_joint4, larm_joint5, larm_joint6,
+                                        # rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4, rarm_joint5, rarm_joint6]
                                         larm_joint1, larm_joint2, larm_joint3, larm_joint4,
                                         rarm_joint1, rarm_joint2, rarm_joint3, rarm_joint4]
                                         
@@ -158,7 +162,7 @@ termination:
     t_thres: 0.1
     min_time: 0.5
   fall_over: {xy_thres: 0.8}
-  root_deviation: {max_distance: 0.5}
+  root_deviation: {max_distance: 2.0}
   root_rot_deviation: {max_theta: 60}
   cum_error_qpos: {thres: 0.2}
   # cum_error_kp: {thres: 0.2}

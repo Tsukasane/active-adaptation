@@ -180,6 +180,19 @@ class ReplayBuffer:
         for indices in perm:
             yield data[indices]
 
+    def sample_seq_batch(self, sample_shape: int, num_minibatches: int, seq_len: int):
+        buffer_size = len(self.replay_buffer)
+        max_start = buffer_size - seq_len + 1
+        starts = torch.randint(0, max_start, (sample_shape,))
+        gather_ids = torch.arange(seq_len).unsqueeze(0) + starts.unsqueeze(1)
+        data = self.replay_buffer[gather_ids.view(-1)].to(self.device)
+        data = data.view(sample_shape, seq_len)
+        perm = torch.randperm(
+            (sample_shape // num_minibatches) * num_minibatches,
+            device=self.device
+        ).reshape(num_minibatches, -1)
+        for indices in perm:
+            yield data[indices]
 
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)
@@ -586,3 +599,37 @@ def parse_keys(spec: CompositeSpec, keys: list[str]):
             cnn_keys.append(key)
     return mlp_keys, cnn_keys, aux_keys
 
+def tensordict_sliding_windows(td: TensorDict, window_size: int) -> TensorDict:
+    """
+    Args:
+        td (TensorDict): A TensorDict with shape (N, T).
+        window_size (int): The length of the sliding window along dimension=1 (time).
+
+    Returns:
+        A new TensorDict of shape [N*(T - window_size + 1), window_size].
+    """
+
+    if len(td.shape) != 2:
+        raise ValueError("This helper assumes td.shape == (N, T). Got: {}".format(td.shape))
+
+    N, T = td.shape
+    if T < window_size:
+        raise ValueError(
+            f"Time dimension T={T} is smaller than window_size={window_size}."
+        )
+    
+    new_size = (N * (T - window_size + 1), window_size)
+    new_td = TensorDict({}, new_size, device=td.device)
+
+    for key, val in td.items():
+        val_unfolded = val.unfold(dimension=1, size=window_size, step=1)
+        val_unfolded = val_unfolded.contiguous()
+
+        num_windows = N * (T - window_size + 1)
+        
+        extra_dims = val.shape[2:]
+        val_unfolded = val_unfolded.view(num_windows, window_size, *extra_dims)
+        
+        new_td.set(key, val_unfolded)
+
+    return new_td
