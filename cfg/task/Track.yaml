@@ -11,6 +11,6 @@ num_envs: 4096
 max_episode_length: 2500
 
 scene: locomotion
-robot: a1
+robot: g1
 terrain: plane
 

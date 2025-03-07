@@ -15,87 +15,6 @@ from typing import Dict, List
 from .terrain import *
 
 @configclass
-class ManipulationSceneCfg(InteractiveSceneCfg):
-    
-    num_envs: int = 4096
-    env_spacing: float = 2.5
-
-    robot: ArticulationCfg = MISSING
-
-    cube = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Cube",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.0, 0.0, 0.5], rot=[1, 0, 0, 0]),
-        spawn=UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
-            scale=(1.0, 1.0, 1.0),
-            rigid_props=sim_utils.schemas_cfg.RigidBodyPropertiesCfg(
-                            solver_position_iteration_count=16,
-                            solver_velocity_iteration_count=1,
-                            disable_gravity=False,
-                        ),
-        )
-    )
-    
-    contact_forces = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True)
-    
-    light_0: AssetBaseCfg = AssetBaseCfg(
-        prim_path="/World/light_0",
-        spawn=sim_utils.DistantLightCfg(
-            color=(0.4, 0.7, 0.9),
-            intensity=3000.0,
-            angle=10,
-            exposure=0.2,
-        ),
-        init_state=ArticulationCfg.InitialStateCfg(
-            rot=(0.9330127,  0.25     ,  0.25     , -0.0669873)
-        )
-    )
-    light_1: AssetBaseCfg = AssetBaseCfg(
-        prim_path="/World/light_1",
-        spawn=sim_utils.DistantLightCfg(
-            color=(0.8, 0.5, 0.5),
-            intensity=3000.0,
-            angle=20,
-        ),
-        init_state=ArticulationCfg.InitialStateCfg(
-            rot=(0.78201786,  0.3512424 ,  0.50162613, -0.11596581)
-        )
-    )
-    light_2: AssetBaseCfg = AssetBaseCfg(
-        prim_path="/World/light_2",
-        spawn=sim_utils.DistantLightCfg(
-            color=(0.8, 0.5, 0.4),
-            intensity=3000.0,
-            angle=20,
-        ),
-        init_state=ArticulationCfg.InitialStateCfg(
-            rot=(-0.87330464,  0.        ,  0.48717451,  0.        )
-        )
-    )
-
-    terrain: TerrainImporterCfg = MISSING
-
-    height_scanner = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/pelvis",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        attach_yaw_only=True,
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=True,
-        mesh_prim_paths=["/World/ground"],
-        history_length=1
-    )
-
-    camera = TiledCameraCfg(
-        prim_path="{ENV_REGEX_NS}/camera_tpv",
-        offset=TiledCameraCfg.OffsetCfg(pos=(-3., 0., 2.), rot=[0.96592583, 0.        , 0.25881905, 0.        ], convention="world"),
-        data_types=["depth"],
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=20.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
-        ),
-        width=128,
-        height=96,
-    )
-@configclass
 class LocomotionSceneCfg(InteractiveSceneCfg):
     
     num_envs: int = 4096
@@ -103,11 +22,6 @@ class LocomotionSceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = MISSING
     contact_forces = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True)
-    # imu = ImuCfg(
-    #     prim_path="{ENV_REGEX_NS}/Robot/base", 
-    #     offset=ImuCfg.OffsetCfg(pos=(-0.02557, 0.0, 0.04232), rot=(1.0, 0.0, 0.0, 0.0)),
-    #     gravity_bias=(0.0, 0.0, 9.81),
-    #     history_length=3)
     
     light_0: AssetBaseCfg = AssetBaseCfg(
         prim_path="/World/light_0",
@@ -166,14 +80,6 @@ class LocomotionSceneCfg(InteractiveSceneCfg):
         width=128,
         height=96,
     )
-
-@configclass
-class LocoManipSceneCfg(LocomotionSceneCfg):
-    
-    env_spacing: float = 5.0
-    
-    door = DOOR_CFG
-    door.init_state.pos = (2.0, 0.0, 0.0)
     
 
 @configclass
@@ -188,9 +94,6 @@ class EnvCfg:
         eye=(3., 3., 2.5)
     )
     scene: LocomotionSceneCfg = MISSING
-
-    # decimation: int  = 1
-    # sim = sim_utils.SimulationCfg(dt=0.02, disable_contact_processing=True)
 
     decimation: int  = 4
     sim = sim_utils.SimulationCfg(dt=0.005, disable_contact_processing=True)
@@ -225,8 +128,6 @@ def LocomotionEnvCfg(task_cfg):
 
     scene_cfg_class = {
         "locomotion": LocomotionSceneCfg,
-        "locomanip": LocoManipSceneCfg,
-        "manipulation": ManipulationSceneCfg
     }[task_cfg.get("scene", "locomotion")]
 
     env_cfg = EnvCfg(

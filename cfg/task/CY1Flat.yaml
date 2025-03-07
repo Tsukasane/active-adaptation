@@ -9,8 +9,6 @@ defaults:
   - override /task/action@action: null
   - _self_
 
-robot: cy1
-terrain: easy
 payload: false
 
 action:
