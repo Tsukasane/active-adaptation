@@ -30,7 +30,6 @@ from torchrl.modules import ProbabilisticActor
 from torchrl.data import CompositeSpec
 from dataclasses import dataclass, field
 
-from .rotary import RotaryEmbedding
 import os
 
 from active_adaptation.utils.helpers import batchify
@@ -54,146 +53,6 @@ DONE_KEY = ("next", "done")
 CMD_KEY = "command"
 AMP_REWARD = "amp_reward"
 
-@dataclass
-class TransformerConfig:
-    token_dim: int = 128
-    output_dim: int = 128
-    latent_dim: int = 256
-
-    robot_tokens: int = 1
-    hist_tokens: int = 1*3
-    ref_motion_tokens: int = 5
-    context_len: int = 1 + 1*3 + 5
-
-    num_head: int = 4
-    num_layer: int = 2
-    dropout_rate: float = 0.1
-
-class Tokenizer(nn.Module):
-    def __init__(self, num_units, num_tokens, token_dim, activation=nn.Mish, norm="before", dropout=0.):
-        super().__init__()
-        assert norm in ("before", "after", None)
-        layers = []
-        for n in num_units:
-            layers.append(nn.LazyLinear(n))
-            if norm == "before":
-                layers.append(nn.LayerNorm(n))
-                layers.append(activation())
-            elif norm == "after":
-                layers.append(activation())
-                layers.append(nn.LayerNorm(n))
-            else:
-                layers.append(activation())
-            if dropout > 0. :
-                layers.append(nn.Dropout(dropout))
-        layers.append(nn.LazyLinear(num_tokens * token_dim))
-        self.model = nn.Sequential(*layers)
-        self.num_tokens = num_tokens
-        self.token_dim = token_dim
-
-    def forward(self, x):
-        x = self.model(x)
-        return x.view(*x.shape[:-1], self.num_tokens, self.token_dim)
-    
-# a BERT-style transformer block
-class Transformer_Block(nn.Module):
-    def __init__(self, latent_dim, num_head, dropout_rate) -> None:
-        super().__init__()
-        self.num_head = num_head
-        self.latent_dim = latent_dim
-        self.rope = RotaryEmbedding(latent_dim)
-        self.ln_1 = nn.LayerNorm(latent_dim)
-        self.attn = nn.MultiheadAttention(latent_dim, num_head, dropout=dropout_rate, batch_first=True)
-        self.ln_2 = nn.LayerNorm(latent_dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(latent_dim, 2 * latent_dim),
-            nn.GELU(),
-            nn.Linear(2 * latent_dim, latent_dim),
-            nn.Dropout(dropout_rate),
-        )
-    
-    def forward(self, x: torch.tensor):
-        x = self.ln_1(x)
-        q, k = self.rope(x)
-        x = x + self.attn(q, k, x, need_weights=False)[0]
-        x = self.ln_2(x)
-        x = x + self.mlp(x)
-        
-        return x
-    
-class Transformer(nn.Module):
-    def __init__(self, cfg: TransformerConfig):
-        super().__init__()
-        self.input_dim = cfg.token_dim
-        self.output_dim = cfg.output_dim
-        self.context_len = cfg.context_len
-        self.latent_dim = cfg.latent_dim
-        self.num_head = cfg.num_head
-        self.num_layer = cfg.num_layer
-        self.input_layer = nn.Sequential(
-            nn.Linear(cfg.token_dim, cfg.latent_dim),
-            nn.Dropout(cfg.dropout_rate),
-        )
-        self.attention_blocks = nn.Sequential(
-            *[Transformer_Block(cfg.latent_dim, cfg.num_head, cfg.dropout_rate) for _ in range(cfg.num_layer)],
-        )
-        self.output_layer = nn.Sequential(
-            nn.LayerNorm(cfg.latent_dim),
-            nn.Linear(cfg.latent_dim, cfg.output_dim),
-        )
-    
-    def forward(self, x):
-        x = self.input_layer(x)
-        x = self.attention_blocks(x)
-        x = self.output_layer(x)
-        return x[:, 0]          # only return the first token, shape [batch_size, output_dim]
-    
-class ReplayBuffer:
-    def __init__(self, replay_dir, device):
-        self.replay_dir = replay_dir
-        self.device = device
-
-        self.replay_buffer = self.load_replay()
-
-    def load_replay(self):
-        trajs = os.listdir(self.replay_dir)
-        self.replay_buffer_length = len(trajs)
-        replay_buffer = None
-        for traj in trajs:
-            path = os.path.join(self.replay_dir, traj)
-            buffer: TensorDict = torch.load(path).reshape(-1)
-            if replay_buffer == None:
-                replay_buffer = buffer
-            else:
-                replay_buffer = torch.cat((replay_buffer, buffer), dim=0)
-        replay_buffer.rename_key_("loc", "replay_loc")
-        replay_buffer.rename_key_("scale", "replay_scale")
-        return replay_buffer
-    
-    def sample_batch(self, sample_shape: int, num_minibatches: int):
-        ids = torch.randint(0, len(self.replay_buffer), (sample_shape,))
-        data = self.replay_buffer[ids].to(self.device)
-        perm = torch.randperm(
-            (sample_shape // num_minibatches) * num_minibatches,
-            device=self.device,
-        ).reshape(num_minibatches, -1)
-        for indices in perm:
-            yield data[indices]
-
-    def sample_seq_batch(self, sample_shape: int, num_minibatches: int, seq_len: int):
-        buffer_size = len(self.replay_buffer)
-        max_start = buffer_size - seq_len + 1
-        starts = torch.randint(0, max_start, (sample_shape,))
-        gather_ids = torch.arange(seq_len).unsqueeze(0) + starts.unsqueeze(1)
-        data = self.replay_buffer[gather_ids.view(-1)].to(self.device)
-        data = data.view(sample_shape, seq_len)
-        perm = torch.randperm(
-            (sample_shape // num_minibatches) * num_minibatches,
-            device=self.device
-        ).reshape(num_minibatches, -1)
-        for indices in perm:
-            yield data[indices]
-
 def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
     assert norm in ("before", "after", None)
     layers = []
@@ -210,42 +69,6 @@ def make_mlp(num_units, activation=nn.Mish, norm="before", dropout=0.):
         if dropout > 0. :
             layers.append(nn.Dropout(dropout))
     return nn.Sequential(*layers)
-
-class PermuteLayerNorm(nn.Module):
-    """Helper to apply LayerNorm on channel dimension for Conv1D outputs"""
-    def __init__(self, normalized_shape):
-        super().__init__()
-        self.norm = nn.LayerNorm(normalized_shape)
-        
-    def forward(self, x):
-        # Input shape: (Batch, Channels, Length)
-        x = x.permute(0, 2, 1)  # (Batch, Length, Channels)
-        x = self.norm(x)
-        x = x.permute(0, 2, 1)  # (Batch, Channels, Length)
-        return x
-
-def make_cnn1d(num_channels, kernel_size=2, activation=nn.Mish, norm="before", dropout=0.):
-    assert norm in ("before", "after", None)
-    layers = []
-    for n in num_channels[:-1]:
-        layers.append(nn.LazyConv1d(n, kernel_size, padding=kernel_size//2))
-        if norm == "before":
-            layers.append(PermuteLayerNorm(n))
-            layers.append(activation())
-        elif norm == "after":
-            layers.append(activation())
-            layers.append(PermuteLayerNorm(n))
-        else:
-            layers.append(activation())
-        if dropout > 0. :
-            layers.append(nn.Dropout(dropout))
-
-    layers.extend([
-        nn.Flatten(),
-        nn.LazyLinear(num_channels[-1])
-    ])
-    return nn.Sequential(*layers)
-
 
 def make_conv(num_channels, activation=nn.LeakyReLU, kernel_sizes=3, flatten: bool=True):
     layers = []
@@ -503,32 +326,6 @@ class NormalExtractor(nn.Module):
             x_sample = torch.cat([x_sample, x_loc.unsqueeze(-2)], dim=-2)
         return x_sample.flatten(-2), x_loc, x_scale
 
-class InferRefGap(ModBase):
-    def __init__(self, infer_key="infer_", ref_key=OBS_REF_KEY):
-        super().__init__()
-        self.infer_key = infer_key
-        self.ref_key = ref_key
-
-        self.get_root_quat = lambda x: x[:, 0:4]
-        self.get_ref_translation = lambda x: x[:, 4:19]
-        self.get_xyz = lambda x: x[:, 19:22]
-
-    def forward(self, tensordict: TensorDictBase):
-        N = tensordict.shape[0]
-        infer = tensordict.get(self.infer_key)
-        ref = tensordict.get(self.ref_key)
-        root_quat = self.get_root_quat(infer).unsqueeze(1)
-        ref_translation = self.get_ref_translation(ref).reshape(N, -1, 3)
-        xyz = self.get_xyz(infer).unsqueeze(1)
-
-        gap = ref_translation - xyz
-        gap = quat_rotate_inverse(root_quat, gap).reshape(N, -1)
-
-        dim = gap.shape[-1]
-        ref[:, -dim:] = gap
-        tensordict.set(self.ref_key, ref)
-        return tensordict
-
 class CatTensors(ModBase):
     def __init__(self, in_keys, out_key, del_keys=False, sort=True):
         super().__init__()
@@ -598,38 +395,3 @@ def parse_keys(spec: CompositeSpec, keys: list[str]):
         else:
             cnn_keys.append(key)
     return mlp_keys, cnn_keys, aux_keys
-
-def tensordict_sliding_windows(td: TensorDict, window_size: int) -> TensorDict:
-    """
-    Args:
-        td (TensorDict): A TensorDict with shape (N, T).
-        window_size (int): The length of the sliding window along dimension=1 (time).
-
-    Returns:
-        A new TensorDict of shape [N*(T - window_size + 1), window_size].
-    """
-
-    if len(td.shape) != 2:
-        raise ValueError("This helper assumes td.shape == (N, T). Got: {}".format(td.shape))
-
-    N, T = td.shape
-    if T < window_size:
-        raise ValueError(
-            f"Time dimension T={T} is smaller than window_size={window_size}."
-        )
-    
-    new_size = (N * (T - window_size + 1), window_size)
-    new_td = TensorDict({}, new_size, device=td.device)
-
-    for key, val in td.items():
-        val_unfolded = val.unfold(dimension=1, size=window_size, step=1)
-        val_unfolded = val_unfolded.contiguous()
-
-        num_windows = N * (T - window_size + 1)
-        
-        extra_dims = val.shape[2:]
-        val_unfolded = val_unfolded.view(num_windows, window_size, *extra_dims)
-        
-        new_td.set(key, val_unfolded)
-
-    return new_td

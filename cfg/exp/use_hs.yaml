@@ -1,7 +1,0 @@
-# @package _global_
-
-# This file is used to override the input keys to add the `height_scan`
-
-algo:
-  actor_in_keys: ["policy", "height_scan"]
-  critic_in_keys: ["policy", "priv", "height_scan"]

@@ -131,7 +131,7 @@ def make_env_policy(cfg: DictConfig):
 
     from active_adaptation.envs import TASKS
     from active_adaptation.utils.torchrl import StackFrames
-    from configs.rough import LocomotionEnvCfg
+    from configs.scene import LocomotionEnvCfg
     from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, CatFrames, VecNorm, StepCounter
 
     checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)

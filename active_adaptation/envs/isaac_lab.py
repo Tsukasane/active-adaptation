@@ -44,14 +44,8 @@ class RewardManager(_RewardManager):
             self._episode_sums[name] += value
         self._reward_buf = torch.stack(rewards, dim=-1)
         reward = self._reward_buf.sum(-1)
-        if False:
-            self.clip_count[reward < 0.] += 1
-            reward_clipped = reward.clamp_min(0.)
-            self._episode_sums["total"] += reward_clipped
-            return reward_clipped
-        else:
-            self._episode_sums["total"] += reward
-            return reward
+        self._episode_sums["total"] += reward
+        return reward
     
     def reset(self, env_ids: torch.Tensor) -> dict[str, torch.Tensor]:
         if env_ids is None:

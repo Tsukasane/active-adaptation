@@ -40,7 +40,7 @@ from dataclasses import dataclass, field, MISSING
 from typing import Union, Any
 from collections import OrderedDict
 
-from ..utils.valuenorm import ValueNorm1, ValueNormFake
+from .valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
 from .common import *
 
