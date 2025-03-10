@@ -86,10 +86,10 @@ randomization:
     static_friction_range: [0.6, 4.0]
     dynamic_friction_range: [0.6, 4.0]
     restitution_range: [0.0, 0.2]
-  # motor_params:
-  #   actuator_name:    legs
-  #   stiffness_range:  [0.7, 1.0]
-  #   damping_range:    [0.7, 1.0]
+  motor_params:
+    actuator_name:    legs
+    stiffness_range:  [0.7, 1.0]
+    damping_range:    [0.7, 1.0]
   reset_joint_states_uniform:
     pos_ranges:
       torso_joint: [-0.3, 0.3]
