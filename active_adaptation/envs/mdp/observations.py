@@ -12,7 +12,6 @@ from omni.isaac.lab.sensors import Camera, TiledCamera
 import omni.isaac.lab.sim as sim_utils
 from active_adaptation.utils.helpers import batchify
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
-from active_adaptation.assets import Quadruped
 from omni.isaac.lab.terrains.trimesh.utils import make_plane
 from omni.isaac.lab.utils.math import convert_quat, quat_apply, quat_apply_yaw, yaw_quat
 from omni.isaac.lab.utils.warp import convert_to_warp_mesh, raycast_mesh
@@ -1329,7 +1328,7 @@ def _initialize_warp_meshes(mesh_prim_path, device):
 class root_pos_w(Observation):
     def __init__(self, env):
         super().__init__(env)
-        self.asset: Quadruped = self.env.scene["robot"]
+        self.asset = self.env.scene["robot"]
 
     def compute(self):
         return self.asset.data.root_pos_w
@@ -1354,7 +1353,7 @@ class x_y_z_origin(Observation):
 class root_height(Observation):
     def __init__(self, env):
         super().__init__(env)
-        self.asset: Quadruped = self.env.scene["robot"]
+        self.asset = self.env.scene["robot"]
 
     def compute(self):
         return self.asset.data.root_pos_w[:, 2].unsqueeze(1)
@@ -1371,7 +1370,7 @@ class root_quat_w(Observation):
 class impact_point_w(Observation):
     def __init__(self, env):
         super().__init__(env)
-        self.asset: Quadruped = self.env.scene["robot"]
+        self.asset = self.env.scene["robot"]
 
     def compute(self):
         impact_point = self.asset.impact_point_w.reshape(self.num_envs, -1)

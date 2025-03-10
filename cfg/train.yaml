@@ -31,10 +31,10 @@ wandb:
   job_type: train
   entity: cyber dribble
   project: sim2real
-  mode: online # set to 'disabled' when debugging locally
+  mode: disabled # online, disabled
   tags: []
 
 defaults:
-  - task: CY1Walk
+  - task: test
   - algo: ppo
   - _self_

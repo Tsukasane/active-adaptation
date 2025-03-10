@@ -1,2 +1,2 @@
-from .locomotion import Command, Command2, InterpCommand, CommandPosVel, Impedance
+from .locomotion import Command, Command2
 from .motionclip import MotionClip

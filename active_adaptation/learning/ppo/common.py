@@ -39,7 +39,7 @@ quat_rotate = batchify(quat_rotate)
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
 
-OBS_KEY = "robot" # ("agents", "observation", "policy")
+OBS_KEY = "policy" # ("agents", "observation", "policy")
 OBS_PRIV_KEY = "priv"
 OBS_HIST_KEY = "history"
 OBS_LONG_HIST_KEY = "long_history"

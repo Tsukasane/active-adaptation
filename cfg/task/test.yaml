@@ -1,0 +1,103 @@
+# @package task
+
+name: Test
+task: Humanoid
+
+defaults:
+  # see https://hydra.cc/docs/advanced/overriding_packages/
+  - /task/Track@_here_
+  - override /task/action@action: null
+  - _self_
+
+payload: false
+
+action:
+  _target_: active_adaptation.envs.mdp.action.JointPosition
+  action_scaling: { "(?![l,r]arm_joint5).*" : 0.5}
+  max_delay: 1
+  alpha: [0.5, 1.0]
+
+command:
+  _target_: active_adaptation.envs.mdp.Command2
+  linvel_x_range: [0., 1.5]
+  linvel_y_range: [-0.1, 0.1]
+  angvel_range: [-1.5, 1.5]
+  yaw_stiffness_range: [0.5, 0.7]
+  use_stiffness_ratio: 1.0
+  stand_prob: 0.05
+  body_name: torso_link
+  
+observation:
+  policy:
+    command:
+    # root_quat_w:
+    root_angvel_b:  {noise_std: 0.05}
+    projected_gravity_b: {noise_std: 0.01}
+    joint_pos: {noise_std: 0.05}
+    joint_vel: {noise_std: 0.2}
+    prev_actions:   {steps: 3}
+    phase: {cycle_range: [0.9, 1.1], deriv: true}
+  priv:
+    applied_action:   {}
+    root_linvel_b:    {yaw_only: true}
+    body_pos:         {body_names: [.*palm_link, .*ankle_roll_link], yaw_only: true}
+    body_vel:         {body_names: [.*palm_link, .*ankle_roll_link], yaw_only: true}
+    feet_height_map:  {feet_names: .*ankle_pitch_link }
+    applied_torques:  {actuator_name: legs}
+    contact_indicator: {body_names: [".*ankle_roll_link"], timing: false}
+    joint_forces:     {}
+    jacobians:        {body_names: [torso_link, .*palm_link, .*ankle_roll_link]}
+
+reward:
+  loco:
+
+    linvel_exp:         {weight: 1.5, enabled: true, yaw_only: true, dim: 3, gamma: 0.9, upright: true}
+    angvel_z_exp:       {weight: 1.5, enabled: true, world_frame: true}
+    angvel_xy_l2:       {weight: 0.2, enabled: true}
+
+    linacc_z_l2:        {weight: 0.005, enabled: false}
+    linvel_projection:  {weight: 1.0, enabled: true, yaw_only: true}
+    angvel_z_exp_shaped: {weight: 1.0, enabled: false}
+    linvel_z_l2:        {weight: 0.5, enabled: true}
+    energy_l1:          {weight: 5.0e-4, enabled: true}
+    joint_acc_l2:       {weight: 1.0e-8, enabled: true}
+    joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: [.*shoulder.*, .*elbow.*]}
+    root_orientation:   {weight: 0.5, enabled: true}
+    survival:           {weight: 1.0, enabled: true}
+    action_rate_l2:     {weight: 0.02, enabled: true}
+    action_rate2_l2:    {weight: 0.01, enabled: true}
+    feet_air_time:      {weight: 1.0, enabled: true,  body_names: .*ankle_roll_link, thres: 0.4}
+    feet_slip:          {weight: 0.5, enabled: true,  body_names: .*ankle_roll_link}
+    feet_contact_count: {weight: 1.0, enabled: false, body_names: .*ankle_roll_link}
+    feet_swing:         {weight: 1.1, enabled: true,  feet_names: .*ankle_roll_link}
+    feet_orientation:   {weight: 0.2, enabled: true, feet_names: .*ankle_pitch_link, body_name: pelvis}
+    feet_step:          {weight: 1.0, enabled: true,  feet_names: .*ankle_roll_link}
+    joint_pos_default:  {weight: 0.25, enabled: true, joint_names: [.*shoulder.*, .*elbow.*, .*hip.*, .*knee.*, torso_joint]}
+    joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: [.*shoulder.*, .*elbow.*]}
+    feet_clearance:     {weight: 2.0, enabled: true, feet_names: .*ankle_roll_link}
+    undesired_contact:  {weight: 0.2, enabled: true, body_names: .*palm_link}
+
+randomization:
+  push:     {body_names: ["torso_link", "pelvis"], force_range: [0.0, 0.1]}
+  perturb_body_mass:
+    .*: [0.9, 1.1]
+  perturb_body_materials:
+    body_names: ".*ankle_roll_link"
+    static_friction_range: [0.6, 4.0]
+    dynamic_friction_range: [0.6, 4.0]
+    restitution_range: [0.0, 0.2]
+  # motor_params:
+  #   actuator_name:    legs
+  #   stiffness_range:  [0.7, 1.0]
+  #   damping_range:    [0.7, 1.0]
+  reset_joint_states_uniform:
+    pos_ranges:
+      torso_joint: [-0.3, 0.3]
+    rel: true
+
+termination:
+  crash: 
+    body_names_expr: ["pelvis", ".*hip_yaw_link", ".*shoulder_yaw_link"]
+    t_thres: 0.1
+    min_time: 0.5
+  fall_over: {xy_thres: 0.8}

@@ -39,6 +39,7 @@ def spawn_with_payload(
 
 ROBOTS = {
     "h1": H1_CFG,
+    "g1": G1_CFG,
 }
 
 for robot in ROBOTS.values():

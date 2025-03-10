@@ -60,7 +60,7 @@ class PPOConfig:
     vecnorm: Union[str, None] = None
 
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_HIST_KEY, OBS_REF_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
 cs.store("ppo", node=PPOConfig, group="algo")
@@ -108,13 +108,6 @@ class PPOPolicy(TensorDictModuleBase):
                     TensorDictModule(make_mlp([256]), [OBS_KEY], ["_mlp"]),
                     CatTensors(["_cnn", "_mlp"], out_key),
                 ]
-            elif OBS_REF_KEY in observation_spec.keys(True, True):
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_robot"]),
-                    TensorDictModule(make_mlp([256]), [OBS_HIST_KEY], ["_hist"]),
-                    TensorDictModule(make_mlp([256]), [OBS_REF_KEY], ["_ref_motion_"]),
-                    CatTensors(["_robot", "_hist", "_ref_motion_"], out_key),
-                ]
             else:
                 modules = [
                     TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
@@ -143,7 +136,7 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
-        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_HIST_KEY], decay=0.9999)
+        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_PRIV_KEY], decay=0.9999)
 
         self.count_parameters()
 
