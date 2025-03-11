@@ -6,8 +6,8 @@ defaults:
   - action: JointPosition
   - _self_
   
-# num_envs: 2
-num_envs: 4096
+num_envs: 8
+# num_envs: 4096
 max_episode_length: 2500
 
 scene: locomotion

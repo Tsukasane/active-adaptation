@@ -185,10 +185,4 @@ scripts/plot/
 scripts/policies/
 checkpoint*.pt
 *.csv
-
-# ref motion
-reference_motions/
-
-# checkpoints
-checkpoints/
-continual/
+*.pkl

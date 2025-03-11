@@ -31,7 +31,7 @@ wandb:
   job_type: train
   entity: cyber dribble
   project: sim2real
-  mode: online # online, disabled
+  mode: disabled # online, disabled
   tags: []
 
 defaults:
