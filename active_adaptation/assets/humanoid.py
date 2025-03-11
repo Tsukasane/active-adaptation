@@ -39,7 +39,7 @@ H1_CFG.actuators = {
 
 G1_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/G1/g1_minimal.usd",
+        usd_path=f"{ASSET_PATH}/G1/g1.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

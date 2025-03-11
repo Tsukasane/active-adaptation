@@ -25,7 +25,7 @@ wandb:
   run_name: ${oc.select:..task.name,test}-${oc.select:..algo.name,none}
   job_type: train
   entity: btx0424
-  project: adaptation
+  project: sim2real
   mode: online # set to 'disabled' when debugging locally
   run_id: 
   monitor_gym: True
@@ -33,7 +33,7 @@ wandb:
 
 
 defaults:
-  - task: Velocity
+  - task: Track
   - algo: ppo
   - _self_
 

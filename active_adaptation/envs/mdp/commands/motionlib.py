@@ -25,7 +25,7 @@ package_path = spec.origin
 
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
-class MotionClip(Command):
+class MotionLib(Command):
     freq: int = 50
     def __init__(
             self, 

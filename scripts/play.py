@@ -11,8 +11,8 @@ from omni.isaac.lab.app import AppLauncher
 
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from tensordict.nn import TensorDictSequential
-from active_adaptation.learning import ALGOS
 from collections import OrderedDict
+from helpers import EpisodeStats, make_env_policy, ObsNorm, export_onnx
 
 import wandb
 import logging
@@ -31,7 +31,6 @@ def main(cfg):
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
 
-    from helpers import EpisodeStats, make_env_policy, ObsNorm, export_onnx
     env, policy, vecnorm = make_env_policy(cfg)
     
     if cfg.export_policy:
