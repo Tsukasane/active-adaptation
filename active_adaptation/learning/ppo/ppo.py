@@ -96,27 +96,23 @@ class PPOPolicy(TensorDictModuleBase):
         fake_input = observation_spec.zero()
         print(fake_input)
         
-        def make_encoder(out_key: str):
-            if "height_scan" in observation_spec.keys(True, True):
-                cnn = nn.Sequential(
-                    make_conv(num_channels=[8, 8, 8]),
-                    nn.LazyLinear(64),
-                    nn.LayerNorm(64),
-                )
-                modules = [
-                    TensorDictModule(cnn, ["height_scan"], ["_cnn"]),
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], ["_mlp"]),
-                    CatTensors(["_cnn", "_mlp"], out_key),
-                ]
-            else:
-                modules = [
-                    TensorDictModule(make_mlp([256]), [OBS_KEY], [out_key])
-                ]
+        def make_actor(out_key: str):
+            modules = [
+                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
+                TensorDictModule(make_mlp([512, 256]), ["a_in"], [out_key])
+            ]
+            return modules
+        
+        def make_critic(out_key: str):
+            modules = [
+                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
+                TensorDictModule(make_mlp([512, 256]), ["c_in"], [out_key])
+            ]
             return modules
 
         _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
-            *make_encoder("_actor_feature"),
+            *make_actor("_actor_feature"),
             TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
@@ -129,7 +125,7 @@ class PPOPolicy(TensorDictModuleBase):
         
         _critic = nn.Sequential(make_mlp([256, 128]), nn.Linear(128, 1))
         self.critic = TensorDictSequential(
-            *make_encoder("_critic_feature"),
+            *make_critic("_critic_feature"),
             TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 

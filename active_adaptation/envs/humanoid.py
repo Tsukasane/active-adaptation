@@ -67,6 +67,114 @@ class Humanoid(LocomotionEnv):
         # self.command_manager.reset(env_ids=env_ids)
         # self.action_manager.reset(env_ids=env_ids)
 
+    # Observations of reference motion
+    class ref_orientation(mdp.Observation):
+
+        env: "Humanoid"
+
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_orientation = self.env.command_manager.root_orientation
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range  # (num_envs, steps)
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_orientation = self.ref_orientation[timestep].to(self.device).float()
+            return ref_orientation.reshape(self.num_envs, -1)
+
+    class ref_height(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_root_translation = self.env.command_manager.root_translations
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_root_translation = self.ref_root_translation[timestep].to(self.device).float()
+            return ref_root_translation[:, :, 2].reshape(self.num_envs, -1)
+        
+    class ref_keypoints(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_keypoints = self.ref_keypoints[timestep].to(self.device).float()    # (num_envs, steps, num_joints, 3)
+            return ref_keypoints.reshape(self.num_envs, -1)
+        
+    class ref_keypoints_gap(mdp.Observation):
+        def __init__(self, env, body_names: str, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.body_pos_local = torch.zeros(self.num_envs, len(self.body_indices), 3, device=self.device)
+
+        def update(self):
+            quat = self.robot.data.root_quat_w.unsqueeze(1)
+            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
+            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
+            self.body_pos_local = quat_rotate_inverse(quat, body_pos)
+
+        def compute(self):
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_keypoints = self.ref_keypoints[timestep].to(self.device).float()   # (num_envs, steps, num_joints, 3)
+            body_pos_local = self.body_pos_local.unsqueeze(1).expand_as(ref_keypoints)
+            ref_keypoints_gap = ref_keypoints - body_pos_local
+            return ref_keypoints_gap.reshape(self.num_envs, -1)
+    
+    class ref_trans_gap(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_root_translation = self.env.command_manager.root_translations
+
+        def compute(self):
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_root_translation = self.ref_root_translation[timestep].to(self.device).float()  # (num_envs, steps, 3)
+            ref_root_translation += self.env.scene.env_origins.unsqueeze(1)
+            self.root_pos = self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            self.gap = ref_root_translation - self.root_pos
+            ref_trans_gap = quat_rotate_inverse(root_quat_w, self.gap)
+            return ref_trans_gap.reshape(self.num_envs, -1)
+        
+        def debug_draw(self):
+            self.env.debug_draw.vector(
+                self.root_pos[:, 0],
+                self.gap[:, 0],
+                color=(1., 0., 1., 1.),
+                size=1.
+            )    
+
+    # Early Termination Conditions
     class root_deviation(mdp.Termination):
         def __init__(self, env, max_distance: float):
             super().__init__(env)
@@ -84,7 +192,7 @@ class Humanoid(LocomotionEnv):
     class root_rot_deviation(mdp.Termination):
         def __init__(self, env, max_theta: float):
             super().__init__(env)
-            self.devive = self.env.device
+            self.device = self.env.device
             self.max_theta = torch.tensor(max_theta * 3.14 / 180, device=self.env.device)
             self.robot: Articulation = self.env.scene["robot"]
 
@@ -92,38 +200,14 @@ class Humanoid(LocomotionEnv):
             timestep = (self.env.episode_length_buf - 1).cpu()
             ref_root_orientation = self.env.command_manager.root_orientation[timestep].to(self.device)
 
-            root_quat_w = self.asset.data.root_quat_w
+            root_quat_w = self.robot.data.root_quat_w
             dot_product = dot(root_quat_w, ref_root_orientation)
             deviation = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
 
             return deviation > self.max_theta
-    # class root_orientation(mdp.Reward):
-            
-    #     env: "Humanoid"
-
-    #     def __init__(self, env, weight: float, enabled: bool = True):
-    #         super().__init__(env, weight, enabled)
-    #         self.asset: Articulation = self.env.scene["robot"]
-
-    #     def compute(self) -> torch.Tensor:
-    #         z = self.asset.data.projected_gravity_b[:, 2].square().unsqueeze(1)
-    #         y = self.asset.data.projected_gravity_b[:, 1].abs().unsqueeze(1)
-    #         return z - y
     
-    # class arm_velocity_cum_error(mdp.Termination):
-    #     def __init__(self, env, thres: float=0.8):
-    #         super().__init__(env)
-    #         self.threshold = thres
-    #         self.asset: Articulation = self.env.scene["robot"]
-    #         self.action_manager: mdp.action.HumanoidWithArm = self.env.action_manager
-    #         if not isinstance(self.action_manager, mdp.action.HumanoidWithArm):
-    #             raise ValueError("`HumanoidWithArm` action manager required")
-    #         self.cum_error = self.action_manager.cum_error
-
-    #     def __call__(self):
-    #         return (self.cum_error > self.threshold).any(1, True)
     
-    # class command_arm_linvel(mdp.Observation):
+    # class command_arm_linvel(mdp.Reward):
     #     def __init__(self, env):
     #         super().__init__(env)
     #         self.asset: Articulation = self.env.scene["robot"]

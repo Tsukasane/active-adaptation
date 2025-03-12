@@ -23,7 +23,7 @@ command:
   joint_names: ""
   
 observation:
-  policy:
+  robot:
     root_quat_w:
     root_angvel_b:        {noise_std: 0.05}
     projected_gravity_b:  {noise_std: 0.01}
@@ -35,17 +35,25 @@ observation:
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
                                         yaw_only: false}
     prev_actions:         {steps: 1}
+  ref_motion_:
+    ref_orientation:      {steps: 3}
+    ref_height:           {steps: 3}
+    ref_keypoints:        {steps: 3}
+    ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
+                            steps: 3}
+    ref_trans_gap:        {steps: 3}
   priv:
-    applied_action:   {}
     root_linvel_b:    {yaw_only: true}
     body_vel:         {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
                                         yaw_only: false}
-    applied_torques:  {actuator_name: legs}
-    contact_indicator: {body_names: [".*ankle_roll_link"], timing: false}
     joint_forces:     {}
+    applied_torques:  {actuator_name: legs}
     jacobians:        {body_names: [torso_link, .*palm_link, .*ankle_roll_link]}
 
 reward:
@@ -80,3 +88,4 @@ randomization:
 
 termination:
   root_deviation: {max_distance: 0.5}
+  root_rot_deviation: {max_theta: 60}

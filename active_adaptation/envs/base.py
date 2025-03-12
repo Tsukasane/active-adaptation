@@ -149,7 +149,7 @@ class Env(EnvBase):
         for _ in range(4):
             self.sim.step(render=True)
         
-        self.max_episode_length = self.cfg.max_episode_length
+        self.max_episode_length = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.cfg.max_episode_length
         self.episode_length_buf = torch.zeros(self.num_envs, dtype=int, device=self.device)
         self.step_dt = self.physics_dt * self.cfg.decimation
         self.fix_root_link = self.scene.articulations["robot"].cfg.spawn.articulation_props.fix_root_link
