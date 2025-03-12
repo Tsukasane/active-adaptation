@@ -67,12 +67,6 @@ class LocomotionEnv(Env):
             lookat = torch.tensor(self.cfg.viewer.lookat) + robot_pos
             self.sim.set_camera_view(eye, lookat)
         return super().render(mode)
-    
-    # @mdp.reward_func
-    # def heading(self):
-    #     root_quat = self.scene["robot"].data.root_quat_w
-    #     heading_b_x = quat_rotate_inverse(root_quat, self.command_manager._command_heading)[:, [0]]
-    #     return 0.5 * (heading_b_x + heading_b_x.sign() * heading_b_x.square())
 
     @mdp.reward_func
     def action_rate_l2(self):
@@ -85,69 +79,6 @@ class LocomotionEnv(Env):
             self.action_buf[:, :, 0] - 2 * self.action_buf[:, :, 1] + self.action_buf[:, :, 2]
         )
         return - action_diff.square().sum(dim=-1, keepdim=True)
-
-    @mdp.reward_func
-    def orientation(self):
-        return -self.scene["robot"].data.projected_gravity_b[:, :2].square().sum(-1, True)
-        return self.scene["robot"].data.projected_gravity_b[:, [2]].square()
-    
-    @mdp.reward_func
-    def stand(self):
-        jpos_error = square_norm(self.scene["robot"].data.joint_pos - self.scene["robot"].data.default_joint_pos)
-        cost = - (jpos_error) * self.command_manager.is_standing_env
-        return cost
-
-    class feet_pos_b(mdp.body_pos):
-        def __init__(self, env: "LocomotionEnv", feet_names=None, yaw_only: bool=False):
-            if feet_names is None:
-                feet_names = env.feet_name_expr
-            super().__init__(env, feet_names, yaw_only=yaw_only)
-            self.asset.data.feet_pos_b = self.body_pos_b
-        
-        def fliplr(self, obs: torch.Tensor) -> torch.Tensor:
-            obs = obs.reshape(self.num_envs, 4, 3)[:, [1, 0, 3, 2]] * torch.tensor([1., -1., 1.])
-            return obs.reshape(self.num_envs, -1)
-    
-    class feet_vel_b(mdp.body_vel):
-        def __init__(self, env: "LocomotionEnv", feet_names=None, yaw_only: bool=False):
-            if feet_names is None:
-                feet_names = env.feet_name_expr
-            super().__init__(env, feet_names, yaw_only=yaw_only)
-            self.asset.data.feet_vel_b = self.body_vel_b
-        
-        def fliplr(self, obs: torch.Tensor) -> torch.Tensor:
-            obs = obs.reshape(self.num_envs, 4, 3)[:, [1, 0, 3, 2]] * torch.tensor([1., -1., 1.])
-            return obs.reshape(self.num_envs, -1)
-    
-    class base_height_l2(mdp.Reward):
-        def __init__(self, env, target_height: float, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset = self.env.scene["robot"]
-            if isinstance(target_height, str) and target_height == "command":
-                self.target_height = self.env.command_manager._target_base_height
-            else:
-                self.target_height = float(target_height)
-        
-        def compute(self) -> torch.Tensor:
-            height = self.asset.data.feet_pos_b[:, :, 2].mean(1, keepdim=True).abs()
-            height_errot = (height - self.target_height) / self.target_height
-            return - height_errot.square()
-
-    class feet_force_distribution(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset = self.env.scene["robot"]
-            self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
-            self.default_mass_total = (
-                self.asset.root_physx_view.get_masses()[0]
-                .sum().to(self.env.device)
-                * 9.81
-            )
-
-        def compute(self) -> torch.Tensor:
-            force = self.contact_sensor.data.net_forces_w_history.mean(dim=1)
-            force_norm = force.norm(dim=-1) # / self.default_mass_total
-            return force_norm.std(dim=1, keepdim=True)
 
 
 def random_scale(x: torch.Tensor, low: float, high: float):

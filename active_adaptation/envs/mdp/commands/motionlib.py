@@ -39,42 +39,36 @@ class MotionLib(Command):
         motion_clip = os.path.join(package_dir, "..", motion_clip)
         
         data = joblib.load(motion_clip)
-        selected_keys = list(data.keys())[:30]
+        selected_keys = list(data.keys())[:10]
         data = {k: data[k] for k in selected_keys}
         
         self.env_origin = self.env.scene.env_origins
         self.load_data(data)
         
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
+        motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
+        start_frames = self.start_frames[motion_ids]
+        end_frames = self.end_frames[motion_ids]
+        motion_length = self.motion_length[motion_ids]
+        r = torch.rand(motion_length.shape) * 0.5
+        offsets = (r * motion_length.float()).floor().long()
+        start_frames += offsets
+        
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
-        # init_root_state[:, :3] = 0.
-        # init_root_state[:, 3:7] = 0.
-        return init_root_state
+        init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
+        init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)
+
+        qpos = self.qpos[start_frames].to(self.device)
+        self.robot.write_joint_state_to_sim(
+            qpos,
+            self.robot.data.default_joint_vel[env_ids],
+            env_ids=env_ids
+        )
+        
+        return init_root_state, start_frames.to(self.device), end_frames.to(self.device)
     
     def reset(self, env_ids: torch.Tensor):
         pass
-    
-    # for sanity check
-    def update(self):
-        if hasattr(self, "frames"):
-            self.frames += 1
-            self.frames %= self.num_frames
-        else:
-            self.frames = torch.randint(0, self.num_frames, (self.num_envs,))
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        
-        root_state = self.robot.data.root_state_w.clone()
-        root_state[:, :3] = self.root_translations[self.frames].to(self.device) + self.env_origin + torch.tensor([0., 0., 1.0], device=self.device)
-        root_state[:, 3:7] = self.root_orientation[self.frames].to(self.device)
-        self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
-
-        qpos = self.qpos[self.frames].to(self.device)
-        self.robot.write_joint_state_to_sim(
-            qpos,
-            self.robot.data.default_joint_vel,
-            env_ids=env_ids
-        )
-        return
 
     def load_data(self, data):
         self.motion_length = []
@@ -103,6 +97,32 @@ class MotionLib(Command):
 
         self.num_motions = len(data)
         self.num_frames = self.root_translations.shape[0]
+
+        self.max_motion_length = self.motion_length.max().item()
+        self.start_frames = torch.cat([torch.zeros(1), self.motion_length.cumsum(dim=0)[:-1]]).long()
+        self.end_frames = self.motion_length.cumsum(dim=0).long()
+
+    # # for sanity check
+    # def update(self):
+    #     if hasattr(self, "frames"):
+    #         self.frames += 1
+    #         self.frames %= self.num_frames
+    #     else:
+    #         self.frames = torch.randint(0, self.num_frames, (self.num_envs,))
+    #     env_ids = torch.arange(self.num_envs, device=self.device)
+        
+    #     root_state = self.robot.data.root_state_w.clone()
+    #     root_state[:, :3] = self.root_translations[self.frames].to(self.device) + self.env_origin + torch.tensor([0., 0., 1.0], device=self.device)
+    #     root_state[:, 3:7] = self.root_orientation[self.frames].to(self.device)
+    #     self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
+
+    #     qpos = self.qpos[self.frames].to(self.device)
+    #     self.robot.write_joint_state_to_sim(
+    #         qpos,
+    #         self.robot.data.default_joint_vel,
+    #         env_ids=env_ids
+    #     )
+    #     return
 
 def mujoco_to_isaac():
     mujoco_to_isaac = []
