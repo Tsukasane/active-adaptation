@@ -100,6 +100,17 @@ class BufferedObs(Observation):
     def reset(self, env_ids: torch.Tensor):
         self.buffer.reset(env_ids)
 
+def observation_func(func):
+
+    class ObsFunc(Observation):
+        def __init__(self, env, **params):
+            super().__init__(env)
+            self.params = params
+
+        def compute(self):
+            return func(self.env, **self.params)
+    
+    return ObsFunc
 
 class linvel_b_buffer(BufferedObs):
     def __init__(self, env, size: int=4):
@@ -287,41 +298,6 @@ class imu_angvel(Observation):
 
     def compute(self):
         return self.angvel_buf.mean(dim=2).view(self.env.num_envs, -1)
-
-
-def observation_func(func):
-
-    class ObsFunc(Observation):
-        def __init__(self, env, **params):
-            super().__init__(env)
-            self.params = params
-
-        def compute(self):
-            return func(self.env, **self.params)
-    
-    return ObsFunc
-
-
-class command(Observation):
-    def __init__(self, env, mask_ratio: float = 0):
-        super().__init__(env, mask_ratio)
-        self.command_manager = self.env.command_manager
-
-    def compute(self):
-        return self.command_manager.command
-    
-    def fliplr(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.command_manager.fliplr(obs)
-
-
-class command_hidden(Observation):
-    def __init__(self, env, mask_ratio: float = 0):
-        super().__init__(env, mask_ratio)
-        self.command_manager = self.env.command_manager
-    
-    def compute(self):
-        return self.command_manager.command_hidden
-
 
 class root_angvel_b(Observation):
     def __init__(self, env, noise_std: float=0., yaw_only: bool=False, mask_ratio: float=0.):
@@ -906,86 +882,6 @@ class head_height(Observation):
     def debug_draw(self):
         self.env.debug_draw.vector(self.ray_start_w, self.ray_hit_w - self.ray_start_w, color=(1., 0., 1., 1.))
 
-
-class path_integrator(Observation):
-    
-    decimation: int = 3
-
-    def __init__(self, env, mask_ratio: float = 0):
-        super().__init__(env, mask_ratio)
-        self.asset: Articulation = self.env.scene["robot"]
-        _initialize_warp_meshes("/World/ground", "cuda")
-        with torch.device(self.device):
-            self.ray_starts = torch.tensor(
-                [
-                    [0., 0., 10.], 
-                    [0.1, 0.1, 10.],
-                    [0.1, -.1, 10.],
-                    [-.1, -.1, 10.],
-                    [-.1, 0.1, 10.],
-                ],
-                device=self.device
-            )
-            self.ray_directions = torch.tensor([0., 0., -1.], device=self.device)
-            
-            self.target_pos_w = torch.zeros(self.num_envs, 3)
-            self.target_pos_w_hist = torch.zeros(self.num_envs, 3, 40)
-            self.pos_w_hist = torch.zeros(self.num_envs, 3, 40)
-
-            self.ray_hits_height = torch.zeros(self.num_envs)
-        
-        self.num_rays = len(self.ray_starts)
-        self.command_manager = self.env.command_manager
-        self.step_cnt = 0
-
-    def reset(self, env_ids: torch.Tensor):
-        root_pos_w = self.asset.data.root_pos_w[env_ids]
-        self.target_pos_w[env_ids] = root_pos_w
-        self.target_pos_w_hist[env_ids, :, :] = root_pos_w.unsqueeze(2)
-        self.pos_w_hist[env_ids, :, :] = root_pos_w.unsqueeze(2)
-
-    def update(self):
-        root_quat = yaw_quat(self.asset.data.root_quat_w)
-        command_linvel_b = self.command_manager.command_linvel
-        command_linvel_w = quat_rotate(root_quat, command_linvel_b)
-        
-        ray_starts_w = self.target_pos_w.unsqueeze(1) + self.ray_starts
-        ray_hits_w = raycast_mesh(
-            ray_starts_w,
-            self.ray_directions.expand_as(ray_starts_w).clone(),
-            max_dist=100.,
-            mesh=RayCaster.meshes["/World/ground"],
-        )[0]
-        self.ray_hits_height[:] = ray_hits_w[:, :, 2].mean(1)
-
-        self.target_pos_w.add_(command_linvel_w * self.env.step_dt)
-        self.target_pos_w[:, 2] = self.ray_hits_height + 0.35
-        self.target_pos_w[:, :2].lerp_(self.asset.data.root_pos_w[:, :2], 0.01)
-        if self.step_cnt % self.decimation == 0:
-            self.target_pos_w_hist[:, :, 1:] = self.target_pos_w_hist[:, :, :-1]
-            self.target_pos_w_hist[:, :, 0] = self.target_pos_w
-            self.pos_w_hist[:, :, 1:] = self.pos_w_hist[:, :, :-1]
-            self.pos_w_hist[:, :, 0] = self.asset.data.root_pos_w
-        self.step_cnt += 1
-    
-    def compute(self) -> torch.Tensor:
-        return torch.zeros(self.num_envs, 1, device=self.device)
-    
-    def debug_draw(self):
-        mix = self.pos_w_hist.lerp(self.target_pos_w_hist, 0.5)
-        for x in self.target_pos_w_hist.unbind(0):
-            self.env.debug_draw.plot(
-                x.T,
-                color=(0., 1., 1., 1.)
-            )
-        for x in mix.unbind(0):
-            # use purple
-            self.env.debug_draw.plot(
-                x.T,
-                color=(1., 0., 1., 1.)
-            )
-
-
 class height_scan(Observation):
     def __init__(self, env, prim_path, flatten: bool=False, noise_scale = 0.005):
         super().__init__(env)
@@ -1185,17 +1081,6 @@ class jacobians_b(Observation):
 
         return jacobian_b.reshape(self.num_envs, -1)
 
-class cum_error(Observation):
-    def __init__(self, env):
-        super().__init__(env)
-        self.command_manager = self.env.command_manager
-    
-    def compute(self) -> torch.Tensor:
-        return self.command_manager._cum_error
-
-    def fliplr(self, obs: torch.Tensor) -> torch.Tensor:
-        return obs
-
 
 class clock(Observation):
     def __init__(self, env, frequencies: list[int]=[1, 2, 4]):
@@ -1253,16 +1138,6 @@ class phase(Observation):
             ], 1)
         else:
             return torch.stack([phase_sin, phase_cos], 1)
-        
-    
-class dummy(Observation):
-    def __init__(self, env, load_path: str):
-        super().__init__(env)
-        self.obs: torch.Tensor = torch.load(load_path).to(self.device)
-    
-    def compute(self) -> torch.Tensor:
-        return self.obs.expand(self.num_envs, -1)
-
 
 class camera(Observation):
     def __init__(self, env, name: str, key: str="depth"):
@@ -1332,23 +1207,6 @@ class root_pos_w(Observation):
 
     def compute(self):
         return self.asset.data.root_pos_w
-    
-class x_y_z_origin(Observation):
-    def __init__(self, env):
-        super().__init__(env)
-        self.asset = self.env.scene["robot"]
-        self.origin = env.scene.env_origins
-
-    def compute(self):
-        root_pos_xy = self.asset.data.root_pos_w - self.origin
-        return root_pos_xy
-    
-    def debug_draw(self):
-        self.env.debug_draw.point(
-            self.asset.data.root_pos_w,
-            color=(1., 0., 1., 1.),
-            size=20
-        )
     
 class root_height(Observation):
     def __init__(self, env):

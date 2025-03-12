@@ -29,15 +29,18 @@ class MotionLib(Command):
             self, 
             env,
             motion_clip: str,
-            joint_names: Sequence[str],
+            occlusion: str,
             teleop: bool = False,
         ):
         super().__init__(env, teleop=teleop)
         self.robot: Articulation = env.scene["robot"]
 
+        occlusion_path = os.path.join(package_dir, "..", occlusion)
+        occlusion_keys = joblib.load(occlusion_path)
+
         package_dir = os.path.dirname(package_path)
         motion_clip = os.path.join(package_dir, "..", motion_clip)
-        
+
         data = joblib.load(motion_clip)
         selected_keys = list(data.keys())[:10]
         data = {k: data[k] for k in selected_keys}
@@ -53,7 +56,7 @@ class MotionLib(Command):
         r = torch.rand(motion_length.shape) * 0.5
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
-        
+
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
         init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)

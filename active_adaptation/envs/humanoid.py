@@ -172,7 +172,57 @@ class Humanoid(LocomotionEnv):
                 self.gap[:, 0],
                 color=(1., 0., 1., 1.),
                 size=1.
-            )    
+            )
+    
+    # Motion Tracking Reward
+    class tracking_root_trans(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device) + self.env.scene.env_origins
+            root_pos_w = self.robot.data.root_pos_w
+            error = (root_pos_w - ref_root_translation).square().sum(-1, True)
+            reward = torch.exp(- error.sqrt() / self.sigma)
+            return reward
+        
+    class tracking_root_rot(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            ref_root_orientation = self.env.command_manager.root_orientation[timestep].to(self.device)
+            root_quat_w = self.robot.data.root_quat_w
+            dot_product = dot(root_quat_w, ref_root_orientation)
+            error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
+            reward = torch.exp(- error / self.sigma)
+            return reward
+        
+    class tracking_keypoints(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
+            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
+            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
+
+            diff = (ref_keypoints - body_pos_local).norm(dim=-1)
+            error = diff.square().sum(-1, True)
+            reward = torch.exp(- error.sqrt() / self.sigma)
+            return reward
 
     # Early Termination Conditions
     class root_deviation(mdp.Termination):
@@ -205,18 +255,6 @@ class Humanoid(LocomotionEnv):
             deviation = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
 
             return deviation > self.max_theta
-    
-    
-    # class command_arm_linvel(mdp.Reward):
-    #     def __init__(self, env):
-    #         super().__init__(env)
-    #         self.asset: Articulation = self.env.scene["robot"]
-    #         self.action_manager: mdp.action.HumanoidWithArm = self.env.action_manager
-    #         if not isinstance(self.action_manager, mdp.action.HumanoidWithArm):
-    #             raise ValueError("`HumanoidWithArm` action manager required")
-
-    #     def compute(self) -> torch.Tensor:
-    #         return self.action_manager.command_arm_linvel.reshape(self.num_envs, -1)
 
 def dot(a: torch.Tensor, b: torch.Tensor):
     return (a * b).sum(-1, True)

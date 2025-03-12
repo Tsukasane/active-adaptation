@@ -20,7 +20,7 @@ action:
 command:
   _target_: active_adaptation.envs.mdp.MotionLib
   motion_clip: "scripts/data/amass_all.pkl"
-  joint_names: ""
+  occlusion: "scripts/data/amass_copycat_occlusion_v3.pkl"
   
 observation:
   robot:
@@ -58,6 +58,13 @@ observation:
 
 reward:
   loco:
+    tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
+    tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
+    tracking_keypoints:     {weight: 1.0, enabled: true, sigma: 0.64,
+                              body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link]}
 
     survival:           {weight: 1.0, enabled: true}
 
