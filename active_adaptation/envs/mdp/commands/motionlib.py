@@ -16,8 +16,10 @@ import joblib
 import os
 import importlib.util
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 from tqdm import tqdm
 import numpy as np
+from scipy.interpolate import interp1d
 
 spec = importlib.util.find_spec("active_adaptation")
 package_path = spec.origin
@@ -25,6 +27,8 @@ package_path = spec.origin
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
 class MotionLib(Command):
+    source_fps: int = 30
+    target_fps: int = 50
     def __init__(
             self, 
             env,
@@ -35,23 +39,31 @@ class MotionLib(Command):
         super().__init__(env, teleop=teleop)
         self.robot: Articulation = env.scene["robot"]
 
-        occlusion_path = os.path.join(package_dir, "..", occlusion)
-        occlusion_keys = joblib.load(occlusion_path)
-
         package_dir = os.path.dirname(package_path)
+
+        occlusion_path = os.path.join(package_dir, "..", occlusion)
+        occlusion_keys = joblib.load(occlusion_path).keys()
+        occlusion_keys = [k.replace("_poses", "_stageii") for k in occlusion_keys]
+
         motion_clip = os.path.join(package_dir, "..", motion_clip)
 
         data = joblib.load(motion_clip)
-        selected_keys = list(data.keys())[:10]
-        data = {k: data[k] for k in selected_keys}
+        data = {k: v for k, v in data.items() if k not in occlusion_keys}
+        
+        # for example, only load 10 motions
+        # selected_keys = list(data.keys())[:10]
+        # data = {k: data[k] for k in selected_keys}
         
         self.env_origin = self.env.scene.env_origins
+        self.bodys = [j[0] for j in joint_matches]
         self.load_data(data)
         
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
-        motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
+        # motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
+        motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * 2
         start_frames = self.start_frames[motion_ids]
         end_frames = self.end_frames[motion_ids]
+
         motion_length = self.motion_length[motion_ids]
         r = torch.rand(motion_length.shape) * 0.5
         offsets = (r * motion_length.float()).floor().long()
@@ -59,6 +71,7 @@ class MotionLib(Command):
 
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
+        init_root_state[:, :3] += torch.tensor([0, 0, 0.05], device=self.device)
         init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)
 
         qpos = self.qpos[start_frames].to(self.device)
@@ -85,18 +98,23 @@ class MotionLib(Command):
         pbar = tqdm(data.items())
         for k, motion in pbar:
             pbar.set_description(f"Loading {k}: ")
-            self.motion_length.append(motion["root_trans_offset"].shape[0])
-            self.root_translations.append(torch.tensor(motion["root_trans_offset"]))
-            self.root_orientation.append(torch.tensor(motion["root_rot"][:, [3, 0, 1, 2]]))
-            self.qpos.append(torch.tensor(motion["dof"])[:, mujoco_to_isaac_idx])
-            kp = convert2local(motion["smpl_joints"], motion["root_rot"])
-            self.kp.append(torch.tensor(kp))
+            interpolated_root_trans = self.interpolate(motion, "root_trans_offset", self.source_fps, self.target_fps)
+            interpolated_root_rot = self.interpolate(motion, "root_rot", self.source_fps, self.target_fps)
+            interpolated_qpos = self.interpolate(motion, "dof", self.source_fps, self.target_fps)
+            interpolated_kp = self.interpolate(motion, "smpl_joints", self.source_fps, self.target_fps)
+            interpolated_kp_local = convert2local(interpolated_kp, interpolated_root_rot)
+
+            self.motion_length.append(interpolated_root_trans.shape[0])
+            self.root_translations.append(interpolated_root_trans)
+            self.root_orientation.append(interpolated_root_rot[:, [3, 0, 1, 2]])
+            self.qpos.append(interpolated_qpos[:, mujoco_to_isaac_idx])
+            self.kp.append(interpolated_kp_local)
 
         self.motion_length = torch.tensor(self.motion_length)
-        self.root_translations = torch.cat(self.root_translations, dim=0)
-        self.root_orientation = torch.cat(self.root_orientation, dim=0)
-        self.qpos = torch.cat(self.qpos, dim=0)
-        self.kp = torch.cat(self.kp, dim=0)
+        self.root_translations = torch.cat(self.root_translations, dim=0).float()
+        self.root_orientation = torch.cat(self.root_orientation, dim=0).float()
+        self.qpos = torch.cat(self.qpos, dim=0).float()
+        self.kp = torch.cat(self.kp, dim=0).float()
 
         self.num_motions = len(data)
         self.num_frames = self.root_translations.shape[0]
@@ -105,17 +123,35 @@ class MotionLib(Command):
         self.start_frames = torch.cat([torch.zeros(1), self.motion_length.cumsum(dim=0)[:-1]]).long()
         self.end_frames = self.motion_length.cumsum(dim=0).long()
 
+    def interpolate(self, motion, key, source_fps, target_fps):
+        motion_data = motion[key]
+        motion_length = motion_data.shape[0]
+
+        source_time = np.linspace(0, motion_length / source_fps, motion_length)
+        target_length = int(np.ceil(motion_length * target_fps / source_fps))
+        target_time = np.linspace(0, motion_length / source_fps, target_length)
+
+        if key == "root_rot":
+            rotations = R.from_quat(motion_data)
+            slerp = Slerp(source_time, rotations)
+            interpolated_quats = slerp(target_time).as_quat()
+            return torch.tensor(interpolated_quats)
+
+        elif key in ["root_trans_offset", "dof", "smpl_joints"]:
+            interpolator = interp1d(source_time, motion_data, axis=0, kind="linear", fill_value="extrapolate")
+            interpolated = interpolator(target_time)
+            return torch.tensor(interpolated)
+
+        else:
+            raise NotImplementedError(f"Interpolation for key '{key}' is not implemented.")
+
     # # for sanity check
     # def update(self):
-    #     if hasattr(self, "frames"):
-    #         self.frames += 1
-    #         self.frames %= self.num_frames
-    #     else:
-    #         self.frames = torch.randint(0, self.num_frames, (self.num_envs,))
+    #     self.frames = self.env.episode_length_buf.cpu()
     #     env_ids = torch.arange(self.num_envs, device=self.device)
         
     #     root_state = self.robot.data.root_state_w.clone()
-    #     root_state[:, :3] = self.root_translations[self.frames].to(self.device) + self.env_origin + torch.tensor([0., 0., 1.0], device=self.device)
+    #     root_state[:, :3] = self.root_translations[self.frames].to(self.device) + self.env_origin + torch.tensor([0, 0, 1.], device=self.device)
     #     root_state[:, 3:7] = self.root_orientation[self.frames].to(self.device)
     #     self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
 
@@ -127,29 +163,29 @@ class MotionLib(Command):
     #     )
     #     return
 
+def convert2local(kp, root_orientation):
+    r'''
+    Args:
+        kp: (N, 24, 3)  torch tensor in global coordinate system
+        root_orientation: (N, 4)    in format of quaternion (x, y, z, w)
+    Returns:
+        smpl_kp: (N, 24, 3) in local coordinate system
+    '''
+    smpl_idx = [SMPL_BONE_ORDER_NAMES.index(j[1]) for j in joint_matches]
+    smpl_root = kp[:, 0:1, :]
+    smpl_kp = kp - smpl_root
+    smpl_kp = smpl_kp[:, smpl_idx, :]
+    root_orient_inv = torch.tensor(R.from_quat(root_orientation.cpu().numpy()).inv().as_matrix())
+    smpl_kp = torch.einsum('nij, nkj->nki', root_orient_inv, smpl_kp)
+    # animate_3d(smpl_kp, root_orientation)
+    return smpl_kp
+
 def mujoco_to_isaac():
     mujoco_to_isaac = []
     for joint in isaacsim_joints:
         mujoco_index = mujoco_joints.index(joint)
         mujoco_to_isaac.append(mujoco_index)
     return mujoco_to_isaac
-
-def convert2local(kp, root_orientation):
-    r'''
-    Args:
-        kp: (N, 24, 3)
-        root_orientation: (N, 4)    in format of quaternion (x, y, z, w)
-    Returns:
-        smpl_kp: (N, 24, 3) in local coordinate system
-    '''
-    smpl_idx = [SMPL_BONE_ORDER_NAMES.index(j[1]) for j in joint_matches]
-    smpl_root = kp[:, 0]
-    smpl_kp = kp - smpl_root[:, None]
-    smpl_kp = smpl_kp[:, smpl_idx]
-    root_orient_inv = R.from_quat(root_orientation).inv().as_matrix()
-    smpl_kp = np.einsum('nij, nkj->nki', root_orient_inv, smpl_kp)
-    # animate_3d(smpl_kp, root_orientation)
-    return smpl_kp
 
 from matplotlib import pyplot as plt
 import matplotlib.animation as animation
@@ -267,29 +303,18 @@ mujoco_joints = [
 ]
 
 isaacsim_joints = [
-    "left_hip_pitch_joint",
-    "right_hip_pitch_joint",
+    "left_hip_pitch_joint", "right_hip_pitch_joint",
     "torso_joint",
-    "left_hip_roll_joint",
-    "right_hip_roll_joint",
-    "left_shoulder_pitch_joint",
-    "right_shoulder_pitch_joint",
-    "left_hip_yaw_joint",
-    "right_hip_yaw_joint",
-    "left_shoulder_roll_joint",
-    "right_shoulder_roll_joint",
-    "left_knee_joint",
-    "right_knee_joint",
-    "left_shoulder_yaw_joint",
-    "right_shoulder_yaw_joint",
-    "left_ankle_pitch_joint",
-    "right_ankle_pitch_joint",
-    "left_elbow_pitch_joint",
-    "right_elbow_pitch_joint",
-    "left_ankle_roll_joint",
-    "right_ankle_roll_joint",
-    "left_elbow_roll_joint",
-    "right_elbow_roll_joint",
+    "left_hip_roll_joint", "right_hip_roll_joint",
+    "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
+    "left_hip_yaw_joint", "right_hip_yaw_joint",
+    "left_shoulder_roll_joint", "right_shoulder_roll_joint",
+    "left_knee_joint", "right_knee_joint",
+    "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
+    "left_ankle_pitch_joint", "right_ankle_pitch_joint",
+    "left_elbow_pitch_joint", "right_elbow_pitch_joint",
+    "left_ankle_roll_joint", "right_ankle_roll_joint",
+    "left_elbow_roll_joint", "right_elbow_roll_joint",
     "left_five_joint",
     "left_three_joint",
     "left_zero_joint",

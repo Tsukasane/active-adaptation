@@ -19,7 +19,7 @@ action:
 
 command:
   _target_: active_adaptation.envs.mdp.MotionLib
-  motion_clip: "scripts/data/amass_all.pkl"
+  motion_clip: "scripts/data/transitions.pkl"
   occlusion: "scripts/data/amass_copycat_occlusion_v3.pkl"
   
 observation:
@@ -36,39 +36,50 @@ observation:
                                         yaw_only: false}
     prev_actions:         {steps: 1}
   ref_motion_:
-    ref_orientation:      {steps: 3}
-    ref_height:           {steps: 3}
-    ref_keypoints:        {steps: 3}
+    ref_orientation:      {steps: 5}
+    ref_height:           {steps: 5}
+    ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                          .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                          .*knee.*, .*shoulder_yaw.*,
+                                          .*ankle_pitch.*, .*elbow_pitch.*,
+                                          .*ankle_roll.*, .*elbow_roll.*],
+                            steps: 5}
+    ref_keypoints:        {steps: 5}
     ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
-                            steps: 3}
-    ref_trans_gap:        {steps: 3}
+                            steps: 5}
+    ref_trans_gap:        {steps: 5}
   priv:
-    root_linvel_b:    {yaw_only: true}
+    root_height:      {}
+    root_linvel_b:    {}
     body_vel:         {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
                                         yaw_only: false}
     joint_forces:     {}
-    applied_torques:  {actuator_name: legs}
-    jacobians:        {body_names: [torso_link, .*palm_link, .*ankle_roll_link]}
 
 reward:
   loco:
-    tracking_root_trans:    {weight: 1.0, enabled: true, sigma: 0.81}
-    tracking_root_rot:      {weight: 1.0, enabled: true, sigma: 0.81}
-    tracking_keypoints:     {weight: 1.0, enabled: true, sigma: 0.64,
-                              body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
-                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
-                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
-                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link]}
+    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.81}
+    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.81}
+    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.64,
+                              joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                            .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                            .*knee.*, .*shoulder_yaw.*,
+                                            .*ankle_pitch.*, .*elbow_pitch.*,
+                                            .*ankle_roll.*, .*elbow_roll.*]}
+    tracking_keypoints:     {weight: 5., enabled: true, sigma: 0.64,
+                              body_names: [left_hip_pitch_link, left_knee_link,
+                                        right_hip_pitch_link, right_knee_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link]}
+    tracking_eff:           {weight: 5., enabled: true, sigma: 0.64,
+                              body_names: [left_ankle_roll_link, left_zero_link,
+                                        right_ankle_roll_link, right_zero_link]}
 
-    survival:           {weight: 1.0, enabled: true}
-
-    energy_l1:          {weight: 5.0e-4, enabled: true}
     joint_acc_l2:       {weight: 1.0e-8, enabled: true}
     joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: .*}
     joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: .*}
@@ -90,9 +101,13 @@ randomization:
     damping_range:    [0.7, 1.0]
   reset_joint_states_uniform:
     pos_ranges:
-      .*: [-0.3, 0.3]
+      .*: [-0.1, 0.1]
     rel: true
 
 termination:
+  dummy: {}
   root_deviation: {max_distance: 0.5}
-  root_rot_deviation: {max_theta: 60}
+  root_rot_deviation: {max_theta: 45}
+  track_kp_error: {max_distance: 0.5, 
+                  body_names: [ left_ankle_roll_link, left_zero_link,
+                                right_ankle_roll_link, right_zero_link]}

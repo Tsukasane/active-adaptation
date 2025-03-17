@@ -200,7 +200,7 @@ class body_pos(CartesianObs):
     ):
         super().__init__(env, body_names, left_bodies, right_bodies)
         self.yaw_only = yaw_only
-        print(f"Track body position for {self.body_names}")
+        # print(f"Track body position for {self.body_names}")
         self.body_pos_b = torch.zeros(self.env.num_envs, len(self.body_indices), 3, device=self.env.device)
 
     def update(self):
@@ -227,7 +227,7 @@ class body_vel(CartesianObs):
     ):
         super().__init__(env, body_names, left_bodies, right_bodies)
         self.yaw_only = yaw_only
-        print(f"Track body vel for {self.body_names}")
+        # print(f"Track body vel for {self.body_names}")
         self.body_vel_b = torch.zeros(self.num_envs, len(self.body_indices), 3, device=self.env.device)
 
     def update(self):
@@ -340,10 +340,9 @@ class projected_gravity_b(Observation):
 
 
 class root_linvel_b(Observation):
-    def __init__(self, env, body_names: str=None, yaw_only: bool=False, mask_ratio: float=0):
+    def __init__(self, env, body_names: str=None, mask_ratio: float=0):
         super().__init__(env, mask_ratio=mask_ratio)
         self.asset: Articulation = self.env.scene["robot"]
-        self.yaw_only = yaw_only
         if body_names is not None:
             self.body_ids, self.body_names = self.asset.find_bodies(body_names)
             self.body_masses = self.asset.root_physx_view.get_masses()[0, self.body_ids]
@@ -355,19 +354,9 @@ class root_linvel_b(Observation):
     
     def update(self):
         if self.body_ids is None:
-            if self.yaw_only:
-                root_quat = yaw_quat(self.asset.data.root_quat_w)
-                linvel = quat_rotate_inverse(
-                    root_quat,
-                    self.asset.data.root_lin_vel_w
-                )
-            else:
-                linvel = self.asset.data.root_lin_vel_b
+            linvel = self.asset.data.root_lin_vel_b
         else:
-            if self.yaw_only:
-                root_quat = yaw_quat(self.asset.data.root_quat_w)
-            else:
-                root_quat = self.asset.data.root_quat_w
+            root_quat = self.asset.data.root_quat_w
             linvel = quat_rotate_inverse(
                 root_quat,
                 (self.asset.data.body_lin_vel_w[:, self.body_ids] * self.body_masses).sum(1)
