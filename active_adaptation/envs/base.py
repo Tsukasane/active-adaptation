@@ -252,17 +252,12 @@ class Env(EnvBase):
         # parse rewards
         self.clip_rewards = self.cfg.reward.pop("_clip_", False)
         self.reward_groups = OrderedDict()
-        total_weight = 0.
-        for group_name, func_specs in self.cfg.reward.items():
-            for key, params in func_specs.items():
-                total_weight += params["weight"]
 
         for group_name, func_specs in self.cfg.reward.items():
             print(f"Reward group: {group_name}")
             funcs = OrderedDict()
             for key, params in func_specs.items():
                 reward: mdp.Reward = REW_FUNCS[key](self, **params)
-                reward.weight /= total_weight
                 funcs[key] = reward
                 reward_spec["stats", group_name, key] = UnboundedContinuous(1, device=self.device)
                 self._update_callbacks.append(reward.update)

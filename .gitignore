@@ -183,6 +183,7 @@ scripts/*.yaml
 scripts/file/
 scripts/plot/
 scripts/policies/
+scripts/data/
 checkpoint*.pt
 *.csv
 *.pkl

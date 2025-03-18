@@ -26,6 +26,8 @@ package_path = spec.origin
 
 quat_rotate_inverse = batchify(quat_rotate_inverse)
 
+CURRENT_MOTION = 0
+
 class MotionLib(Command):
     source_fps: int = 30
     target_fps: int = 50
@@ -34,6 +36,7 @@ class MotionLib(Command):
             env,
             motion_clip: str,
             occlusion: str,
+            mode: str = "train",
             teleop: bool = False,
         ):
         super().__init__(env, teleop=teleop)
@@ -57,10 +60,24 @@ class MotionLib(Command):
         self.env_origin = self.env.scene.env_origins
         self.bodys = [j[0] for j in joint_matches]
         self.load_data(data)
-        
+
+        self.mode = mode
+        if mode == "play":
+            from pynput import keyboard
+            def on_press(key):
+                global CURRENT_MOTION
+                try:
+                    if key.char == "n":
+                        CURRENT_MOTION += 1
+                        CURRENT_MOTION %= self.num_motions
+                        print(f"\nSwitching to motion {CURRENT_MOTION}")
+                except AttributeError:
+                    pass
+            self.listener = keyboard.Listener(on_press=on_press)
+            self.listener.start()
+    
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
-        # motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
-        motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * 2
+        motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
         start_frames = self.start_frames[motion_ids]
         end_frames = self.end_frames[motion_ids]
 
@@ -69,9 +86,15 @@ class MotionLib(Command):
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
 
+        if self.mode == "play":
+            motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * CURRENT_MOTION
+            start_frames = self.start_frames[motion_ids]
+            end_frames = self.end_frames[motion_ids]
+            print("Current motion: ", CURRENT_MOTION, "Start frame: ", start_frames, "End frame: ", end_frames)
+
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
-        init_root_state[:, :3] += torch.tensor([0, 0, 0.05], device=self.device)
+        init_root_state[:, :3] += torch.tensor([0, 0, 0.03], device=self.device)
         init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)
 
         qpos = self.qpos[start_frames].to(self.device)
