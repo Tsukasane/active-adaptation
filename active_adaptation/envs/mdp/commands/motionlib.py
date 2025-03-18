@@ -53,10 +53,6 @@ class MotionLib(Command):
         data = joblib.load(motion_clip)
         data = {k: v for k, v in data.items() if k not in occlusion_keys}
         
-        # for example, only load 10 motions
-        # selected_keys = list(data.keys())[:10]
-        # data = {k: data[k] for k in selected_keys}
-        
         self.env_origin = self.env.scene.env_origins
         self.bodys = [j[0] for j in joint_matches]
         self.load_data(data)
@@ -82,7 +78,7 @@ class MotionLib(Command):
         end_frames = self.end_frames[motion_ids]
 
         motion_length = self.motion_length[motion_ids]
-        r = torch.rand(motion_length.shape) * 0.5
+        r = torch.rand(motion_length.shape)
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
 
@@ -113,6 +109,7 @@ class MotionLib(Command):
         self.motion_length = []
         self.root_translations = []
         self.root_orientation = []
+        self.root_linear = []
         self.qpos = []
         self.kp = []
 
@@ -129,6 +126,9 @@ class MotionLib(Command):
 
             self.motion_length.append(interpolated_root_trans.shape[0])
             self.root_translations.append(interpolated_root_trans)
+            self.root_linear.append(torch.diff(interpolated_root_trans,
+                                               dim=0,
+                                               append=torch.zeros(1, 3)) * self.target_fps)
             self.root_orientation.append(interpolated_root_rot[:, [3, 0, 1, 2]])
             self.qpos.append(interpolated_qpos[:, mujoco_to_isaac_idx])
             self.kp.append(interpolated_kp_local)
@@ -136,13 +136,13 @@ class MotionLib(Command):
         self.motion_length = torch.tensor(self.motion_length)
         self.root_translations = torch.cat(self.root_translations, dim=0).float()
         self.root_orientation = torch.cat(self.root_orientation, dim=0).float()
+        self.root_linear = torch.cat(self.root_linear, dim=0).float()
         self.qpos = torch.cat(self.qpos, dim=0).float()
         self.kp = torch.cat(self.kp, dim=0).float()
 
         self.num_motions = len(data)
         self.num_frames = self.root_translations.shape[0]
 
-        self.max_motion_length = self.motion_length.max().item()
         self.start_frames = torch.cat([torch.zeros(1), self.motion_length.cumsum(dim=0)[:-1]]).long()
         self.end_frames = self.motion_length.cumsum(dim=0).long()
 

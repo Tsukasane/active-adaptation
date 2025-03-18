@@ -60,8 +60,8 @@ class Humanoid(LocomotionEnv):
 
         self.scene.reset(env_ids)
 
-        self.episode_length_buf[env_ids] = 0
-        self.max_episode_length[env_ids] = end_frames - start_frames
+        self.episode_length_buf[env_ids] = start_frames
+        self.max_episode_length[env_ids] = end_frames
 
         # in `self._reset_callbacks`
         # self.command_manager.reset(env_ids=env_ids)
@@ -221,6 +221,20 @@ class Humanoid(LocomotionEnv):
             reward = torch.exp(- error / self.sigma)
             return reward
         
+    class tracking_root_linear(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_root_linear = self.env.command_manager.root_linear[timestep].to(self.device)
+            root_linear = self.robot.data.root_lin_vel_w
+            error = (root_linear - ref_root_linear).square().sum(-1, True)
+            reward = torch.exp(- error / self.sigma)
+            return reward
+        
     class tracking_qpos(mdp.Reward):
         def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
             super().__init__(env, weight, enabled)
@@ -286,6 +300,24 @@ class Humanoid(LocomotionEnv):
             error = diff.square().sum(-1, True)
             reward = torch.exp(- error / self.sigma)
             return reward
+        
+    class feet_slip(mdp.Reward):
+        def __init__(self, env, body_names: str, weight: float, enabled: bool=True, sigma: float=0.1):
+            super().__init__(env, weight, enabled)
+            self.asset: Articulation = self.env.scene["robot"]
+            self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+
+            self.articulation_body_ids = self.asset.find_bodies(body_names)[0]
+            self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
+            self.body_ids = torch.tensor(self.body_ids, device=self.env.device)
+
+            self.sigma = sigma
+        
+        def compute(self) -> torch.Tensor:
+            in_contact = self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02
+            feet_vel = self.asset.data.body_lin_vel_w[:, self.articulation_body_ids, :2]
+            slip = (in_contact * feet_vel.norm(dim=-1).square()).sum(dim=1, keepdim=True)
+            return -(1 - torch.exp(-slip / self.sigma))
 
     # Early Termination Conditions
     class dummy(mdp.Termination):
