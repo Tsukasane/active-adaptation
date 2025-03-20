@@ -39,3 +39,5 @@ defaults:
 
 task:
   num_envs: 4
+  command:
+    mode: play

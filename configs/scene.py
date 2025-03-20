@@ -91,7 +91,7 @@ class EnvCfg:
     history_length: int = 32
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(3., 3., 2.5)
+        eye=(2., 2., 1.5)
     )
     scene: LocomotionSceneCfg = MISSING
 

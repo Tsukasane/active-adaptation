@@ -18,8 +18,8 @@ action:
     .*hip.*: 0.5
     .*shoulder.*: 0.5
     .*knee.*: 0.5
-    .*ankle.*: 0.5
-    .*elbow.*: 0.5
+    .*ankle_pitch.*: 0.5
+    .*elbow_pitch.*: 0.5
   max_delay: 1
   alpha: [0.5, 1.0]
 
@@ -28,6 +28,7 @@ command:
   motion_clip: "scripts/data/transitions.pkl"
   occlusion: "scripts/data/amass_copycat_occlusion_v3.pkl"
   mode: train
+  eval_id: null
   
 observation:
   robot:
@@ -48,8 +49,7 @@ observation:
     ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
                                           .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                           .*knee.*, .*shoulder_yaw.*,
-                                          .*ankle_pitch.*, .*elbow_pitch.*,
-                                          .*ankle_roll.*, .*elbow_roll.*],
+                                          .*ankle_pitch.*, .*elbow_pitch.*],
                             steps: 5}
     ref_keypoints:        {steps: 5}
     ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
@@ -72,19 +72,17 @@ reward:
   loco:
     tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.36}
     tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.36}
-    tracking_root_linear:   {weight: 3., enabled: true, sigma: 0.36}
     tracking_qpos:          {weight: 2., enabled: true, sigma: 0.36,
                               joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
                                             .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                             .*knee.*, .*shoulder_yaw.*,
-                                            .*ankle_pitch.*, .*elbow_pitch.*,
-                                            .*ankle_roll.*, .*elbow_roll.*]}
-    tracking_keypoints:     {weight: 5., enabled: true, sigma: 0.36,
+                                            .*ankle_pitch.*, .*elbow_pitch.*]}
+    tracking_keypoints:     {weight: 5., enabled: true, sigma: 0.25,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link]}
-    tracking_eff:           {weight: 6., enabled: true, sigma: 0.36,
+    tracking_eff:           {weight: 6., enabled: true, sigma: 0.25,
                               body_names: [left_ankle_roll_link, left_zero_link,
                                         right_ankle_roll_link, right_zero_link]}
 

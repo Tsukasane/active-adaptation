@@ -39,3 +39,6 @@ defaults:
 
 task:
   num_envs: 2048
+  command:
+    mode: eval
+    eval_id: 0

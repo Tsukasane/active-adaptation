@@ -368,7 +368,7 @@ class Env(EnvBase):
     def _compute_reward(self) -> TensorDictBase:
         rewards = []
         for group, reward_group in self.reward_groups.items():
-            reward = reward_group.compute()
+            reward = reward_group.compute() * self.step_dt
             rewards.append(reward)
             self.stats[group, "return"].add_(reward)
 

@@ -37,6 +37,7 @@ class MotionLib(Command):
             motion_clip: str,
             occlusion: str,
             mode: str = "train",
+            eval_id: int = None,
             teleop: bool = False,
         ):
         super().__init__(env, teleop=teleop)
@@ -45,13 +46,17 @@ class MotionLib(Command):
         package_dir = os.path.dirname(package_path)
 
         occlusion_path = os.path.join(package_dir, "..", occlusion)
-        occlusion_keys = joblib.load(occlusion_path).keys()
-        occlusion_keys = [k.replace("_poses", "_stageii") for k in occlusion_keys]
+        occlusion_keys = list(joblib.load(occlusion_path).keys())
 
         motion_clip = os.path.join(package_dir, "..", motion_clip)
 
         data = joblib.load(motion_clip)
+        data = {k.replace("_stageii", "_poses"): v for k, v in data.items()}
         data = {k: v for k, v in data.items() if k not in occlusion_keys}
+
+        if eval_id is not None:
+            data_keys = list(data.keys())
+            data = {data_keys[eval_id]: data[data_keys[eval_id]]}
         
         self.env_origin = self.env.scene.env_origins
         self.bodys = [j[0] for j in joint_matches]
@@ -82,11 +87,10 @@ class MotionLib(Command):
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
 
-        if self.mode == "play":
+        if self.mode == "play" or self.mode == "eval":
             motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * CURRENT_MOTION
             start_frames = self.start_frames[motion_ids]
             end_frames = self.end_frames[motion_ids]
-            print("Current motion: ", CURRENT_MOTION, "Start frame: ", start_frames, "End frame: ", end_frames)
 
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]

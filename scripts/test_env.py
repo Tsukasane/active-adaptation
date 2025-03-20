@@ -192,11 +192,6 @@ def main(cfg: DictConfig):
     
     save(policy, "checkpoint_final")
 
-    # policy_eval = policy.get_rollout_policy("eval")
-    # info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
-    # info["env_frames"] = collector._frames
-    # run.log(info)
-
     wandb.finish()
     exit(0)
     

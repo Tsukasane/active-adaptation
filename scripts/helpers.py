@@ -236,9 +236,10 @@ def evaluate(
     trajs = []
     frames = []
 
+    num_frames = env.command_manager.num_frames
     inference_time = []
     with set_exploration_type(exploration_type):
-        for i in tqdm(range(env.max_episode_length), miniters=10):
+        for i in tqdm(range(num_frames), miniters=10):
             s = time.perf_counter()
             tensordict_ = policy(tensordict_)
             e = time.perf_counter()
