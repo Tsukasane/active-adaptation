@@ -34,7 +34,8 @@ class MotionLib(Command):
     def __init__(
             self, 
             env,
-            motion_clip: str,
+            motion_clip_dir: str,
+            dataset: str,
             occlusion: str,
             mode: str = "train",
             eval_id: int = None,
@@ -45,10 +46,10 @@ class MotionLib(Command):
 
         package_dir = os.path.dirname(package_path)
 
-        occlusion_path = os.path.join(package_dir, "..", occlusion)
+        occlusion_path = os.path.join(package_dir, "..", motion_clip_dir, occlusion)
         occlusion_keys = list(joblib.load(occlusion_path).keys())
 
-        motion_clip = os.path.join(package_dir, "..", motion_clip)
+        motion_clip = os.path.join(package_dir, "..", motion_clip_dir, dataset) + ".pkl"
 
         data = joblib.load(motion_clip)
         data = {k.replace("_stageii", "_poses"): v for k, v in data.items()}

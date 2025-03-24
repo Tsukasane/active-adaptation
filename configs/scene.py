@@ -95,8 +95,8 @@ class EnvCfg:
     )
     scene: LocomotionSceneCfg = MISSING
 
-    decimation: int  = 4
-    sim = sim_utils.SimulationCfg(dt=0.005, disable_contact_processing=True)
+    decimation: int  = 20
+    sim = sim_utils.SimulationCfg(dt=0.001, disable_contact_processing=True)
     
     action: Dict = MISSING
     command: Dict = MISSING
