@@ -68,6 +68,17 @@ class Humanoid(LocomotionEnv):
         # self.action_manager.reset(env_ids=env_ids)
 
     # Observations of reference motion
+    class phase(mdp.Observation):
+        def __init__(self, env):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.phase = self.env.command_manager.phase
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            phase = self.phase[timestep].to(self.device)
+            return phase.reshape(self.num_envs, -1)
+
     class ref_orientation(mdp.Observation):
 
         env: "Humanoid"
@@ -288,18 +299,7 @@ class Humanoid(LocomotionEnv):
             super().__init__(env, weight, enabled, sigma, body_names)
 
         def compute(self):
-            timestep = (self.env.episode_length_buf-1).cpu()
-            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
-            ref_keypoints = ref_keypoints[:, self.idx]
-            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
-            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
-            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
-            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
-
-            diff = (ref_keypoints - body_pos_local).norm(dim=-1)
-            error = diff.square().sum(-1, True)
-            reward = torch.exp(- error / self.sigma)
-            return reward
+            return super().compute()
         
     class feet_slip(mdp.Reward):
         def __init__(self, env, body_names: str, weight: float, enabled: bool=True, sigma: float=0.1):

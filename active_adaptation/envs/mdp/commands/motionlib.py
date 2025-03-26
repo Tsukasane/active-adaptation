@@ -61,7 +61,9 @@ class MotionLib(Command):
         
         self.env_origin = self.env.scene.env_origins
         self.bodys = [j[0] for j in joint_matches]
+        self.default_qpos, self.default_bpos = self.get_robot_default()
         self.load_data(data)
+        print(f"Loaded {len(data)} motion clips with {self.num_frames} frames.")
 
         self.mode = mode
         if mode == "play":
@@ -110,8 +112,18 @@ class MotionLib(Command):
     def reset(self, env_ids: torch.Tensor):
         pass
 
+    def get_robot_default(self):
+        default_qpos = self.robot.data.default_joint_pos[0]
+        root_position = self.robot.data.root_pos_w.unsqueeze(1)
+        root_quat = self.robot.data.root_quat_w.unsqueeze(1)
+        body_pos_b = self.robot.data.body_pos_w - root_position
+        default_bpos = quat_rotate_inverse(root_quat, body_pos_b)[0]
+        body_ids, body_names = self.robot.find_bodies(self.bodys, preserve_order=True)
+        return default_qpos.cpu(), default_bpos.cpu()[body_ids]
+
     def load_data(self, data):
         self.motion_length = []
+        self.phase = []
         self.root_translations = []
         self.root_orientation = []
         self.root_linear = []
@@ -129,16 +141,23 @@ class MotionLib(Command):
             interpolated_kp = self.interpolate(motion, "smpl_joints", self.source_fps, self.target_fps)
             interpolated_kp_local = convert2local(interpolated_kp, interpolated_root_rot)
 
-            self.motion_length.append(interpolated_root_trans.shape[0])
-            self.root_translations.append(interpolated_root_trans)
-            self.root_linear.append(torch.diff(interpolated_root_trans,
+            pad_root_trans, pad_root_rot, pad_qpos, pad_kp = self.pad(  interpolated_root_trans,
+                                                                        interpolated_root_rot[:, [3, 0, 1, 2]],
+                                                                        interpolated_qpos[:, mujoco_to_isaac_idx],
+                                                                        interpolated_kp_local)
+
+            self.motion_length.append(pad_root_trans.shape[0])
+            self.phase.append(torch.linspace(0, 1, pad_root_trans.shape[0]))
+            self.root_translations.append(pad_root_trans)
+            self.root_linear.append(torch.diff(pad_root_trans,
                                                dim=0,
                                                append=torch.zeros(1, 3)) * self.target_fps)
-            self.root_orientation.append(interpolated_root_rot[:, [3, 0, 1, 2]])
-            self.qpos.append(interpolated_qpos[:, mujoco_to_isaac_idx])
-            self.kp.append(interpolated_kp_local)
+            self.root_orientation.append(pad_root_rot)
+            self.qpos.append(pad_qpos)
+            self.kp.append(pad_kp)
 
         self.motion_length = torch.tensor(self.motion_length)
+        self.phase = torch.cat(self.phase, dim=0).float()
         self.root_translations = torch.cat(self.root_translations, dim=0).float()
         self.root_orientation = torch.cat(self.root_orientation, dim=0).float()
         self.root_linear = torch.cat(self.root_linear, dim=0).float()
@@ -172,6 +191,37 @@ class MotionLib(Command):
 
         else:
             raise NotImplementedError(f"Interpolation for key '{key}' is not implemented.")
+
+    def pad(self, root_translation, root_orientation, qpos, kp):
+        r'''
+        pad the motion clip at the beginning from default qpos and body pos
+        Args:
+            root_translation: (N, 3) torch tensor
+            root_orientation: (N, 4) torch tensor
+            qpos: (N, J) torch tensor
+            kp: (N, K, 3) torch tensor
+        '''
+        first_translation = root_translation[0]
+        pad_translation = first_translation.expand(self.target_fps, 3)
+        root_translation = torch.cat([pad_translation, root_translation], dim=0)
+
+        first_orientation = root_orientation[0]
+        pad_orientation = first_orientation.expand(self.target_fps, 4)
+        root_orientation = torch.cat([pad_orientation, root_orientation], dim=0)
+
+        # padding qpos and kp by default_qpos and default_bpos through interpolate
+        t = torch.linspace(0, 1, self.target_fps)
+
+        t = t.view(-1, 1)
+        pad_qpos = (1 - t) * self.default_qpos + t * qpos[0]  # (target_fps, J)
+        qpos = torch.cat([pad_qpos, qpos], dim=0)
+
+        t = t.view(-1, 1, 1)
+        pad_kp = (1 - t) * self.default_bpos + t * kp[0]  # (target_fps, K, 3)
+        kp = torch.cat([pad_kp, kp], dim=0)
+
+        return root_translation, root_orientation, qpos, kp
+
 
     # # for sanity check
     # def update(self):
