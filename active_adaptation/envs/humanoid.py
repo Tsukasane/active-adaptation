@@ -232,20 +232,6 @@ class Humanoid(LocomotionEnv):
             reward = torch.exp(- error / self.sigma)
             return reward
         
-    class tracking_root_linear(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
-            super().__init__(env, weight, enabled)
-            self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
-
-        def compute(self) -> torch.Tensor:
-            timestep = (self.env.episode_length_buf-1).cpu()
-            ref_root_linear = self.env.command_manager.root_linear[timestep].to(self.device)
-            root_linear = self.robot.data.root_lin_vel_w
-            error = (root_linear - ref_root_linear).square().sum(-1, True)
-            reward = torch.exp(- error / self.sigma)
-            return reward
-        
     class tracking_qpos(mdp.Reward):
         def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
             super().__init__(env, weight, enabled)

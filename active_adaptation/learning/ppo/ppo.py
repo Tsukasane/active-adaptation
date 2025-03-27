@@ -99,14 +99,14 @@ class PPOPolicy(TensorDictModuleBase):
         def make_actor(out_key: str):
             modules = [
                 CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
-                TensorDictModule(make_mlp([1024, 512]), ["a_in"], [out_key])
+                TensorDictModule(make_mlp([2048, 1024, 512]), ["a_in"], [out_key])
             ]
             return modules
         
         def make_critic(out_key: str):
             modules = [
                 CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
-                TensorDictModule(make_mlp([1024, 512]), ["c_in"], [out_key])
+                TensorDictModule(make_mlp([2048, 1024, 512]), ["c_in"], [out_key])
             ]
             return modules
 
