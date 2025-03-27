@@ -187,3 +187,7 @@ scripts/data/
 checkpoint*.pt
 *.csv
 *.pkl
+
+#extension
+.vscode/
+stubs/
