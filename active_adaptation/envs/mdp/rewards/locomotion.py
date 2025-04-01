@@ -67,13 +67,6 @@ def energy_l2(self):
 
 
 @reward_func
-def joint_acc_l2(self):
-    asset: Articulation = self.scene["robot"]
-    r = asset.data.joint_acc.square().sum(dim=-1, keepdim=True)
-    return -r
-
-
-@reward_func
 def survival(self):
     return torch.ones(self.num_envs, 1, device=self.device)
 
@@ -410,6 +403,15 @@ class joint_vel_l2(Reward):
     
     def compute(self) -> torch.Tensor:
         return - self.asset.data.joint_vel[:, self.joint_ids].square().sum(1, True)
+    
+class joint_acc_l2(Reward):
+    def __init__(self, env, joint_names: str, weight: float, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids, _ = self.asset.find_joints(joint_names)
+    
+    def compute(self) -> torch.Tensor:
+        return - self.asset.data.joint_acc[:, self.joint_ids].square().sum(1, True)
 
 class feet_swing_height(Reward):
     def __init__(self, env, target_height: float, weight: float, enabled: bool = True):
