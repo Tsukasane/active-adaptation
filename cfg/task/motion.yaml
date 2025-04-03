@@ -73,9 +73,9 @@ observation:
 
 reward:
   loco:
-    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.36}
-    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.36}
-    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.36,
+    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
+    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
+    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.16,
                               joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
                                             .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                             .*knee.*, .*shoulder_yaw.*,
@@ -97,9 +97,10 @@ reward:
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
     joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
-    joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: [.*shoulder.*, .*elbow.*]}
-    action_rate_l2:     {weight: 0.05, enabled: true}
-    action_rate2_l2:    {weight: 0.02, enabled: true}
+    joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    action_rate_l2:     {weight: 0.02, enabled: true}
+    action_rate2_l2:    {weight: 0.01, enabled: true}
 
 randomization:
   push:     {body_names: ["torso_link", "pelvis"], force_range: [0.0, 0.1]}
