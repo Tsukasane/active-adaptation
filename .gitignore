@@ -188,6 +188,9 @@ checkpoint*.pt
 *.csv
 *.pkl
 
+#phc
+phc/
+
 #extension
 .vscode/
 stubs/

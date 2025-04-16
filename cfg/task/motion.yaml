@@ -22,8 +22,6 @@ action:
     .*elbow_pitch.*: 0.5
   max_delay: 1
   alpha: [0.5, 1.0]
-  custom_command:
-    .*elbow_roll.*: 0.
 
 command:
   _target_: active_adaptation.envs.mdp.MotionLib

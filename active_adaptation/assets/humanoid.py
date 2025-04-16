@@ -147,6 +147,9 @@ G1_CFG = ArticulationCfg(
     },
 )
 
+G1_INSPIRE_CFG = copy.deepcopy(G1_CFG)
+G1_INSPIRE_CFG.spawn.usd_path = f"{ASSET_PATH}/G1/g1_inspire.usd"
+
 # for sanity check
 G1_SANITY_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
