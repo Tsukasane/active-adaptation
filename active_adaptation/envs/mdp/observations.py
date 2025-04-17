@@ -6,16 +6,16 @@ from typing import Tuple
 from torchvision.utils import make_grid
 from torchvision.io import write_jpeg
 
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.sensors import ContactSensor, RayCaster, patterns, RayCasterData, Imu
-from omni.isaac.lab.sensors import Camera, TiledCamera
-import omni.isaac.lab.sim as sim_utils
+from isaaclab.assets import Articulation
+from isaaclab.sensors import ContactSensor, RayCaster, patterns, RayCasterData, Imu
+from isaaclab.sensors import Camera, TiledCamera
+import isaaclab.sim as sim_utils
 from active_adaptation.utils.helpers import batchify
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
-from omni.isaac.lab.terrains.trimesh.utils import make_plane
-from omni.isaac.lab.utils.math import convert_quat, quat_apply, quat_apply_yaw, yaw_quat
-from omni.isaac.lab.utils.warp import convert_to_warp_mesh, raycast_mesh
-from omni.isaac.lab.utils.string import resolve_matching_names
+from isaaclab.terrains.trimesh.utils import make_plane
+from isaaclab.utils.math import convert_quat, quat_apply, quat_apply_yaw, yaw_quat
+from isaaclab.utils.warp import convert_to_warp_mesh, raycast_mesh
+from isaaclab.utils.string import resolve_matching_names
 from pxr import UsdGeom, UsdPhysics
 
 quat_rotate = batchify(quat_rotate)

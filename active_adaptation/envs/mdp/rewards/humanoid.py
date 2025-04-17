@@ -1,8 +1,8 @@
 from math import inf
 import torch
 
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.utils.math import yaw_quat
+from isaaclab.assets import Articulation
+from isaaclab.utils.math import yaw_quat
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 from active_adaptation.utils.helpers import batchify
 

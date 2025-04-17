@@ -2,9 +2,9 @@ import os
 import copy
 import torch
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.sim.spawners.from_files.from_files import _spawn_from_usd_file, spawn_from_usd
-from omni.isaac.lab.actuators import ImplicitActuatorCfg, DCMotorCfg
+import isaaclab.sim as sim_utils
+from isaaclab.sim.spawners.from_files.from_files import _spawn_from_usd_file, spawn_from_usd
+from isaaclab.actuators import ImplicitActuatorCfg, DCMotorCfg
 
 from .spawn import clone
 from .humanoid import *

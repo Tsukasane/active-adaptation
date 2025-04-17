@@ -12,9 +12,9 @@ from torchrl.data import (
 )
 import builtins
 
-from omni.isaac.lab.scene import InteractiveScene
-from omni.isaac.lab.sim import SimulationContext
-from omni.isaac.lab.utils.timer import Timer
+from isaaclab.scene import InteractiveScene
+from isaaclab.sim import SimulationContext
+from isaaclab.utils.timer import Timer
 from collections import OrderedDict
 
 from abc import abstractmethod

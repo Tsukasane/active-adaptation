@@ -1,10 +1,10 @@
 import os
 import copy
-import omni.isaac.lab.sim as sim_utils
+import isaaclab.sim as sim_utils
 import torch
-from omni.isaac.lab_assets import ArticulationCfg, H1_CFG
-from omni.isaac.lab.actuators import DCMotorCfg, IdealPDActuatorCfg, ImplicitActuatorCfg
-from omni.isaac.lab.assets import Articulation
+from isaaclab_assets import ArticulationCfg, H1_CFG
+from isaaclab.actuators import DCMotorCfg, IdealPDActuatorCfg, ImplicitActuatorCfg
+from isaaclab.assets import Articulation
 
 
 ASSET_PATH = os.path.dirname(__file__)

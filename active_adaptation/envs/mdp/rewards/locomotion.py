@@ -2,10 +2,10 @@ from math import inf
 import torch
 import abc
 
-from omni.isaac.lab.sensors import ContactSensor
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.utils.math import yaw_quat, wrap_to_pi
-import omni.isaac.lab.utils.string as string_utils
+from isaaclab.sensors import ContactSensor
+from isaaclab.assets import Articulation
+from isaaclab.utils.math import yaw_quat, wrap_to_pi
+import isaaclab.utils.string as string_utils
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 from active_adaptation.utils.helpers import batchify
 from ..commands import *

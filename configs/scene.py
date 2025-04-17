@@ -1,13 +1,13 @@
 from active_adaptation.assets import *
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.terrains import TerrainImporterCfg
-from omni.isaac.lab.envs import ViewerCfg
-from omni.isaac.lab.assets import AssetBaseCfg, RigidObjectCfg
-from omni.isaac.lab.sensors import ContactSensorCfg, RayCasterCfg, patterns, TiledCameraCfg, ImuCfg
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.utils import configclass
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.envs import ViewerCfg
+from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
+from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns, TiledCameraCfg, ImuCfg
+import isaaclab.sim as sim_utils
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 
 from dataclasses import MISSING
 from typing import Dict, List
@@ -96,7 +96,8 @@ class EnvCfg:
     scene: LocomotionSceneCfg = MISSING
 
     decimation: int  = 4
-    sim = sim_utils.SimulationCfg(dt=0.005, disable_contact_processing=True)
+    # sim = sim_utils.SimulationCfg(dt=0.005, disable_contact_processing=True)
+    sim = sim_utils.SimulationCfg(dt=0.005)
     
     action: Dict = MISSING
     command: Dict = MISSING

@@ -2,8 +2,8 @@
 
 ## Installation
 
-* [Isaac Sim 4.2.0]()
-* [Isaac Lab](https://github.com/isaac-sim/IsaacLab)  with Isaac Lab 1.4.0, 1.4.1
+* [Isaac Sim 4.5.0]()
+* [Isaac Lab](https://github.com/isaac-sim/IsaacLab)  with Isaac Lab 2.0
 * [TensorDict](https://github.com/btx0424/tensordict) from GitHub source.
 * [TorchRL](https://github.com/btx0424/rl) from GitHub source.
 
@@ -12,9 +12,11 @@ conda create -n <isaaclab> python=3.10 # or any other env name you like
 conda activate <isaaclab>
 
 cd IsaacLab
-./isaaclab.sh -c <isaaclab>
 ln -s <path to isaac sim 4.2> _isaac_sim
+./isaaclab.sh -c <isaaclab>
 ./isaaclab.sh -i none
+conda activate <isaaclab>
+echo $PYTHONPATH      # ensure isaac-sim related dependencies are added
 
 cd tensordict
 python setup.py develop

@@ -4,11 +4,11 @@ import torch.distributions as D
 import math
 from typing import Sequence, TYPE_CHECKING
 
-from omni.isaac.lab.assets import Articulation
-import omni.isaac.lab.utils.math as math_utils
+from isaaclab.assets import Articulation
+import isaaclab.utils.math as math_utils
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse, MultiUniform
 from active_adaptation.utils.helpers import batchify
-from omni.isaac.lab.utils.math import quat_apply_yaw, yaw_quat
+from isaaclab.utils.math import quat_apply_yaw, yaw_quat
 from tensordict import TensorDict
 from .base import Command
 
