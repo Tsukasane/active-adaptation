@@ -2,104 +2,166 @@
 
 ## Installation
 
-* [Isaac Sim 4.1.0]()
-* [Isaac Lab](https://github.com/isaac-sim/IsaacLab)
+* [Isaac Sim 4.2.0]()
+* [Isaac Lab](https://github.com/isaac-sim/IsaacLab)  with Isaac Lab 1.4.0, 1.4.1
 * [TensorDict](https://github.com/btx0424/tensordict) from GitHub source.
 * [TorchRL](https://github.com/btx0424/rl) from GitHub source.
+
+```bash
+conda create -n <isaaclab> python=3.10 # or any other env name you like
+conda activate <isaaclab>
+
+cd IsaacLab
+./isaaclab.sh -c <isaaclab>
+ln -s <path to isaac sim 4.2> _isaac_sim
+./isaaclab.sh -i none
+
+cd tensordict
+python setup.py develop
+
+cd rl
+python setup.py develop
+
+cd active_adaptation
+pip install -e .
+```
 
 **DO NOT** install tensordict and torchrl using `pip install`. They are under active development so the release versions on PyPi might have bugs and lack new functionalities.
 
 ## Basic Usage
 
+For processing AMASS data or retargeting fit keypoints, please refer to [`phc/README.md`](phc/README.md).
+
 Each task is specified by a yaml file under `cfg/task`, for example:
 
 ```yaml
 # @package task
-name: Go2Flat
-task: Quadruped
+name: Test
+task: Humanoid
 
 defaults:
   # see https://hydra.cc/docs/advanced/overriding_packages/
-  - /task/Velocity@_here_
+  - /task/Track@_here_
   - override /task/action@action: null
   - _self_
 
-robot: go2
-terrain: plane
 payload: false
-homogeneous: false
 
 action:
   _target_: active_adaptation.envs.mdp.action.JointPosition
-  joint_names: .*_joint
-  action_scaling: {.*_joint: 0.5}
-  max_delay: 2
+  action_scaling:
+    torso_joint: 0.5
+    .*hip.*: 0.5
+    .*shoulder.*: 0.5
+    .*knee.*: 0.5
+    .*ankle_pitch.*: 0.5
+    .*elbow_pitch.*: 0.5
+  max_delay: 1
   alpha: [0.5, 1.0]
 
 command:
-  _target_: active_adaptation.envs.mdp.Command2
-  linvel_x_range: [-1.0, 2.0]
-  linvel_y_range: [-0.7, 0.7]
-  angvel_range:   [-2.0, 2.0]
-  yaw_stiffness_range: [0.5, 0.7]
-  use_stiffness_ratio: 0.99
-  aux_input_range: [.5, 1.]
-  resample_prob: 0.5
-  stand_prob: 0.02
-  target_yaw_range: 
-    - [-0.3927,  0.3927]
-    - [ 1.1781,  1.9635]
-    - [ 2.7489,  3.5343]
-    - [ 4.3197,  5.1051]
-  adaptive: true
-
+  _target_: active_adaptation.envs.mdp.MotionLib
+  motion_clip_dir: "scripts/data"
+  dataset: amass
+  occlusion: "amass_copycat_occlusion_v3.pkl"
+  mode: train
+  eval_id: null
+  
 observation:
-  policy:
-    command:
-    projected_gravity_b: {noise_std: 0.05}
-    joint_pos:    {noise_std: 0.05, joint_names: .*_joint}
-    joint_vel:    {noise_std: 0.4, joint_names: .*_joint}
-    prev_actions: {steps: 3}
+  robot:
+    root_quat_w:
+    root_angvel_b:        {noise_std: 0.05}
+    projected_gravity_b:  {noise_std: 0.01}
+    joint_pos:            {noise_std: 0.05}
+    joint_vel:            {noise_std: 0.2}
+    body_pos:             {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
+                                        yaw_only: false}
+    prev_actions:         {steps: 1}
+  ref_motion_:
+    ref_orientation:      {steps: 5}
+    ref_height:           {steps: 5}
+    ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                          .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                          .*knee.*, .*shoulder_yaw.*,
+                                          .*ankle_pitch.*, .*elbow_pitch.*],
+                            steps: 5}
+    ref_keypoints:        {steps: 5}
+    ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
+                            steps: 5}
+    ref_trans_gap:        {steps: 5}
   priv:
-    applied_action:
-    root_linvel_b:    {yaw_only: true}
-    root_angvel_b:
-    feet_pos_b:
-    feet_vel_b:
-    feet_height_map:  {feet_names: .*foot }
-    applied_torques:  {actuator_name: base_legs}
-    joint_forces:     {joint_names: .*_joint}
-    external_forces:  {body_names: ["base"]}
-    contact_indicator:  {body_names: [".*_foot", ".*_calf"], timing: true}
+    root_height:      {}
+    root_linvel_b:    {}
+    body_vel:         {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
+                                        yaw_only: false}
+    joint_forces:     {}
 
 reward:
   loco:
-    linvel_exp:         {weight: 1.5, enabled: true, dim: 3, yaw_only: true}
-    angvel_z_exp:       {weight: 0.75, enabled: true}
-    angvel_xy_l2:       {weight: 0.02, enabled: true}
-    linvel_z_l2:        {weight: 2.0, enabled: true}
-    base_height_l1:     {weight: 0.5, enabled: true, target_height: 0.35}
-    energy_l1:          {weight: 0.0002, enabled: true}
-    joint_acc_l2:       {weight: 2.5e-7, enabled: true}
-    joint_torques_l2:   {weight: 2.0e-4, enabled: true}
-    quadruped_stand:    {weight: 0.5}
-    survival:           {weight: 1.0, enabled: true}
-    action_rate_l2:     {weight: 0.01, enabled: true}
-    feet_air_time:      {weight: 0.4, enabled: true, body_names: .*_foot, thres: 0.4}
-    feet_slip:          {weight: 1.0, enabled: false, body_names: .*_foot}
-    feet_contact_count: {weight: 1.0, enabled: false, body_names: .*_foot}
-    undesired_contact:  {body_names: [.*_calf, .*thigh, Head.*], weight: 0.25, enabled: true}
+    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
+    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
+    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.16,
+                              joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                            .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                            .*knee.*, .*shoulder_yaw.*,
+                                            .*ankle_pitch.*, .*elbow_pitch.*]}
+    tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
+                              body_names: [left_hip_pitch_link, left_knee_link,
+                                        right_hip_pitch_link, right_knee_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link]}
+    tracking_eff:           {weight: 7.5, enabled: true, sigma: 0.16,
+                              body_names: [left_ankle_roll_link, left_zero_link,
+                                        right_ankle_roll_link, right_zero_link]}
 
-termination: # terminate upon any of the following checks being satisfied
-  crash: {body_names_expr: [Head.*, "base"], t_thres: 0.5, z_thres: 0.}
-  # joint_acc_exceeds: {thres: 5000}
-  cum_error: {thres: 1.0}
+    feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
+    feet_slip:          {weight: 2., enabled: true, body_names: .*ankle_roll_link, sigma: 0.16}
+    max_feet_height:    {weight: 1.5, enabled: true, body_names: .*ankle_roll_link, target_height: 0.15}
+
+    joint_acc_l2:       {weight: 1.0e-8, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    joint_vel_l2:       {weight: 0.002, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    joint_torques_l2:   {weight: 1.0e-5, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    action_rate_l2:     {weight: 0.02, enabled: true}
+    action_rate2_l2:    {weight: 0.01, enabled: true}
 
 randomization:
-  random_scale: [1.0, 1.0]
+  push:     {body_names: ["torso_link", "pelvis"], force_range: [0.0, 0.1]}
   perturb_body_mass:
-    (?!(payload|base|Head.*)).*: [0.8, 1.2]
-    base: [0.8, 1.4]
+    .*: [0.9, 1.1]
+  perturb_body_materials:
+    body_names: ".*ankle_roll_link"
+    static_friction_range: [0.6, 4.0]
+    dynamic_friction_range: [0.6, 4.0]
+    restitution_range: [0.0, 0.2]
+  motor_params:
+    actuator_name:    legs
+    stiffness_range:  [0.7, 1.0]
+    damping_range:    [0.7, 1.0]
+  reset_joint_states_uniform:
+    pos_ranges:
+      .*: [-0.1, 0.1]
+    rel: true
+
+termination:
+  dummy: {}
+  root_deviation: {max_distance: 0.5}
+  root_rot_deviation: {max_theta: 30}
+  track_kp_error: {max_distance: 0.4, 
+                  body_names: [left_zero_link, right_zero_link,
+                                left_ankle_roll_link, right_ankle_roll_link]}
+
 ```
 
 Observations are grouped by keys and the observation of the same group is concatenated.
@@ -112,8 +174,8 @@ Rewards are grouped by keys and the rewards of the same group is summed up, excl
 Examples:
 
 ```bash
-python test_env.py task=Go2/Go2Flat algo=ppo
-python test_env.py task=ORCA/CY1Flat algo=ppo_adapt_train total_frames=250000000
+python test_env.py task=motion algo=ppo
+python test_env.py task=motion algo=ppo task.num_envs=4 total_frames=250000000 headless=false wandb.mode=disabled
 ```
 
 ### Evaluation and Visualization
@@ -121,7 +183,22 @@ python test_env.py task=ORCA/CY1Flat algo=ppo_adapt_train total_frames=250000000
 Examples:
 
 ```bash
-python eval_run.py --run_path ${wandb_run_path} -p # p for play
+python eval.py \
+    eval_render=true \                      # whether to record video
+    headless=false \                        # whether to run in headless mode (no GUI)
+    algo=ppo \                              # algorithm to use
+    task=motion \                           # task to use
+    task.num_envs=4 \                       # number of environments to run
+    task.command.dataset=sfu \              # dataset to use
+    task.command.eval_id=0 \                # evaluation motion id
+    checkpoint_path=<path to checkpoint>    # path to checkpoint
+
+python play.py \
+    algo=ppo \                              # algorithm to use
+    task=motion \                           # task to use
+    task.num_envs=4 \                       # number of environments to run
+    task.command.dataset=sfu \              # dataset to use
+    checkpoint_path=<path to checkpoint>    # path to checkpoint
 ```
 
 ## Adding New Tasks
