@@ -189,7 +189,7 @@ checkpoint*.pt
 *.pkl
 
 #phc
-phc/
+phc/data/
 
 #extension
 .vscode/
