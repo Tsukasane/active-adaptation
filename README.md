@@ -8,11 +8,12 @@
 * [TorchRL](https://github.com/btx0424/rl) from GitHub source.
 
 ```bash
+# bash environment setup
 conda create -n <isaaclab> python=3.10 # or any other env name you like
 conda activate <isaaclab>
 
 cd IsaacLab
-ln -s <path to isaac sim 4.2> _isaac_sim
+ln -s <path to isaac sim 4.5> _isaac_sim
 ./isaaclab.sh -c <isaaclab>
 ./isaaclab.sh -i none
 conda activate <isaaclab>
