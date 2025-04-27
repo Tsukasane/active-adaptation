@@ -301,7 +301,7 @@ class JointPosition(ActionManager):
     ):
         super().__init__(env)
         self.joint_ids, self.joint_names, self.action_scaling = string_utils.resolve_matching_names_values(
-            dict(action_scaling), self.asset.joint_names)
+            dict(action_scaling), self.asset.joint_names, preserve_order=True)
         if left_joints is not None:
             self.left_joint_ids = string_utils.resolve_matching_names(left_joints, self.joint_names)[0]
             self.right_joint_ids = string_utils.resolve_matching_names(right_joints, self.joint_names)[0]

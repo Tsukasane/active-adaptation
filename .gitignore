@@ -191,6 +191,13 @@ checkpoint*.pt
 #phc
 phc/data/
 
+# metrabs
+metrabs/metrabs*
+metrabs/uv*
+metrabs/yolov*
+metrabs/.python-version
+metrabs/pyproject.toml
+
 #extension
 .vscode/
 stubs/

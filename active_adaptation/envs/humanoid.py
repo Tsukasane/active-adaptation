@@ -68,17 +68,6 @@ class Humanoid(LocomotionEnv):
         # self.action_manager.reset(env_ids=env_ids)
 
     # Observations of reference motion
-    class phase(mdp.Observation):
-        def __init__(self, env):
-            super().__init__(env)
-            self.robot: Articulation = self.env.scene["robot"]
-            self.phase = self.env.command_manager.phase
-
-        def compute(self) -> torch.Tensor:
-            timestep = self.env.episode_length_buf.cpu()
-            phase = self.phase[timestep].to(self.device)
-            return phase.reshape(self.num_envs, -1)
-
     class ref_orientation(mdp.Observation):
 
         env: "Humanoid"
@@ -286,6 +275,18 @@ class Humanoid(LocomotionEnv):
 
         def compute(self):
             return super().compute()
+        
+    # Joint Position Penalty
+    class joint_pos_l2(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+            self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
+
+        def compute(self) -> torch.Tensor:
+            qpos = self.robot.data.joint_pos[:, self.joint_indices]
+            return -qpos.square().mean(-1, True)
         
     class feet_slip(mdp.Reward):
         def __init__(self, env, body_names: str, weight: float, enabled: bool=True, sigma: float=0.1):

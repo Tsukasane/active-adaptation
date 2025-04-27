@@ -35,6 +35,8 @@ pip install -e .
 
 For processing AMASS data or retargeting fit keypoints, please refer to [`phc/README.md`](phc/README.md).
 
+For video estimation and teleoperation in simulation, please refer to [`metrabs/README.md`](metrabs/README.md).
+
 Each task is specified by a yaml file under `cfg/task`, for example:
 
 ```yaml
