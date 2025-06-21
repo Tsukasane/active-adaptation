@@ -11,6 +11,7 @@ flags: [""]
 command:
   _target_: active_adaptation.envs.mdp.commands.motion_tracking.MotionTrackingCommand
   data_path: data/motion/walk1_subject1-processed
+  # data_path: data/motion/walk1_subject1_new-processed
 
 observation:
   command:
@@ -19,7 +20,7 @@ observation:
     root_angvel_b:  {noise_std: 0.05}
     projected_gravity_b: {noise_std: 0.01}
     joint_pos_multistep: {steps: 16, noise_std: 0.01}
-    joint_vel_multistep: {steps: 4, noise_std: 0.05}
+    joint_vel_multistep: {steps: 4, noise_std: 1.0}
     prev_actions:   {steps: 4}
   priv:
     ref_joint_pos_future: {}
@@ -34,6 +35,9 @@ observation:
     feet_vel_b:       {feet_names: .*ankle_roll_link}
     applied_torque:   {}
     cum_error:        {}
+  # joint_state_:
+  #   joint_pos_multistep: {steps: 1, noise_std: 0.0}
+  #   joint_vel_multistep: {steps: 1, noise_std: 0.0}
 
 reward:
   # tracking:
@@ -78,6 +82,7 @@ reward:
     angvel_xy_l2:       {weight: 0.1, enabled: true, body_names: ["pelvis", "torso_link"]}
 
     feet_contact_count: {weight: 1.0, enabled: false, body_names: .*ankle_roll_link}
+    cum_error_penalty: {weight: 0.02, enabled: true}
 
 
 randomization:
@@ -85,8 +90,8 @@ randomization:
     .*: [0.8, 1.2]
   perturb_body_materials:
     body_names: ".*ankle_roll_link"
-    static_friction_range: [0.6, 4.0]
-    dynamic_friction_range: [0.6, 4.0]
+    static_friction_range: [0.1, 2.0]
+    dynamic_friction_range: [0.1, 2.0]
     restitution_range: [0.0, 0.2]
   motor_params_implicit:
     stiffness_range:

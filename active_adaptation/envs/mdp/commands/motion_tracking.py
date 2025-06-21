@@ -14,7 +14,7 @@ from active_adaptation.utils.math import (
     axis_angle_from_quat
 )
 from .base import Command
-from isaaclab.utils.math import yaw_quat, matrix_from_quat
+from isaaclab.utils.math import yaw_quat, matrix_from_quat, quat_from_angle_axis
 
 
 class MotionTrackingCommand(Command):
@@ -89,6 +89,7 @@ class MotionTrackingCommand(Command):
         self.num_tracking_joints = len(self.tracking_joint_indices_asset)
         self.num_future_steps = len(self.future_steps)
 
+        self.__init_debug_draw()
         self.update()
 
     def sample_init(self, env_ids: torch.Tensor) -> None:
@@ -112,9 +113,24 @@ class MotionTrackingCommand(Command):
         lift_height = 0.05
         init_root_state = self.init_root_state[env_ids]
         origins = self.env.scene.env_origins[env_ids]
-        init_root_state[:, :3] = origins + motion.body_pos_w[:, self.root_body_idx_motion]
-        init_root_state[:, 2] += lift_height
-        init_root_state[:, 3:7] = motion.body_quat_w[:, self.root_body_idx_motion]
+        init_root_pos = origins + motion.body_pos_w[:, self.root_body_idx_motion]
+
+        init_root_pos_noise = torch.randn_like(init_root_pos[:, 2]).clamp(-1, 1) * lift_height * 0.3
+        init_root_pos[:, 2] += lift_height
+        init_root_pos[:, 2] += init_root_pos_noise
+        
+        init_root_quat = motion.body_quat_w[:, self.root_body_idx_motion]
+        # generate random quat
+        random_axis = torch.rand(len(env_ids), 3, device=self.device)
+        random_angle = torch.rand(len(env_ids), device=self.device) * 0.1
+        random_quat = quat_from_angle_axis(random_angle, random_axis)
+        # remove yaw rotation
+        random_quat = quat_mul(quat_conjugate(yaw_quat(random_quat)), random_quat)
+        # apply random quat to init root quat
+        init_root_quat = quat_mul(random_quat, init_root_quat)
+
+        init_root_state[:, :3] = init_root_pos
+        init_root_state[:, 3:7] = init_root_quat
         init_root_state[:, 7:10] = motion.body_lin_vel_w[:, self.root_body_idx_motion]
         init_root_state[:, 10:13] = motion.body_ang_vel_w[:, self.root_body_idx_motion]
 
@@ -381,6 +397,9 @@ class MotionTrackingCommand(Command):
         cur_tracking_joint_pos = self.asset.data.joint_pos[:, self.tracking_joint_indices_asset]
         ref_tracking_joint_pos = self.ref_joint_pos[:, self.tracking_joint_indices_motion]
 
+        self.all_marker_pos_w[0] = cur_tracking_body_pos_w
+        self.all_marker_pos_w[1] = ref_tracking_body_pos_w
+
         diff_body_pos_w = ref_tracking_body_pos_w - cur_tracking_body_pos_w
         diff_body_quat_w = quat_mul(quat_conjugate(ref_tracking_body_quat_w), cur_tracking_body_quat_w)
         diff_joint_pos = ref_tracking_joint_pos - cur_tracking_joint_pos
@@ -388,29 +407,56 @@ class MotionTrackingCommand(Command):
         error_body_pos = diff_body_pos_w.norm(dim=-1)
         error_body_ori = torch.norm(axis_angle_from_quat(diff_body_quat_w), dim=-1)
         error_joint_pos = diff_joint_pos.abs()
-        # print("pos error: ", error_body_pos.mean(dim=1))
-        # print("ori error: ", error_body_ori.mean(dim=1))
-        # print("joint pos error: ", error_joint_pos.mean(dim=1))
 
         self._cum_error[:, 0] = error_body_pos.mean(dim=1) / self._cum_keypoint_pos_scale
         self._cum_error[:, 1] = error_body_ori.mean(dim=1) / self._cum_keypoint_ori_scale
         self._cum_error[:, 2] = error_joint_pos.mean(dim=1) / self._cum_joint_pos_scale
                 
         self.t += 1
-
-    def debug_draw(self):
-        if self.env.backend == "mujoco":
+    
+    def __init_debug_draw(self):
+        if self.env.backend != "isaac":
             return
         
-        target_keypoints_w = self.ref_body_pos_w[:, self.tracking_body_indices_motion].cpu()
-        self.env.debug_draw.point(target_keypoints_w.reshape(-1, 3), color=(1, 0, 0, 1))
+        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+        import isaaclab.sim as sim_utils
+        vis_markers_cfg = VisualizationMarkersCfg(
+            prim_path="/Visuals/Keypoints",
+            markers={
+                "robot": sim_utils.SphereCfg(
+                    radius=0.06,
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.0, 1.0, 0.0)
+                    ),
+                ),
+                "reference": sim_utils.SphereCfg(
+                    radius=0.06,
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(1.0, 0.0, 0.0)
+                    ),
+                ),
+            },
+        )
+        self.vis_markers = VisualizationMarkers(vis_markers_cfg)
+        num_ref_markers = self.num_envs * self.num_tracking_bodies
+        self.marker_indices = [0] * num_ref_markers + [1] * num_ref_markers
+        self.all_marker_pos_w = torch.zeros(2, self.num_envs, self.num_tracking_bodies, 3, device=self.device)
 
-        robot_keypoints_w = self.asset.data.body_pos_w[:, self.tracking_body_indices_asset].cpu()
-        self.env.debug_draw.point(robot_keypoints_w.reshape(-1, 3), color=(0, 1, 0, 1))
+    def debug_draw(self):
+        if self.env.backend != "isaac":
+            return
+        
+        # shape: [2, num_envs, num_tracking_bodies, 3]
+        self.vis_markers.visualize(
+            translations=self.all_marker_pos_w.reshape(-1, 3),
+            marker_indices=self.marker_indices,
+        )
 
+        robot_keypoints_w = self.all_marker_pos_w[0].reshape(-1, 3)
+        target_keypoints_w = self.all_marker_pos_w[1].reshape(-1, 3)
         self.env.debug_draw.vector(
-            robot_keypoints_w.reshape(-1, 3),
-            target_keypoints_w.reshape(-1, 3) - robot_keypoints_w.reshape(-1, 3),
+            robot_keypoints_w,
+            target_keypoints_w - robot_keypoints_w,
             color=(0, 0, 1, 1)
         )
 

@@ -45,6 +45,24 @@ class survival(Reward):
     def compute(self):
         return torch.ones(self.num_envs, 1, device=self.device)
 
+class cum_error_penalty(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, thres: float = 0.85, min_steps: int = 50):
+        super().__init__(env, weight, enabled)
+        self.thres = torch.tensor(thres, device=self.env.device)
+        self.min_steps = min_steps # tolerate the first few steps
+        self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
+        self.command_manager = self.env.command_manager
+    
+    def reset(self, env_ids):
+        self.error_exceeded_count[env_ids] = 0
+
+    def update(self):
+        error_exceeded = (self.command_manager._cum_error > self.thres).any(-1, True)
+        self.error_exceeded_count[error_exceeded] += 1
+        self.error_exceeded_count[~error_exceeded] = 0
+    
+    def compute(self):
+        return -self.error_exceeded_count.float()
 
 class linvel_z_l2(Reward):
     def __init__(self, env, weight: float, enabled: bool = True):
