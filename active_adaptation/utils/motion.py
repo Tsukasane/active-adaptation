@@ -1,52 +1,136 @@
 import torch
 import numpy as np
 import json
-import functools
 from tqdm import tqdm
 from pathlib import Path
 from tensordict import TensorClass, MemoryMappedTensor
-from typing import List
+# from tensordict import tensorclass, MemoryMappedTensor
+from typing import List, Union
 from scipy.spatial.transform import Rotation as sRot, Slerp
-from concurrent.futures import ThreadPoolExecutor
 from isaaclab.utils.string import resolve_matching_names
 
+unitree_joint_names =  [
+  "left_hip_pitch_joint",
+  "left_hip_roll_joint",
+  "left_hip_yaw_joint",
+  "left_knee_joint",
+  "left_ankle_pitch_joint",
+  "left_ankle_roll_joint",
+  "right_hip_pitch_joint",
+  "right_hip_roll_joint",
+  "right_hip_yaw_joint",
+  "right_knee_joint",
+  "right_ankle_pitch_joint",
+  "right_ankle_roll_joint",
+  "waist_yaw_joint",
+  "waist_roll_joint",
+  "waist_pitch_joint",
+  "left_shoulder_pitch_joint",
+  "left_shoulder_roll_joint",
+  "left_shoulder_yaw_joint",
+  "left_elbow_joint",
+  "left_wrist_roll_joint",
+  "left_wrist_pitch_joint",
+  "left_wrist_yaw_joint",
+  "right_shoulder_pitch_joint",
+  "right_shoulder_roll_joint",
+  "right_shoulder_yaw_joint",
+  "right_elbow_joint",
+  "right_wrist_roll_joint",
+  "right_wrist_pitch_joint",
+  "right_wrist_yaw_joint",
+]
 
-def lerp(x, xp, fp):
-    return np.stack([np.interp(x, xp, fp[:, i]) for i in range(fp.shape[1])], axis=-1)
+def lerp(ts_target, ts_source, x):
+    return np.stack([np.interp(ts_target, ts_source, x[:, i]) for i in range(x.shape[1])], axis=-1)
 
 
-def slerp(x, xp, fp):
-    s = Slerp(xp, sRot.from_quat(fp, scalar_first=True))
-    return s(x).as_quat(scalar_first=True)
+def slerp(ts_target, ts_source, quat):
+    # time dim: 0
+    # batch dim: 1:-1
+    # quat dim: -1
+    # for each batch dim, do the slerp
+    batch_shape = quat.shape[1:-1]
+    quat_dim = quat.shape[-1]
+
+    steps_target = ts_target.shape[0]
+    steps_source = ts_source.shape[0]
+
+    quat = quat.reshape(steps_source, -1, quat_dim)
+
+    batch_size = int(np.prod(batch_shape, initial=1))
+    out = np.empty((steps_target, batch_size, quat_dim))
+    for i in range(batch_size):
+        s = Slerp(ts_source, sRot.from_quat(quat[:, i, [1, 2, 3, 0]])) # quat first to quat last
+        out[:, i, :] = s(ts_target).as_quat()[..., [3, 0, 1, 2]] # quat last to quat first
+    out = out.reshape(steps_target, *batch_shape, quat_dim)
+    return out
 
 
-def interpolate(motion, target_fps: int = 50):
-    if motion["fps"] != target_fps:
+def interpolate(motion, source_fps: int, target_fps: int):
+    if source_fps != target_fps:
         T = motion["joint_pos"].shape[0]
-        end_t = T / motion["fps"]
-        xp = np.arange(0, end_t, 1 / motion["fps"])
-        x = np.arange(0, end_t, 1 / target_fps)
-        if x[-1] > xp[-1]:
-            x = x[:-1]
-        motion["body_pos_w"] = lerp(x, xp, motion["body_pos_w"].reshape(T, -1)).reshape(len(x), -1, 3)
-        motion["root_pos_w"] = lerp(x, xp, motion["root_pos_w"])
-        motion["joint_pos"] = lerp(x, xp, motion["joint_pos"])
-        motion["root_quat_w"] = slerp(x, xp, motion["root_quat_w"])
-        motion["fps"] = 50
+        end_t = T / source_fps
+        ts_source = np.arange(0, end_t, 1 / source_fps)
+        ts_target = np.arange(0, end_t, 1 / target_fps)
+        if ts_target[-1] > ts_source[-1]:
+            ts_target = ts_target[:-1]
+        motion["body_pos_w"] = lerp(ts_target, ts_source, motion["body_pos_w"].reshape(T, -1)).reshape(len(ts_target), -1, 3)
+        motion["body_quat_w"] = slerp(ts_target, ts_source, motion["body_quat_w"])
+        motion["joint_pos"] = lerp(ts_target, ts_source, motion["joint_pos"])
+        if "door_joint_pos" in motion:
+            motion["door_pos_w"] = lerp(ts_target, ts_source, motion["door_pos_w"])
+            motion["door_quat_w"] = slerp(ts_target, ts_source, motion["door_quat_w"])
+            motion["door_joint_pos"] = lerp(ts_target, ts_source, motion["door_joint_pos"])
+        
+        if "box_pos_w" in motion:
+            motion["box_pos_w"] = lerp(ts_target, ts_source, motion["box_pos_w"])
+            motion["box_quat_w"] = slerp(ts_target, ts_source, motion["box_quat_w"])
+            box_contact_slerped = lerp(ts_target, ts_source, motion["box_contact"].astype(np.float32)).astype(bool)
+            motion["box_contact"] = box_contact_slerped
+        
     return motion
 
+def quat_to_angular_velocity(quat: torch.Tensor, fps: float) -> torch.Tensor:
+    """Convert quaternion sequence to angular velocities using finite differences.
+    
+    Args:
+        quat: Quaternion sequence of shape [T, ..., 4] where ... represents arbitrary batch dimensions
+        fps: Frame rate for computing the time derivative
+    
+    Returns:
+        Angular velocities of shape [T-1, ..., 3]
+    """
+    dt = 1.0 / fps
+    
+    # Get q1 and q2 for consecutive timesteps
+    q1 = quat[:-1]  # [T-1, ..., 4]
+    q2 = quat[1:]   # [T-1, ..., 4]
+    
+    # Compute angular velocities using the formula
+    # ω = 2/dt * [q1w*q2x - q1x*q2w - q1y*q2z + q1z*q2y,
+    #             q1w*q2y + q1x*q2z - q1y*q2w - q1z*q2x,
+    #             q1w*q2z - q1x*q2y + q1y*q2x - q1z*q2w]
+    
+    ang_vel = (2.0 / dt) * torch.stack([
+        q1[..., 0]*q2[..., 1] - q1[..., 1]*q2[..., 0] - q1[..., 2]*q2[..., 3] + q1[..., 3]*q2[..., 2],
+        q1[..., 0]*q2[..., 2] + q1[..., 1]*q2[..., 3] - q1[..., 2]*q2[..., 0] - q1[..., 3]*q2[..., 1],
+        q1[..., 0]*q2[..., 3] - q1[..., 1]*q2[..., 2] + q1[..., 2]*q2[..., 1] - q1[..., 3]*q2[..., 0]
+    ], dim=-1)
+    
+    return ang_vel
 
+
+# @tensorclass
 class MotionData(TensorClass):
     motion_id: torch.Tensor
     step: torch.Tensor
-    root_pos_w: torch.Tensor
-    root_lin_vel_w: torch.Tensor
-    root_quat_w: torch.Tensor
-    joint_pos: torch.Tensor
     body_pos_w: torch.Tensor
-    body_pos_b: torch.Tensor
     body_lin_vel_w: torch.Tensor
-
+    body_quat_w: torch.Tensor
+    body_ang_vel_w: torch.Tensor
+    joint_pos: torch.Tensor
+    joint_vel: torch.Tensor
 
 class MotionDataset:
     def __init__(
@@ -63,81 +147,110 @@ class MotionDataset:
         self.ends = torch.as_tensor(ends)
         self.lengths = self.ends - self.starts
         self.data = data
+        self.device = data.device
+    
+    def to(self, device: torch.device):
+        self.data = self.data.to(device)
+        self.starts = self.starts.to(device)
+        self.ends = self.ends.to(device)
+        self.lengths = self.lengths.to(device)
+        self.device = device
+        return self
 
     @classmethod
-    def create_from_path(cls, root_path: str, target_fps: int = 50):
+    def create_from_path(cls, root_path: str, target_fps: int = 50, memory_mapped: bool = False):
         meta_path = Path(root_path) / "meta.json"
         with open(meta_path, "r") as f:
             meta = json.load(f)
         
-        motion_paths = list(Path(root_path).rglob("*.npz"))
+        motion_paths = list(sorted(Path(root_path).rglob("*.npz")))
         if not motion_paths:
             raise RuntimeError(f"No motions found in {root_path}")
         print(f"Found {len(motion_paths)} motion files under {root_path}")
-        
+
         motions = []
         total_length = 0
-        for motion_path in tqdm(motion_paths):
+        for i, motion_path in enumerate(tqdm(motion_paths)):
             motion = dict(np.load(motion_path))
-            motion = interpolate(motion, target_fps=target_fps)
-            total_length += motion["root_pos_w"].shape[0]
+            motion = interpolate(motion, source_fps=meta["fps"], target_fps=target_fps)
+            total_length += motion["body_pos_w"].shape[0]
             motions.append(motion)
+            
+        share_joint_names = [name for name in meta["joint_names"] if name in unitree_joint_names]
+        unitree_joint_indices = [unitree_joint_names.index(name) for name in share_joint_names]
+        motion_joint_indices = [meta["joint_names"].index(name) for name in share_joint_names]
+        for motion in motions:
+            joint_pos_unitree = np.zeros((motion["joint_pos"].shape[0], len(unitree_joint_names)))
+            joint_pos_unitree[:, unitree_joint_indices] = motion["joint_pos"][:, motion_joint_indices]
+            motion["joint_pos"] = joint_pos_unitree
         
-        step = MemoryMappedTensor.empty(total_length, dtype=int)
-        motion_id = MemoryMappedTensor.empty(total_length, dtype=int)
-        root_pos_w = MemoryMappedTensor.empty(total_length, 3)
-        root_lin_vel_w = MemoryMappedTensor.empty(total_length, 3)
-        root_quat_w = MemoryMappedTensor.empty(total_length, 4)
-        joint_pos = MemoryMappedTensor.empty(total_length, len(meta["joint_names"]))
-        body_pos_w = MemoryMappedTensor.empty(total_length, len(meta["body_names"]), 3)
-        body_pos_b = MemoryMappedTensor.empty(total_length, len(meta["body_names"]), 3)
-        body_lin_vel_w = MemoryMappedTensor.empty(total_length, len(meta["body_names"]), 3)
-        
-        cursor = 0
+        TensorClass = MemoryMappedTensor if memory_mapped else torch
+
+        step: torch.Tensor = TensorClass.empty(total_length, dtype=int)
+        motion_id: torch.Tensor = TensorClass.empty(total_length, dtype=int)
+        body_pos_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 3)
+        body_lin_vel_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 3)
+        body_quat_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 4)
+        body_ang_vel_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 3)
+        joint_pos: torch.Tensor = TensorClass.empty(total_length, len(unitree_joint_names))
+        joint_vel: torch.Tensor = TensorClass.empty(total_length, len(unitree_joint_names))
+    
+        start_idx = 0
         
         starts = []
         ends = []
 
         for i, motion in enumerate(motions):
-            motion_length = motion["root_pos_w"].shape[0]
-            step[cursor: cursor + motion_length] = torch.arange(motion_length)
-            motion_id[cursor:cursor + motion_length] = i
-            root_pos_w[cursor:cursor + motion_length] = torch.as_tensor(motion["root_pos_w"])
+            motion_length = motion["body_pos_w"].shape[0]
+            step[start_idx: start_idx + motion_length] = torch.arange(motion_length)
+            motion_id[start_idx:start_idx + motion_length] = i
             
-            root_lin_vel_w[cursor:cursor + motion_length-1] = torch.as_tensor(motion["root_pos_w"]).diff(dim=0) * target_fps
-            root_lin_vel_w[cursor + motion_length-1] = root_lin_vel_w[cursor + motion_length-2]
-            
-            root_quat_w[cursor:cursor + motion_length] = torch.as_tensor(motion["root_quat_w"])
-            joint_pos[cursor:cursor + motion_length] = torch.as_tensor(motion["joint_pos"])
-            body_pos_w[cursor:cursor + motion_length] = torch.as_tensor(motion["body_pos_w"])
-            
-            body_lin_vel_w[cursor:cursor + motion_length-1] = torch.as_tensor(motion["body_pos_w"]).diff(dim=0) * target_fps
-            body_lin_vel_w[cursor + motion_length-1] = body_lin_vel_w[cursor + motion_length-2]
+            # Body and joint positions
+            body_pos_w[start_idx:start_idx + motion_length] = torch.as_tensor(motion["body_pos_w"])
+            body_quat_w[start_idx:start_idx + motion_length] = torch.as_tensor(motion["body_quat_w"])
+            joint_pos[start_idx:start_idx + motion_length] = torch.as_tensor(motion["joint_pos"])
 
-            body_pos_b[cursor:cursor + motion_length] = torch.as_tensor(motion["body_pos_b"])
-            starts.append(cursor)
-            cursor += motion_length
-            ends.append(cursor)
-        
-        data = MotionData(
-            motion_id=motion_id, 
-            step=step,
-            root_pos_w=root_pos_w,
-            root_lin_vel_w=root_lin_vel_w,
-            root_quat_w=root_quat_w,
-            joint_pos=joint_pos,
-            body_pos_w=body_pos_w,
-            body_pos_b=body_pos_b,
-            body_lin_vel_w=body_lin_vel_w,
-            batch_size=[total_length]
-        )
-        
+            # Calculate velocities
+            if motion_length > 1:
+                body_lin_vel_w[start_idx:start_idx + motion_length-1] = torch.as_tensor(motion["body_pos_w"]).diff(dim=0) * target_fps
+                body_lin_vel_w[start_idx + motion_length-1] = body_lin_vel_w[start_idx + motion_length-2]
+                
+                joint_vel[start_idx:start_idx + motion_length-1] = torch.as_tensor(motion["joint_pos"]).diff(dim=0) * target_fps
+                joint_vel[start_idx + motion_length-1] = joint_vel[start_idx + motion_length-2]
+                
+                # Calculate angular velocities from quaternions
+                body_ang_vel_w[start_idx:start_idx + motion_length-1] = quat_to_angular_velocity(body_quat_w[start_idx:start_idx + motion_length], target_fps)
+                body_ang_vel_w[start_idx + motion_length-1] = body_ang_vel_w[start_idx + motion_length-2]
+
+            else:
+                # For single-frame motions, set velocities to zero
+                body_lin_vel_w[start_idx] = 0
+                body_ang_vel_w[start_idx] = 0
+                joint_vel[start_idx] = 0
+            
+            starts.append(start_idx)
+            start_idx += motion_length
+            ends.append(start_idx)
+        kwargs = {
+            "motion_id": motion_id,
+            "step": step,
+            "body_pos_w": body_pos_w,
+            "body_lin_vel_w": body_lin_vel_w,
+            "body_quat_w": body_quat_w,
+            "body_ang_vel_w": body_ang_vel_w,
+            "joint_pos": joint_pos,
+            "joint_vel": joint_vel,
+            "batch_size": [total_length]
+        }
+
+        data = MotionData(**kwargs)
+
         return cls(
             body_names=meta["body_names"],
-            joint_names=meta["joint_names"],
+            joint_names=unitree_joint_names,
             starts=starts,
             ends=ends,
-            data=data
+            data=data,
         )
 
     @property
@@ -148,93 +261,15 @@ class MotionDataset:
     def num_steps(self):
         return len(self.data)
 
-    @functools.cache
-    def valid_starts(self, seq_len: int=1):
-        idx = torch.arange(self.num_steps)
-        same = self.data.motion_id[idx] == self.data.motion_id[(idx+seq_len-1) % self.num_steps]
-        idx = idx[same]
-        return idx
-    
-    def sample_transitions(self, size, seq_len: int=1) -> MotionData:
-        if isinstance(size, int):
-            size = (size,)
-        valid_starts = self.valid_starts(seq_len)
-        idx = torch.randint(0, len(valid_starts), size)
-        return self.data[idx.unsqueeze(-1) + torch.arange(seq_len)]
-
-    def sample_subset(self, num_motions: int) -> "MotionDataset":
-        if num_motions > self.num_motions:
-            raise ValueError()
-        episodes = torch.randperm(self.num_motions)[:num_motions].sort().values
-        starts = self.starts[episodes]
-        ends = self.ends[episodes]
-        idx = []
-        for start, end in zip(starts, ends):
-            idx.append(torch.arange(start, end))
-        idx = torch.cat(idx)
-        data = self.data[idx]
-        return MotionDataset(self.body_names, self.joint_names, starts, ends, data)
-    
-    def get_slice(self, motion_ids: torch.Tensor, starts: torch.Tensor, steps: int=1) -> MotionData:
+    def get_slice(self, motion_ids: torch.Tensor, starts: torch.Tensor, steps: Union[int, torch.Tensor] = 1) -> MotionData:
         if isinstance(steps, int):
-            idx = (self.starts[motion_ids] + starts).unsqueeze(1) + torch.arange(steps)
-        elif isinstance(steps, torch.Tensor):
-            idx = (self.starts[motion_ids] + starts).unsqueeze(1) + steps
-        else:
-            raise TypeError()
-        if not (idx[:, -1] <= self.ends[motion_ids]).all():
-            raise ValueError()
-        return self.data[idx]
+            steps = torch.arange(steps, device=self.device)
+        idx = (self.starts[motion_ids] + starts).unsqueeze(1) + steps.unsqueeze(0)
+        idx.clamp_max_(self.ends.unsqueeze(1)[motion_ids] - 1)
+        return self.data[idx] # shape: [len(motion_ids), len(steps), ...]
 
     def find_joints(self, joint_names, preserve_order: bool=False):
         return resolve_matching_names(joint_names, self.joint_names, preserve_order)
 
     def find_bodies(self, body_names, preserve_order: bool=False):
         return resolve_matching_names(body_names, self.body_names, preserve_order)
-
-
-# class MotionIterator:
-#     def __init__(
-#         self, dataset: MotionDataset,
-#         num_motions: int,
-#         steps: int,
-#         prefetch: bool=False,
-#     ):
-#         self.dataset = dataset
-#         self.num_motions = num_motions
-#         self.steps = steps
-#         self.prefetch = prefetch
-    
-#     def _get(self, t: torch.Tensor):
-#         return self.dataset.get_slice(self.motion_ids, t, self.steps)
-    
-#     def reset(self):
-#         self.motion_ids = torch.randint(self.dataset.num_motions, (self.num_motions,))
-#         self.t = torch.zeros((self.num_motions,), dtype=torch.int32)
-#         self._slice = self.dataset.get_slice(self.motion_ids, self.t, self.steps)
-#         if self.prefetch:
-#             self.executor = ThreadPoolExecutor(max_workers=1)
-#             self.future = self.executor.submit(self._get, self.t+1)
-#         return self._slice
-
-#     def step(self, flag: torch.Tensor):
-#         if not flag.dtype == torch.BoolTensor:
-#             raise ValueError
-        
-#         self.t += flag.bool()
-#         ended = self.t + self.steps > self.dataset.lengths[self.motion_ids]
-
-#         if self.prefetch:
-#             _slice = self.future.result()
-#             if flag.all():
-#                 self._slice = _slice
-#             else:
-#                 self._slice = torch.where(flag, _slice, self._slice)
-#             self.future = self.executor.submit(self._get, self.t+1)
-#         else:
-#             self._slice = self._get(self.t)
-        
-#         self.t = torch.where(ended, 0, self.t)
-#         self.motion_ids = torch.where(ended, torch.randint(self.dataset.num_motions, (self.num_motions,)), self.motion_ids)
-#         return self._slice, ended
-

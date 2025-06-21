@@ -27,6 +27,8 @@ if active_adaptation.get_backend() == "isaac":
     from isaaclab.utils.warp import convert_to_warp_mesh, raycast_mesh
     from pxr import UsdGeom, UsdPhysics
 
+from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
+
 class ObsGroup:
     
     def __init__(
@@ -222,7 +224,7 @@ class _Env(EnvBase):
 
             for key, params in func_specs.items():
                 rew_cls = mdp.Reward.registry[key]
-                reward: mdp.Reward = rew_cls(self, **params)
+                reward: mdp.Reward = rew_cls(env=self, **params)
                 funcs[key] = reward
                 reward_spec["stats", group_name, key] = UnboundedContinuous(1, device=self.device)
                 self._update_callbacks.append(reward.update)
@@ -388,6 +390,8 @@ class _Env(EnvBase):
         self._compute_observation(tensordict)
         terminated = self._compute_termination()
         truncated = (self.episode_length_buf >= self.max_episode_length).unsqueeze(1)
+        if isinstance(self.command_manager, MotionTrackingCommand):
+            truncated = truncated | self.command_manager.finished
         tensordict.set("terminated", terminated)
         tensordict.set("truncated", truncated)
         tensordict.set("done", terminated | truncated)

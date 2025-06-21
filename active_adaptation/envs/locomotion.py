@@ -123,7 +123,7 @@ class SimpleEnv(_Env):
         
     def _reset_idx(self, env_ids: torch.Tensor):
         init_root_state = self.command_manager.sample_init(env_ids)
-        if not self.robot.is_fixed_base:
+        if init_root_state is not None and not self.robot.is_fixed_base:
             self.robot.write_root_state_to_sim(
                 init_root_state, 
                 env_ids=env_ids

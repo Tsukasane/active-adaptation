@@ -1,8 +1,7 @@
 from math import inf
 import torch
 import abc
-from typing import TYPE_CHECKING, Callable
-
+from typing import TYPE_CHECKING, Callable, List
 from isaaclab.utils.math import yaw_quat, wrap_to_pi, euler_xyz_from_quat
 import isaaclab.utils.string as string_utils
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
@@ -622,7 +621,7 @@ class tracking_error_exp(Reward):
 
 class feet_slip(Reward):
     def __init__(
-        self, env: "LocomotionEnv", body_names: str, weight: float, enabled: bool = True
+        self, env: "LocomotionEnv", body_names: str, weight: float, tolerance: float = 0.0, enabled: bool = True
     ):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
@@ -632,12 +631,15 @@ class feet_slip(Reward):
         self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
         self.body_ids = torch.tensor(self.body_ids, device=self.env.device)
 
+        self.tolerance = tolerance
+
     def compute(self) -> torch.Tensor:
         in_contact = (
             self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02
         )
         feet_vel = self.asset.data.body_lin_vel_w[:, self.articulation_body_ids, :2]
-        slip = (in_contact * feet_vel.norm(dim=-1).square()).sum(dim=1, keepdim=True)
+        feet_vel = (feet_vel.norm(dim=-1) - self.tolerance).clamp_min(0.0)
+        slip = (in_contact * feet_vel).sum(dim=1, keepdim=True)
         return -slip
 
 
@@ -661,19 +663,14 @@ class feet_air_time(Reward):
         self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
         self.body_ids = torch.tensor(self.body_ids, device=self.env.device)
         self.reward = torch.zeros(self.num_envs, 1, device=self.env.device)
-        self.last_air_time = torch.zeros(
-            self.num_envs, len(self.body_ids), device=self.env.device
-        )
 
     def compute(self):
         first_contact = self.contact_sensor.compute_first_contact(self.env.step_dt)[
             :, self.body_ids
         ]
         last_air_time = self.contact_sensor.data.last_air_time[:, self.body_ids]
-        contact = self.last_air_time != last_air_time
-        self.last_air_time = last_air_time
         self.reward = torch.sum(
-            (last_air_time - self.thres).clamp_max(0.0) * contact, dim=1, keepdim=True
+            (last_air_time - self.thres).clamp_max(0.0) * first_contact, dim=1, keepdim=True
         )
         self.reward *= ~self.env.command_manager.is_standing_env
         # if self.condition_on_linvel and hasattr(self.asset.data, "linvel_exp"):
@@ -1078,11 +1075,13 @@ class impedance_yaw_pos(Reward):
 
 
 class feet_swing_height(Reward):
-    def __init__(self, env, target_height: float, weight: float, enabled: bool = True):
+    def __init__(self, env, target_height: float, body_names: str | List[str], weight: float, enabled: bool = True):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         self.target_height = target_height
-        self.feet_ids = self.asset.find_bodies(".*foot.*")[0]
+        self.feet_ids = self.asset.find_bodies(body_names)[0]
+        self.contact_forces: ContactSensor = self.env.scene["contact_forces"]
+        self.feet_contact_ids = self.contact_forces.find_bodies(body_names)[0]
 
     def update(self):
         self.feet_pos_b = quat_rotate_inverse(
@@ -1105,7 +1104,10 @@ class feet_swing_height(Reward):
             self.feet_vel_b[:, :, :2].square().sum(-1)
             + self.asset.data.body_ang_vel_w[:, self.feet_ids, 2].square()
         )
-        return -(hight_error * lateral_speed).sum(1, keepdim=True)
+        # shape: [num_envs, num_feet]
+        in_contact = self.contact_forces.data.net_forces_w[:, self.feet_contact_ids].norm(dim=2) > 0.5
+        # shape: [num_envs, num_feet_contact]
+        return -(hight_error * lateral_speed * (~in_contact)).sum(1, keepdim=True)
 
 
 class head_clearance(Reward):

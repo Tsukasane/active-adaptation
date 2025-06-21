@@ -91,6 +91,7 @@ def parse_checkpoint_path(path: str=None):
     """
     Parse a checkpoint path from local or wandb.
     If `path` is of the form `run:<wandb_run_id>`, it will be downloaded from wandb.
+    If `path` is of the form `run:<wandb_run_id>:<checkpoint_num>`, it will download the specific checkpoint.
 
     Args:
         path (str or None): Path to a checkpoint. 
@@ -102,8 +103,13 @@ def parse_checkpoint_path(path: str=None):
         return None
 
     if path.startswith("run:"):
+        # Parse the run path and optional checkpoint number
+        parts = path[4:].split(':')
+        run_path = parts[0]
+        target_checkpoint_num = parts[1] if len(parts) > 1 else None
+        
         api = wandb.Api()
-        run = api.run(path[4:])
+        run = api.run(run_path)
         root = os.path.join(os.path.dirname(__file__), "wandb", run.name)
         os.makedirs(root, exist_ok=True)
 
@@ -123,7 +129,25 @@ def parse_checkpoint_path(path: str=None):
                 return int(number_str)
 
         checkpoints.sort(key=sort_by_time)
-        checkpoint = checkpoints[-1]
+        
+        # If a specific checkpoint number is requested, find it
+        if target_checkpoint_num is not None:
+            target_checkpoint = None
+            for checkpoint in checkpoints:
+                number_str = checkpoint.name[:-3].split("_")[-1]
+                if number_str == target_checkpoint_num:
+                    target_checkpoint = checkpoint
+                    break
+            
+            if target_checkpoint is None:
+                available_nums = [f.name[:-3].split("_")[-1] for f in checkpoints]
+                raise ValueError(f"Checkpoint {target_checkpoint_num} not found. Available checkpoints: {available_nums}")
+            
+            checkpoint = target_checkpoint
+        else:
+            # Use the latest checkpoint (existing behavior)
+            checkpoint = checkpoints[-1]
+        
         path = os.path.join(root, checkpoint.name)
         print(f"Downloading checkpoint to {path}")
         checkpoint.download(root, replace=True)

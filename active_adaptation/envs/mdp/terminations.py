@@ -117,11 +117,10 @@ class tracking_error(Termination):
 class cum_error(Termination):
     def __init__(self, env, thres: float = 0.85, min_steps: int = 50):
         super().__init__(env)
-        from .commands import Command2
         self.thres = torch.tensor(thres, device=self.env.device)
         self.min_steps = min_steps # tolerate the first few steps
         self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
-        self.command_manager: Command2 = self.env.command_manager
+        self.command_manager = self.env.command_manager
     
     def reset(self, env_ids):
         self.error_exceeded_count[env_ids] = 0

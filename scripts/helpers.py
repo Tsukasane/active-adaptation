@@ -188,6 +188,7 @@ def evaluate(
     keys = set(keys)
     keys.add(("next", "done"))
 
+    env.base_env.eval()
     env.eval()
     env.set_seed(seed)
 

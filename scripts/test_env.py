@@ -17,7 +17,9 @@ from setproctitle import setproctitle
 
 import active_adaptation as aa
 from isaaclab.app import AppLauncher
-from active_adaptation.utils.torchrl import SyncDataCollector
+# from active_adaptation.utils.torchrl import SyncDataCollector
+from torchrl.envs.utils import set_exploration_type, ExplorationType
+from tensordict.nn import TensorDictModuleBase
 
 # local import
 from scripts.helpers import make_env_policy, EpisodeStats, evaluate
@@ -87,14 +89,14 @@ def main(cfg: DictConfig):
 
     rollout_policy = policy.get_rollout_policy("train")
 
-    collector = SyncDataCollector(
-        env,
-        policy=rollout_policy,
-        frames_per_batch=frames_per_batch,
-        total_frames=total_frames,
-        device=env.device,
-        return_same_td=True,
-    )
+    # collector = SyncDataCollector(
+    #     env,
+    #     policy=rollout_policy,
+    #     frames_per_batch=frames_per_batch,
+    #     total_frames=total_frames,
+    #     device=env.device,
+    #     return_same_td=True,
+    # )
     
     def save(policy, checkpoint_name: str, artifact: bool=False):
         ckpt_path = os.path.join(run.dir, f"{checkpoint_name}.pt")
@@ -118,57 +120,78 @@ def main(cfg: DictConfig):
 
     assert env.training
     if aa.is_main_process():
-        p = tqdm(collector, total=total_iters)
+        progress = tqdm(range(total_iters))
     else:
-        p = collector
+        progress = range(total_iters)
     
     def should_save(i):
         if not aa.is_main_process():
             return False
         return i > 0 and i % save_interval == 0
     
-    for i, data in enumerate(p):
-        start = time.perf_counter()
-        
-        info = {}
+    carry = env.reset()
+
+    rollout_policy: TensorDictModuleBase = policy.get_rollout_policy("train")
+    
+    env_frames = 0
+    for i in progress:
+
+        data = []
+        rollout_start = time.perf_counter()
+        with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
+            torch.compiler.cudagraph_mark_step_begin() # for compiled policy
+            for _ in range(cfg.algo.train_every):
+                carry = rollout_policy(carry)
+                td, carry = env.step_and_maybe_reset(carry)
+                td["next"] = td["next"].exclude(*rollout_policy.in_keys)
+                data.append(td.to(policy.device))
+            data = torch.stack(data, dim=1)
+            
+            policy.critic(data)
+            values = data["state_value"]
+            data["next", "state_value"] = torch.where(
+                data["next", "done"],
+                values, # a walkaround to avoid storing the next states
+                torch.cat([values[:, 1:], policy.critic(carry.copy())["state_value"].unsqueeze(1)], dim=1)
+            )
+        rollout_time = time.perf_counter() - rollout_start
 
         episode_stats.add(data)
+        env_frames += data.numel()
 
+        info = {}
         if i % log_interval == 0 and len(episode_stats):
             for k, v in sorted(episode_stats.pop().items(True, True)):
                 key = "train/" + ("/".join(k) if isinstance(k, tuple) else k)
                 info[key] = torch.mean(v.float()).item()
-        
+        training_start = time.perf_counter()
         info.update(policy.train_op(data))
+        training_time = time.perf_counter() - training_start
         info.update(env.extra)
-        info.update(env.stats_ema)
+        info.update(env.stats_ema) # step-wise exponential moving average of stats
+        
         if hasattr(policy, "step_schedule"):
             policy.step_schedule(i / total_iters)
-
-        info["env_frames"] = collector._frames * aa.get_world_size()
-        info["rollout_fps"] = collector._fps * aa.get_world_size()
-        info["training_time"] = time.perf_counter() - start
+        
+        info["env_frames"] = env_frames
+        info["rollout_fps"] = data.numel() / rollout_time
+        info["training_time"] = training_time
         
         if should_save(i):
             save(policy, f"checkpoint_{i}")
 
-        run.log(info)
-
         if aa.is_main_process():
             print(OmegaConf.to_yaml({k: v for k, v in info.items() if isinstance(v, (float, int))}))
+            run.log(info)
     
     if aa.is_main_process():
         save(policy, "checkpoint_final")
 
     policy_eval = policy.get_rollout_policy("eval")
     info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
-    info["env_frames"] = collector._frames
     run.log(info)
 
     wandb.finish()
-    exit(0)
-    
-    base_env.close()
     simulation_app.close()
     exit(0)
 
