@@ -10,7 +10,7 @@ flags: [""]
 
 command:
   _target_: active_adaptation.envs.mdp.commands.motion_tracking.MotionTrackingCommand
-  data_path: /home/elijah/Documents/projects/percep-loco/HV-dev/humanoidverse/data/motion_dataset/UnitreeG1/walk1_subject1-processed
+  data_path: data/motion/walk1_subject1-processed
 
 observation:
   command:
