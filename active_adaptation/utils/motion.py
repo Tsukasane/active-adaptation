@@ -159,6 +159,9 @@ class MotionDataset:
 
     @classmethod
     def create_from_path(cls, root_path: str, target_fps: int = 50, memory_mapped: bool = False):
+        import active_adaptation
+        active_adaptation_path = Path(active_adaptation.__file__).parent.parent
+        root_path = active_adaptation_path / Path(root_path)
         meta_path = Path(root_path) / "meta.json"
         with open(meta_path, "r") as f:
             meta = json.load(f)

@@ -185,7 +185,7 @@ class MJArticulation:
         self._data = MJArticulationData(
             default_joint_pos=default_joint_pos[None],
             default_joint_vel=default_joint_vel[None],
-            default_root_state=torch.tensor([[*cfg.init_state["pos"], 1., 0., 0., 0.]]),
+            default_root_state=torch.tensor([[*cfg.init_state["pos"], 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]]),
             default_mass=torch.as_tensor(self.mj_model.body_mass[self.body_adrs], dtype=torch.float32)[None],
             default_inertia=diag_inertia.diag_embed().flatten(1)[None],
             joint_stiffness=joint_stiffness[None],
@@ -334,7 +334,9 @@ class MJArticulation:
             self.mj_data.xfrc_applied[self.body_adrs_write, :3] = quat_rotate(self._data.root_quat_w, self._external_force_b)[0]
             self.mj_data.xfrc_applied[self.body_adrs_write, 3:] = quat_rotate(self._data.root_quat_w, self._external_torque_b)[0]
 
-    def write_joint_state_to_sim(self, joint_pos: ArrayType, joint_vel: ArrayType, joint_ids: ArrayType, env_ids: ArrayType=None):
+    def write_joint_state_to_sim(self, joint_pos: ArrayType, joint_vel: ArrayType, joint_ids: ArrayType=None, env_ids: ArrayType=None):
+        if joint_ids is None:
+            joint_ids = slice(None)
         if joint_pos is not None:
             joint_pos_all = self._data.joint_pos[0].clone()
             joint_pos_all[joint_ids] = joint_pos[0]

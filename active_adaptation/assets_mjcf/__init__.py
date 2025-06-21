@@ -167,8 +167,8 @@ ROBOTS["g1_waist_unlocked"] = MJArticulationCfg(
 )
 
 ROBOTS["g1_29dof"] = MJArticulationCfg(
-    mjcf_path=os.path.join(PATH, "g1_29dof", "g1_29dof_nohand.xml"),
-    **json.load(open(os.path.join(PATH, "g1_23dof", "g1_29dof_rev_1_0.json"))),
+    mjcf_path=os.path.join(PATH, "g1_29dof_nohand", "g1_29dof_nohand-feet_sphere.xml"),
+    **json.load(open(os.path.join(PATH, "g1_29dof_nohand", "g1_29dof_nohand.json"))),
     joint_symmetry_mapping=symmetry_utils.mirrored({
         "left_hip_pitch_joint": (1, "right_hip_pitch_joint"),
         "left_hip_roll_joint": (-1, "right_hip_roll_joint"),

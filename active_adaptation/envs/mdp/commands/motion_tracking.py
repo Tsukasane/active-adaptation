@@ -399,6 +399,9 @@ class MotionTrackingCommand(Command):
         self.t += 1
 
     def debug_draw(self):
+        if self.env.backend == "mujoco":
+            return
+        
         target_keypoints_w = self.ref_body_pos_w[:, self.tracking_body_indices_motion].cpu()
         self.env.debug_draw.point(target_keypoints_w.reshape(-1, 3), color=(1, 0, 0, 1))
 
