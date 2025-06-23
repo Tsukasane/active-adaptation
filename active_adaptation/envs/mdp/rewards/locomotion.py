@@ -62,7 +62,26 @@ class cum_error_penalty(Reward):
         self.error_exceeded_count[~error_exceeded] = 0
     
     def compute(self):
-        return -self.error_exceeded_count.float()
+        return -(self.error_exceeded_count != 0).float()
+
+class cum_error_term_penalty(Reward):
+    def __init__(self, env, weight: float, enabled: bool = True, thres: float = 0.85, min_steps: int = 50):
+        super().__init__(env, weight, enabled)
+        self.thres = torch.tensor(thres, device=self.env.device)
+        self.min_steps = min_steps # tolerate the first few steps
+        self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
+        self.command_manager = self.env.command_manager
+    
+    def reset(self, env_ids):
+        self.error_exceeded_count[env_ids] = 0
+
+    def update(self):
+        error_exceeded = (self.command_manager._cum_error > self.thres).any(-1, True)
+        self.error_exceeded_count[error_exceeded] += 1
+        self.error_exceeded_count[~error_exceeded] = 0
+    
+    def compute(self):
+        return -(self.error_exceeded_count > self.min_steps).float()
 
 class linvel_z_l2(Reward):
     def __init__(self, env, weight: float, enabled: bool = True):
@@ -661,7 +680,7 @@ class feet_slip(Reward):
         return -slip
 
 
-class feet_air_time(Reward):
+class feet_air_time_log(Reward):
     def __init__(
         self,
         env: "LocomotionEnv",
@@ -669,6 +688,7 @@ class feet_air_time(Reward):
         thres: float,
         weight: float,
         enabled: bool = True,
+        soft_discount: float = 1.0,
         condition_on_linvel: bool = True,
     ):
         super().__init__(env, weight, enabled)
@@ -676,6 +696,7 @@ class feet_air_time(Reward):
         self.asset: Articulation = self.env.scene["robot"]
         self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
         self.condition_on_linvel = condition_on_linvel
+        self.soft_discount = soft_discount
 
         self.articulation_body_ids = self.asset.find_bodies(body_names)[0]
         self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
@@ -688,12 +709,75 @@ class feet_air_time(Reward):
         ]
         last_air_time = self.contact_sensor.data.last_air_time[:, self.body_ids]
         self.reward = torch.sum(
+            torch.log((last_air_time / self.thres).clamp(min=1e-6, max=1.0)) * first_contact, dim=1, keepdim=True
+        )
+        self.reward *= ~self.env.command_manager.is_standing_env
+        violation = ((last_air_time < self.thres) & first_contact).any(dim=1)
+        self.env.discount[violation] = self.soft_discount
+        return self.reward
+    
+class feet_air_time(Reward):
+    def __init__(
+        self,
+        env: "LocomotionEnv",
+        body_names: str,
+        thres: float,
+        weight: float,
+        enabled: bool = True,
+        soft_discount: float = 1.0,
+        condition_on_linvel: bool = True,
+    ):
+        super().__init__(env, weight, enabled)
+        self.thres = thres
+        self.asset: Articulation = self.env.scene["robot"]
+        self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+        self.condition_on_linvel = condition_on_linvel
+        self.soft_discount = soft_discount
+
+        self.articulation_body_ids = self.asset.find_bodies(body_names)[0]
+        self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
+        self.body_ids = torch.tensor(self.body_ids, device=self.env.device)
+        self.reward = torch.zeros(self.num_envs, 1, device=self.env.device)
+
+        if self.env.backend != "isaac":
+            return
+        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+        import isaaclab.sim as sim_utils
+        self.vis_marker = VisualizationMarkers(
+            VisualizationMarkersCfg(
+                prim_path="/Visuals/Feet_contact",
+                markers={"feet": sim_utils.SphereCfg(
+                    radius=0.06, 
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.5, 0.0)))}
+            )
+        )
+        self.vis_marker_pos_w = torch.zeros(self.num_envs, len(self.body_ids), 3, device=self.env.device)
+
+    def compute(self):
+        first_contact = self.contact_sensor.compute_first_contact(self.env.step_dt)[
+            :, self.body_ids
+        ]
+        last_air_time = self.contact_sensor.data.last_air_time[:, self.body_ids]
+        self.reward = torch.sum(
             (last_air_time - self.thres).clamp_max(0.0) * first_contact, dim=1, keepdim=True
         )
         self.reward *= ~self.env.command_manager.is_standing_env
-        # if self.condition_on_linvel and hasattr(self.asset.data, "linvel_exp"):
-        #     self.reward *= self.asset.data.linvel_exp
+        violation = ((last_air_time < self.thres) & first_contact).any(dim=1)
+        self.env.discount[violation] = self.soft_discount
         return self.reward
+    
+    def debug_draw(self):
+        if self.env.backend != "isaac":
+            return
+        self.vis_marker_pos_w.fill_(-100)
+        feet_pos_w = self.asset.data.body_pos_w[:, self.articulation_body_ids]
+        first_contact = self.contact_sensor.compute_first_contact(self.env.step_dt)[
+            :, self.body_ids
+        ]
+        self.vis_marker_pos_w[first_contact] = feet_pos_w[first_contact]
+        self.vis_marker.visualize(
+            translations=self.vis_marker_pos_w.reshape(-1, 3),
+        )
 
 
 # class linvel_exp2(Reward):

@@ -132,9 +132,10 @@ class SimpleEnv(_Env):
         self.scene.reset(env_ids)
 
     def render(self, mode: str="human"):
+        look_at_env_id = self.lookat_env_i
         self.sim.set_camera_view(
-            eye=self.robot.data.root_pos_w[0].cpu() + torch.as_tensor(self.cfg.viewer.eye),
-            target=self.robot.data.root_pos_w[0].cpu()
+            eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
+            target=self.robot.data.root_pos_w[look_at_env_id].cpu()
         )
         return super().render(mode)
         

@@ -395,7 +395,7 @@ class MJScene:
                 sensor = MjContactSensor(self.articulations[asset_cfg])
                 self.sensors[asset_name] = sensor
 
-        self.viewer = mujoco.viewer.launch_passive(self.articulations["robot"].mj_model, self.articulations["robot"].mj_data)
+        self.viewer = mujoco.viewer.launch_passive(self.articulations["robot"].mj_model, self.articulations["robot"].mj_data, show_left_ui=False, show_right_ui=False)
         self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         self.viewer.cam.trackbodyid = 1
 

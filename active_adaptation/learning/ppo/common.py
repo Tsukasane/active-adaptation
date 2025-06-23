@@ -142,15 +142,16 @@ class Split(nn.Module):
 
 
 class Actor(nn.Module):
-    def __init__(self, action_dim: int, predict_std: bool=False) -> None:
+    def __init__(self, action_dim: int, init_noise_scale: float=1.0, predict_std: bool=False, load_noise_scale: float | None=None) -> None:
         super().__init__()
         self.predict_std = predict_std
         if predict_std:
             self.actor_mean = nn.LazyLinear(action_dim * 2)
         else:
             self.actor_mean = nn.LazyLinear(action_dim)
-            self.actor_std = nn.Parameter(torch.ones(action_dim))
+            self.actor_std = nn.Parameter(torch.ones(action_dim) * init_noise_scale)
         self.scale_mapping = nn.Identity()
+        self.load_noise_scale = load_noise_scale
     
     def forward(self, features: torch.Tensor):
         if self.predict_std:
@@ -160,6 +161,13 @@ class Actor(nn.Module):
             scale = torch.ones_like(loc) * self.actor_std
         scale = self.scale_mapping(scale)
         return loc, scale
+    
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        if self.load_noise_scale is not None:
+            self.actor_std.data.fill_(self.load_noise_scale)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+                                      missing_keys, unexpected_keys, error_msgs)
 
 
 class ActorCov(nn.Module):

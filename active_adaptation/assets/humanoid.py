@@ -166,8 +166,8 @@ G1_27DOF_CFG = ArticulationCfg(
         #     ".*wrist_yaw_joint": 0.0,
         # },
         joint_pos={
-            ".*_hip_pitch_joint": -0.1,
-            ".*_knee_joint": 0.6,
+            ".*_hip_pitch_joint": -0.2,
+            ".*_knee_joint": 0.4,
             ".*_ankle_pitch_joint": -0.2,
             ".*_elbow_joint": 1.0,
         },

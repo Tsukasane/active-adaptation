@@ -61,7 +61,10 @@ class PPOConfig:
     lr: float = 5e-4
     clip_param: float = 0.2
     entropy_coef_start: float = 0.004
-    entropy_coef_end: float = 0.00
+    entropy_coef_end: float = 0.001
+    init_noise_scale: float = 1.5
+    load_noise_scale: float | None = 1.0
+    clip_neg_reward: bool = True
 
     reg_lambda: float = 0.0
     rec_weight: float = 0.0
@@ -279,7 +282,7 @@ class PPOROA(TensorDictModuleBase):
             module=Seq(
                 CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
                 Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
-                Mod(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"]),
+                Mod(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], ["loc", "scale"]),
                 # Mod(nn.LazyLinear(1), ["_actor_feature"], ["flag"])
             ),
             in_keys=["loc", "scale"],
@@ -293,7 +296,7 @@ class PPOROA(TensorDictModuleBase):
             module=Seq(
                 CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
                 Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
-                Mod(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"]),
+                Mod(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], ["loc", "scale"]),
                 # Mod(nn.LazyLinear(1), ["_actor_feature"], ["flag"])
             ),
             in_keys=["loc", "scale"],
@@ -469,14 +472,16 @@ class PPOROA(TensorDictModuleBase):
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True).clamp_min(0.)
+        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)  
+        if self.cfg.clip_neg_reward:
+            rewards = rewards.clamp_min(0.)
         discount = tensordict["next", "discount"]
         terms = tensordict[TERM_KEY]
         dones = tensordict[DONE_KEY]
         values = self.value_norm.denormalize(values)
         next_values = self.value_norm.denormalize(next_values)
 
-        adv, ret = self.gae(rewards, terms, dones, values, next_values)
+        adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
@@ -549,6 +554,7 @@ class PPOROA(TensorDictModuleBase):
         info = {
             "actor/policy_loss": policy_loss.detach(),
             "actor/entropy": entropy.detach(),
+            "actor/mean_std": tensordict["scale"].detach().mean(),
             "actor/grad_norm": actor_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
             "actor/gradient_penalty": gradient_penalty.detach(),

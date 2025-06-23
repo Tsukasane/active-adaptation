@@ -66,6 +66,7 @@ def main(cfg):
     with open(path, "w") as f:
         OmegaConf.save(info, f)
 
+    os._exit(0)
     env.close()
     simulation_app.close()
 

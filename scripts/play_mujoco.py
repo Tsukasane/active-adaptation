@@ -5,6 +5,7 @@ import einops
 import itertools
 import os
 import datetime
+import re
 from omegaconf import OmegaConf
 
 from torchrl.envs.utils import set_exploration_type, ExplorationType
@@ -12,6 +13,7 @@ from tensordict.nn import TensorDictSequential
 
 import active_adaptation
 from active_adaptation.utils.export import export_onnx
+from active_adaptation.utils.wandb import parse_checkpoint_path
 
 
 @hydra.main(config_path="../cfg", config_name="play", version_base=None)
@@ -29,7 +31,26 @@ def main(cfg):
     if cfg.export_policy:
         import time
         import copy
-        time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
+        
+        # Load checkpoint to get wandb info and checkpoint number
+        checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)
+        wandb_run_id = "unknown"
+        checkpoint_num = "unknown"
+        
+        if checkpoint_path is not None:
+            state_dict = torch.load(checkpoint_path, weights_only=False)
+            # Get wandb run ID from state_dict
+            if "wandb" in state_dict and "id" in state_dict["wandb"]:
+                wandb_run_id = state_dict["wandb"]["id"]
+            
+            # Extract checkpoint number from filename
+            filename = os.path.basename(checkpoint_path)
+            match = re.search(r'checkpoint_(\d+)', filename)
+            if match:
+                checkpoint_num = match.group(1)
+            elif filename.endswith('_final.pt'):
+                checkpoint_num = "final"
+        
         fake_input = env.observation_spec[0].rand().cpu()
         fake_input["is_init"] = torch.tensor(1, dtype=bool)
         fake_input["context_adapt_hx"] = torch.zeros(128)
@@ -49,15 +70,18 @@ def main(cfg):
         
         print(f"Inference time of policy: {test(_policy, fake_input)}")
 
-        time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
+        # Use new filename format with wandb_run_id and checkpoint_num
         os.makedirs(os.path.join(FILE_PATH, "exports", cfg.task.name), exist_ok=True)
-        path = os.path.join(FILE_PATH, "exports", cfg.task.name, f"policy-{time_str}.pt")
+        path = os.path.join(FILE_PATH, "exports", cfg.task.name, f"policy-{wandb_run_id}-{checkpoint_num}.pt")
         torch.save(_policy, path)
 
         meta = {}
         # meta["action_scaling"] = dict(cfg.task.action.get("action_scaling"))
+        # meta["stiffness"] = dict(cfg.task.robot.stiffness)
+        # meta["damping"] = dict(cfg.task.robot.damping)
+        # meta["effort_limit"] = dict(cfg.task.robot.effort_limit)
         export_onnx(_policy, fake_input, path.replace(".pt", ".onnx"), meta)
-    
+
     stats_keys = [
         k for k in env.reward_spec.keys(True, True) 
         if isinstance(k, tuple) and k[0]=="stats"
@@ -67,8 +91,8 @@ def main(cfg):
 
     env.base_env.eval()
     td_ = env.reset()
-    
     with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
+        torch.compiler.cudagraph_mark_step_begin()
         for i in itertools.count():
             try:
                 td_ = policy(td_)

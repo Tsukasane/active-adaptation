@@ -192,8 +192,9 @@ def main(cfg: DictConfig):
     run.log(info)
 
     wandb.finish()
+    os._exit(0)
+    env.close()
     simulation_app.close()
-    exit(0)
 
 
 if __name__ == "__main__":

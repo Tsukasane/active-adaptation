@@ -194,7 +194,7 @@ class _Env(EnvBase):
             funcs = OrderedDict()            
             for key, kwargs in params.items():
                 obs_cls= mdp.Observation.registry[key]
-                obs = obs_cls(self, **(kwargs if kwargs is not None else {}))
+                obs = obs_cls(env=self, **(kwargs if kwargs is not None else {}))
                 funcs[key] = obs
 
                 self._startup_callbacks.append(obs.startup)
@@ -339,6 +339,8 @@ class _Env(EnvBase):
 
         self.stats["episode_len"][:] = self.episode_length_buf.unsqueeze(1)
         self.stats["success"][:] = (self.episode_length_buf >= self.max_episode_length * 0.9).unsqueeze(1).float()
+        if isinstance(self.command_manager, MotionTrackingCommand):
+            self.stats["success"][:] = self.command_manager.success.float()
         return {"reward": rewards}
     
     def _compute_termination(self) -> TensorDictBase:
