@@ -81,9 +81,9 @@ class PPOConfig:
     in_keys: List[str] = ("command", OBS_KEY, OBS_PRIV_KEY, "ext", "ext_")
 
 cs = ConfigStore.instance()
-cs.store("ppo_roa_train", node=PPOConfig(phase="train", vecnorm="train"), group="algo")
-cs.store("ppo_roa_adapt", node=PPOConfig(phase="adapt", vecnorm="eval"), group="algo")
-cs.store("ppo_roa_finetune", node=PPOConfig(phase="finetune", vecnorm="eval"), group="algo")
+cs.store("ppo_roa_train", node=PPOConfig(phase="train", vecnorm="train", entropy_coef_start=0.004, entropy_coef_end=0.001), group="algo")
+cs.store("ppo_roa_adapt", node=PPOConfig(phase="adapt", vecnorm="eval", entropy_coef_start=0.004, entropy_coef_end=0.001), group="algo")
+cs.store("ppo_roa_finetune", node=PPOConfig(phase="finetune", vecnorm="eval", entropy_coef_start=0.001, entropy_coef_end=0.001), group="algo")
 
 class GRU(nn.Module):
     def __init__(

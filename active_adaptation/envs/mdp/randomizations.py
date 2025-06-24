@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import logging
-from typing import Union, TYPE_CHECKING, Dict, Tuple
+from typing import Union, TYPE_CHECKING, Dict, Tuple, Generic
 
 import active_adaptation
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
@@ -19,10 +19,12 @@ if active_adaptation.get_backend() == "isaac":
     from isaaclab.actuators import DCMotor, ImplicitActuator
     from active_adaptation.envs.actuator import HybridActuator
 
+from active_adaptation.envs.mdp.base import _RegistryMixin, CT
 
-class Randomization:
+class Randomization(Generic[CT], _RegistryMixin):
     def __init__(self, env):
         self.env: _Env = env
+        self.command_manager: CT = env.command_manager
 
     @property
     def num_envs(self):

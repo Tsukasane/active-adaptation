@@ -31,13 +31,13 @@ class SimpleEnv(_Env):
         if active_adaptation.get_backend() == "isaac":
             import isaaclab.sim as sim_utils
             from isaaclab.scene import InteractiveSceneCfg
-            from isaaclab.assets import AssetBaseCfg
+            from isaaclab.assets import AssetBaseCfg, ArticulationCfg
             from isaaclab.sensors import ContactSensorCfg
             from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
-            from active_adaptation.assets import ROBOTS, get_asset_meta
+            from active_adaptation.assets import ROBOTS, OBJECTS, get_asset_meta
             from active_adaptation.envs.terrain import TERRAINS
             
-            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=2.5)
+            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=2.0)
             scene_cfg.sky_light = AssetBaseCfg(
                 prim_path="/World/skyLight",
                 spawn=sim_utils.DomeLightCfg(
@@ -45,8 +45,15 @@ class SimpleEnv(_Env):
                     texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
                 ),
             )
-            scene_cfg.robot = ROBOTS[self.cfg.robot.name]
+            scene_cfg.robot: ArticulationCfg = ROBOTS[self.cfg.robot.name]
             scene_cfg.robot.prim_path = "{ENV_REGEX_NS}/Robot"
+            robot_type = self.cfg.robot.get("robot_type", self.cfg.robot.name)
+            scene_cfg.robot.spawn.usd_path = scene_cfg.robot.spawn.usd_path.format(ROBOT_TYPE=robot_type)
+
+            for obj_name in self.cfg.get("object_names", []):
+                setattr(scene_cfg, obj_name, OBJECTS[obj_name])
+                getattr(scene_cfg, obj_name).prim_path = "{ENV_REGEX_NS}/" + obj_name
+
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
             scene_cfg.contact_forces = ContactSensorCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/.*", 

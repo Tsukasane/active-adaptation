@@ -1,11 +1,15 @@
 import torch
+import numpy as np
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Tuple, Dict
+from omegaconf import DictConfig
 
 if TYPE_CHECKING:
     from isaaclab.sensors import ContactSensor
+    from active_adaptation.assets.objects import DoorArticulation
+    from isaaclab.assets.rigid_object import RigidObject
 
-from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation
+from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation, Randomization as BaseRandomization
 from active_adaptation.utils.motion import MotionDataset, MotionData
 from active_adaptation.utils.math import (
     quat_rotate_inverse,
@@ -14,8 +18,22 @@ from active_adaptation.utils.math import (
     axis_angle_from_quat
 )
 from .base import Command
-from isaaclab.utils.math import yaw_quat, matrix_from_quat, quat_from_angle_axis
+from isaaclab.utils.math import yaw_quat, matrix_from_quat, quat_from_angle_axis, wrap_to_pi, quat_apply, euler_xyz_from_quat, matrix_from_euler
+from isaaclab.utils.string import resolve_matching_names_values
+from active_adaptation.utils.helpers import batchify
 
+quat_apply = batchify(quat_apply)
+
+def yaw_from_quat(quat: torch.Tensor) -> torch.Tensor:
+    qw = quat[:, 0]
+    qx = quat[:, 1]
+    qy = quat[:, 2]
+    qz = quat[:, 3]
+    yaw = torch.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    return yaw
+
+def rand_uniform(low: float, high: float, size: Tuple[int, ...], device: torch.device) -> torch.Tensor:
+    return torch.rand(size, device=device) * (high - low) + low
 
 class MotionTrackingCommand(Command):
     def __init__(
@@ -31,6 +49,7 @@ class MotionTrackingCommand(Command):
         init_joint_pos_noise: float = 0.2,
         init_joint_vel_noise: float = 0.5,
         future_steps: List[int] = [1, 2, 8, 16],
+        call_update: bool = True,
     ):
         super().__init__(env)
         self.contact_forces: ContactSensor = self.env.scene["contact_forces"]
@@ -40,6 +59,7 @@ class MotionTrackingCommand(Command):
             target_fps=int(1/self.env.step_dt)
         ).to(self.device)
 
+        # Set tracking body and joint names for observation and termination
         tracking_keypoint_names = [
             ".*_hip_(pitch|yaw)_link", 
             ".*_knee_link", 
@@ -50,10 +70,10 @@ class MotionTrackingCommand(Command):
             ".*_elbow_link", 
             ".*_wrist_yaw_link"
         ]
-        tracking_keypoint_names = self.asset.find_bodies(tracking_keypoint_names)[1]
+        self.tracking_keypoint_names = self.asset.find_bodies(tracking_keypoint_names)[1]
         self.tracking_body_indices_motion = []
         self.tracking_body_indices_asset = []
-        for body_name in tracking_keypoint_names:
+        for body_name in self.tracking_keypoint_names:
             self.tracking_body_indices_motion.append(self.dataset.body_names.index(body_name))
             self.tracking_body_indices_asset.append(self.asset.body_names.index(body_name))
 
@@ -65,18 +85,18 @@ class MotionTrackingCommand(Command):
             ".*_shoulder_.*_joint", 
             ".*_elbow_joint"
         ]
-        tracking_joint_names = self.asset.find_joints(tracking_joint_names)[1]
+        self.tracking_joint_names = self.asset.find_joints(tracking_joint_names)[1]
         self.tracking_joint_indices_motion = []
         self.tracking_joint_indices_asset = []
-        for joint_name in tracking_joint_names:
+        for joint_name in self.tracking_joint_names:
             self.tracking_joint_indices_motion.append(self.dataset.joint_names.index(joint_name))
             self.tracking_joint_indices_asset.append(self.asset.joint_names.index(joint_name))
         
+        # Set feet body and joint indices for motion contact and no contact reward
         feet_names = ".*ankle_roll_link"
         self.feet_ids_motion = self.dataset.find_bodies(feet_names)[0]
         self.feet_ids_asset = self.asset.find_bodies(feet_names)[0]
         self.feet_ids_sensor = self.contact_forces.find_bodies(feet_names)[0]
-
         
         # get root body and joint indices in motion for reset
         root_body_name = "pelvis"
@@ -112,10 +132,11 @@ class MotionTrackingCommand(Command):
         self.num_tracking_joints = len(self.tracking_joint_indices_asset)
         self.num_future_steps = len(self.future_steps)
 
-        self.__init_debug_draw()
-        self.update()
+        if call_update:
+            self._init_debug_draw()
+            self.update()
 
-    def sample_init(self, env_ids: torch.Tensor) -> None:
+    def _sample_motions(self, env_ids: torch.Tensor) -> None:
         # sample motion id and start time for each env
         motion_ids = torch.randint(0, self.dataset.num_motions, size=(len(env_ids),), device=self.device)
         motion_len = self.dataset.lengths[motion_ids]
@@ -130,38 +151,35 @@ class MotionTrackingCommand(Command):
         if not self.env.training:
             # self.t[env_ids] = self.eval_t[env_ids]
             self.t[env_ids] = 0
-    
+
+    def sample_init(self, env_ids: torch.Tensor) -> None:
+        self._sample_motions(env_ids)
+
         # reset root state and joint position/velocity from motion
-        motion: MotionData = self.dataset.get_slice(self.motion_ids[env_ids], self.t[env_ids], 1).squeeze(1)
+        self._motion_reset = self.dataset.get_slice(self.motion_ids[env_ids], self.t[env_ids], 1).squeeze(1)
         # shape: [len(env_ids), num_bodies/num_joints, 3/4/...]
 
+        motion: MotionData = self._motion_reset
         init_root_pos = motion.body_pos_w[:, self.root_body_idx_motion]
         init_root_pos += self.env.scene.env_origins[env_ids]
-        init_root_pos_noise = (1 + torch.randn_like(init_root_pos[:, 2]).clamp(-1, 1)) * self.init_root_pos_noise
-        if not self.env.training:
-            init_root_pos_noise.zero_()
         # only lift up root pos to avoid penetration
+        init_root_pos_noise = (1 + torch.randn_like(init_root_pos[:, 2]).clamp(-1, 1)) * self.init_root_pos_noise
         init_root_pos[:, 2] += self.lift_height + init_root_pos_noise
         
         init_root_quat = motion.body_quat_w[:, self.root_body_idx_motion]
-        if self.env.training:
-            # generate random quat
-            random_axis = torch.rand(len(env_ids), 3, device=self.device)
-            random_angle = torch.rand(len(env_ids), device=self.device).clamp(-1, 1) * self.init_root_ori_noise
-            random_quat = quat_from_angle_axis(random_angle, random_axis)
-            # remove yaw rotation
-            random_quat = quat_mul(quat_conjugate(yaw_quat(random_quat)), random_quat)
-            # apply random quat to init root quat
-            init_root_quat = quat_mul(random_quat, init_root_quat)
+        # generate random quat
+        random_axis = torch.rand(len(env_ids), 3, device=self.device)
+        random_angle = torch.rand(len(env_ids), device=self.device).clamp(-1, 1) * self.init_root_ori_noise
+        random_quat = quat_from_angle_axis(random_angle, random_axis)
+        # remove yaw rotation
+        random_quat = quat_mul(quat_conjugate(yaw_quat(random_quat)), random_quat)
+        init_root_quat = quat_mul(random_quat, init_root_quat)
 
         init_root_lin_vel = motion.body_lin_vel_w[:, self.root_body_idx_motion]
         init_root_ang_vel = motion.body_ang_vel_w[:, self.root_body_idx_motion]
 
         init_root_lin_vel_noise = torch.randn_like(init_root_lin_vel).clamp(-1, 1) * self.init_root_lin_vel_noise
         init_root_ang_vel_noise = torch.randn_like(init_root_ang_vel).clamp(-1, 1) * self.init_root_ang_vel_noise
-        if not self.env.training:
-            init_root_lin_vel_noise.zero_()
-            init_root_ang_vel_noise.zero_()
         init_root_lin_vel += init_root_lin_vel_noise
         init_root_ang_vel += init_root_ang_vel_noise
 
@@ -174,9 +192,6 @@ class MotionTrackingCommand(Command):
 
         joint_pos_noise = torch.randn_like(init_joint_pos).clamp(-1, 1) * self.init_joint_pos_noise
         joint_vel_noise = torch.randn_like(init_joint_vel).clamp(-1, 1) * self.init_joint_vel_noise
-        if not self.env.training:
-            joint_pos_noise.zero_()
-            joint_vel_noise.zero_()
 
         init_joint_pos += joint_pos_noise
         init_joint_vel += joint_vel_noise
@@ -184,7 +199,7 @@ class MotionTrackingCommand(Command):
         self.asset.write_joint_state_to_sim(init_joint_pos, init_joint_vel, env_ids=env_ids)
 
     def reset(self, env_ids):
-        pass
+        self._cum_error[env_ids] = 0.0
 
     @property
     def success(self):
@@ -280,41 +295,58 @@ class MotionTrackingCommand(Command):
     
     TrackReward = BaseReward["MotionTrackingCommand"]
 
-    class keypoint_tracking(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
+    class tracking_keypoint(TrackReward):
+        def __init__(self, body_names: List[str] | str | None = None, sigma: float = 0.03, tolerance: float | Dict[str, float] = 0.0, **kwargs):
             super().__init__(**kwargs)
+            if body_names is None:
+                body_names = self.command_manager.tracking_keypoint_names
+            
             self.sigma = sigma
+            body_indices_motion, matched_names_motion = self.command_manager.dataset.find_bodies(body_names)
+            body_indices_asset, matched_names_asset = self.command_manager.asset.find_bodies(body_names)
+
+            matched_names = set(matched_names_motion) & set(matched_names_asset)
+            assert set(matched_names) == set(matched_names_motion) == set(matched_names_asset), "body names in motion dataset and robot not matched"
+            assert set(matched_names) <= set(self.command_manager.tracking_keypoint_names), "Some body names in motion dataset not found in tracking body names"
+            
+            self.body_indices_motion = []
+            self.body_indices_asset = []
+            self.body_names = list(sorted(matched_names))
+            self.num_bodies = len(self.body_names)
+            for body_name in self.body_names:
+                body_idx_motion = body_indices_motion[matched_names_motion.index(body_name)]
+                body_idx_asset = body_indices_asset[matched_names_asset.index(body_name)]
+
+                self.body_indices_motion.append(body_idx_motion)
+                self.body_indices_asset.append(body_idx_asset)
+
+            self.tolerance = torch.zeros(len(self.body_names), device=self.device)
+            if isinstance(tolerance, float):
+                self.tolerance[:] = tolerance
+            elif isinstance(tolerance, DictConfig):
+                tolerance = dict(tolerance)
+                tolerance_indices, tolerance_names, tolerance_values = resolve_matching_names_values(tolerance, self.body_names)
+                self.tolerance[tolerance_indices] = torch.tensor(tolerance_values, device=self.device)
+            else:
+                raise ValueError(f"Invalid tolerance type: {type(tolerance)}")
 
         def compute(self):
-            body_pos_asset = self.command_manager.asset.data.body_pos_w[:, self.command_manager.tracking_body_indices_asset]
-            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.tracking_body_indices_motion]
-            diff = body_pos_motion - body_pos_asset
-            error = diff.square().sum(-1, keepdim=True)
-            return torch.exp(- error / self.sigma).mean(dim=1)
-    
-    class keypoint_pos_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, tolerance=0.0, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-            self.tolerance = tolerance
+            raise NotImplementedError
 
+    class keypoint_pos_tracking_product(tracking_keypoint):
         def compute(self):
-            body_pos_asset = self.command_manager.asset.data.body_pos_w[:, self.command_manager.tracking_body_indices_asset]
-            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.tracking_body_indices_motion]
+            body_pos_asset = self.command_manager.asset.data.body_pos_w[:, self.body_indices_asset]
+            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
             diff = body_pos_motion - body_pos_asset
             # shape: [num_envs, num_tracking_bodies, 3]
             error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_pos_tracking_local_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_pos_tracking_local_product(tracking_keypoint):
         def compute(self):
-            body_pos_asset = self.command_manager.asset.data.body_pos_w[:, self.command_manager.tracking_body_indices_asset]
-            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.tracking_body_indices_motion]
+            body_pos_asset = self.command_manager.asset.data.body_pos_w[:, self.body_indices_asset]
+            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
 
             root_pos_asset = self.command_manager.asset.data.root_pos_w.clone()
             root_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.root_body_idx_motion].clone()
@@ -326,42 +358,35 @@ class MotionTrackingCommand(Command):
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
             
-            root_pos_asset = root_pos_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_pos_motion = root_pos_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
+            root_pos_asset = root_pos_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_pos_motion = root_pos_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
 
             body_pos_asset_relative = quat_rotate_inverse(root_quat_asset, body_pos_asset - root_pos_asset)
             body_pos_motion_relative = quat_rotate_inverse(root_quat_motion, body_pos_motion - root_pos_motion)
 
             diff = body_pos_motion_relative - body_pos_asset_relative
             # shape: [num_envs, num_tracking_bodies, 3]
-            error = diff.norm(dim=-1)
+            error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ori_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_ori_tracking_product(tracking_keypoint):
         def compute(self):
-            body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.command_manager.tracking_body_indices_asset]
-            body_ori_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.tracking_body_indices_motion]
+            body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.body_indices_asset]
+            body_ori_motion = self.command_manager.ref_body_quat_w[:, self.body_indices_motion]
             diff = quat_mul(quat_conjugate(body_ori_motion), body_ori_asset)
             # shape: [num_envs, num_tracking_bodies, 4]
             error = torch.norm(axis_angle_from_quat(diff), dim=-1)
+            error = (error - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class keypoint_ori_tracking_local_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_ori_tracking_local_product(tracking_keypoint):
         def compute(self):
-            body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.command_manager.tracking_body_indices_asset]
-            body_ori_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.tracking_body_indices_motion]
+            body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.body_indices_asset]
+            body_ori_motion = self.command_manager.ref_body_quat_w[:, self.body_indices_motion]
 
             root_quat_asset = self.command_manager.asset.data.root_quat_w
             root_quat_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.root_body_idx_motion]
@@ -369,8 +394,8 @@ class MotionTrackingCommand(Command):
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
 
-            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
+            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
 
             body_ori_asset_relative = quat_mul(quat_conjugate(root_quat_asset), body_ori_asset)
             body_ori_motion_relative = quat_mul(quat_conjugate(root_quat_motion), body_ori_motion)
@@ -378,31 +403,24 @@ class MotionTrackingCommand(Command):
             diff = quat_mul(quat_conjugate(body_ori_motion_relative), body_ori_asset_relative)
             # shape: [num_envs, num_tracking_bodies, 4]
             error = torch.norm(axis_angle_from_quat(diff), dim=-1)
+            error = (error - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class keypoint_lin_vel_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_lin_vel_tracking_product(tracking_keypoint):
         def compute(self):
-            body_lin_vel_asset = self.command_manager.asset.data.body_lin_vel_w[:, self.command_manager.tracking_body_indices_asset]
-            body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.command_manager.tracking_body_indices_motion]
+            body_lin_vel_asset = self.command_manager.asset.data.body_lin_vel_w[:, self.body_indices_asset]
+            body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion]
             diff = body_lin_vel_motion - body_lin_vel_asset
             # shape: [num_envs, num_tracking_bodies, 3]
-            error = diff.norm(dim=-1)
+            error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_lin_vel_tracking_local_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_lin_vel_tracking_local_product(tracking_keypoint):
         def compute(self):
-            body_lin_vel_asset = self.command_manager.asset.data.body_lin_vel_w[:, self.command_manager.tracking_body_indices_asset].clone()
-            body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.command_manager.tracking_body_indices_motion].clone()
+            body_lin_vel_asset = self.command_manager.asset.data.body_lin_vel_w[:, self.body_indices_asset].clone()
+            body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion].clone()
 
             root_pos_asset = self.command_manager.asset.data.root_pos_w.clone()
             root_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.root_body_idx_motion].clone()
@@ -414,42 +432,34 @@ class MotionTrackingCommand(Command):
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
             
-            root_pos_asset = root_pos_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_pos_motion = root_pos_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
+            root_pos_asset = root_pos_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_pos_motion = root_pos_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
 
             body_lin_vel_asset_relative = quat_rotate_inverse(root_quat_asset, body_lin_vel_asset - root_pos_asset)
             body_lin_vel_motion_relative = quat_rotate_inverse(root_quat_motion, body_lin_vel_motion - root_pos_motion)
             
             diff = body_lin_vel_motion_relative - body_lin_vel_asset_relative
             # shape: [num_envs, num_tracking_bodies, 3]
-            error = diff.norm(dim=-1)
+            error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ang_vel_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_ang_vel_tracking_product(tracking_keypoint):
         def compute(self):
-            body_ang_vel_asset = self.command_manager.asset.data.body_ang_vel_w[:, self.command_manager.tracking_body_indices_asset]
-            body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.command_manager.tracking_body_indices_motion]
+            body_ang_vel_asset = self.command_manager.asset.data.body_ang_vel_w[:, self.body_indices_asset]
+            body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
             diff = body_ang_vel_motion - body_ang_vel_asset
             # shape: [num_envs, num_tracking_bodies, 3]
-            error = diff.norm(dim=-1)
+            error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ang_vel_tracking_local_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class keypoint_ang_vel_tracking_local_product(tracking_keypoint):
         def compute(self):
-            body_ang_vel_asset = self.command_manager.asset.data.body_ang_vel_w[:, self.command_manager.tracking_body_indices_asset]
-            body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.command_manager.tracking_body_indices_motion]
+            body_ang_vel_asset = self.command_manager.asset.data.body_ang_vel_w[:, self.body_indices_asset]
+            body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
 
             root_quat_asset = self.command_manager.asset.data.root_quat_w
             root_quat_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.root_body_idx_motion]
@@ -457,101 +467,69 @@ class MotionTrackingCommand(Command):
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
 
-            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
-            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.command_manager.num_tracking_bodies, -1)
+            root_quat_asset = root_quat_asset.unsqueeze(1).expand(-1, self.num_bodies, -1)
+            root_quat_motion = root_quat_motion.unsqueeze(1).expand(-1, self.num_bodies, -1)
 
             body_ang_vel_asset_relative = quat_rotate_inverse(root_quat_asset, body_ang_vel_asset)
             body_ang_vel_motion_relative = quat_rotate_inverse(root_quat_motion, body_ang_vel_motion)
 
             diff = body_ang_vel_motion_relative - body_ang_vel_asset_relative
             # shape: [num_envs, num_tracking_bodies, 3]
-            error = diff.norm(dim=-1)
+            error = (diff.norm(dim=-1) - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class joint_pos_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
+    class tracking_joint(TrackReward):
+        def __init__(self, joint_names: List[str] | str | None = None, sigma: float = 0.03, tolerance: float | Dict[str, float] = 0.0, **kwargs):
             super().__init__(**kwargs)
+            if joint_names is None:
+                joint_names = self.command_manager.tracking_joint_names
+        
             self.sigma = sigma
+            joint_indices_asset, matched_names_asset = self.command_manager.asset.find_joints(joint_names)
+            joint_indices_motion, matched_names_motion = self.command_manager.dataset.find_joints(joint_names)
 
+            matched_names = set(matched_names_motion) & set(matched_names_asset)
+            assert set(matched_names) == set(matched_names_motion) == set(matched_names_asset), "joint names in motion dataset and robot not matched"
+            assert set(matched_names) <= set(self.command_manager.tracking_joint_names), "Some joint names in motion dataset not found in tracking joint names"
+
+            self.joint_indices_motion = []
+            self.joint_indices_asset = []
+            self.joint_names = list(sorted(matched_names))
+            for joint_name in self.joint_names:
+                joint_idx_motion = joint_indices_motion[matched_names_motion.index(joint_name)]
+                joint_idx_asset = joint_indices_asset[matched_names_asset.index(joint_name)]
+
+                self.joint_indices_motion.append(joint_idx_motion)
+                self.joint_indices_asset.append(joint_idx_asset)
+
+            self.tolerance = torch.zeros(len(self.joint_names), device=self.env.device)
+            if isinstance(tolerance, float):
+                self.tolerance[:] = tolerance
+            elif isinstance(tolerance, DictConfig):
+                tolerance = dict(tolerance)
+                tolerance_indices, tolerance_names, tolerance_values = resolve_matching_names_values(tolerance, matched_names_motion)
+                self.tolerance[tolerance_indices] = torch.tensor(tolerance_values, device=self.env.device)
+            else:
+                raise ValueError(f"Invalid tolerance type: {type(tolerance)}")
+
+    class joint_pos_tracking_product(tracking_joint):
         def compute(self):
-            joint_pos_asset = self.command_manager.asset.data.joint_pos[:, self.command_manager.tracking_joint_indices_asset]
-            joint_pos_motion = self.command_manager.ref_joint_pos[:, self.command_manager.tracking_joint_indices_motion]
+            joint_pos_asset = self.command_manager.asset.data.joint_pos[:, self.joint_indices_asset]
+            joint_pos_motion = self.command_manager.ref_joint_pos[:, self.joint_indices_motion]
             diff = joint_pos_motion - joint_pos_asset
-            error = diff.abs()
+            error = (diff.abs() - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_joints]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class joint_vel_tracking_product(TrackReward):
-        def __init__(self, sigma=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
+    class joint_vel_tracking_product(tracking_joint):
         def compute(self):
-            joint_vel_asset = self.command_manager.asset.data.joint_vel[:, self.command_manager.tracking_joint_indices_asset]
-            joint_vel_motion = self.command_manager.ref_joint_vel[:, self.command_manager.tracking_joint_indices_motion]
+            joint_vel_asset = self.command_manager.asset.data.joint_vel[:, self.joint_indices_asset]
+            joint_vel_motion = self.command_manager.ref_joint_vel[:, self.joint_indices_motion]
             diff = joint_vel_motion - joint_vel_asset
-            error = diff.abs()
+            error = (diff.abs() - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_joints]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
-
-    class root_pos_tracking(TrackReward):
-        def __init__(self, sigma=0.25, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
-        def compute(self):
-            root_pos_asset = self.command_manager.asset.data.root_pos_w
-            root_pos_motion = self.command_manager.ref_body_pos_w[:, self.command_manager.root_body_idx_motion]
-            diff = root_pos_motion - root_pos_asset
-            error = diff.square().sum(-1, keepdim=True)
-            return torch.exp(- error / self.sigma)
-
-    class root_ori_tracking(TrackReward):
-        def __init__(self, sigma=0.15, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
-        def compute(self):
-            root_quat_asset = self.command_manager.asset.data.root_quat_w
-            root_quat_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.root_body_idx_motion]
-            root_quat_relative = quat_mul(quat_conjugate(root_quat_motion), root_quat_asset)
-            error = torch.norm(axis_angle_from_quat(root_quat_relative), dim=-1, keepdim=True)
-            return torch.exp(- error / self.sigma)
-    
-    class root_vel_tracking(TrackReward):
-        def __init__(self, sigma=0.25, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
-        def compute(self):
-            root_vel_asset = self.command_manager.asset.data.root_lin_vel_w
-            root_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.command_manager.root_body_idx_motion]
-            diff = root_vel_motion - root_vel_asset
-            error = diff.square().sum(-1, keepdim=True)
-            return torch.exp(- error / self.sigma)
-        
-    class joint_pos_tracking(TrackReward):
-        def __init__(self, sigma=0.5, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
-        def compute(self):
-            joint_pos_asset = self.command_manager.asset.data.joint_pos[:, self.command_manager.tracking_joint_indices_asset]
-            joint_pos_motion = self.command_manager.ref_joint_pos[:, self.command_manager.tracking_joint_indices_motion]
-            error = (joint_pos_motion - joint_pos_asset).square()
-            return torch.exp(- error / self.sigma).mean(1, True)
-    
-    class joint_vel_tracking(TrackReward):
-        def __init__(self, sigma=0.5, **kwargs):
-            super().__init__(**kwargs)
-            self.sigma = sigma
-
-        def compute(self):
-            joint_vel_asset = self.command_manager.asset.data.joint_vel[:, self.command_manager.tracking_joint_indices_asset]
-            joint_vel_motion = self.command_manager.ref_joint_vel[:, self.command_manager.tracking_joint_indices_motion]
-            error = (joint_vel_motion - joint_vel_asset).square()
-            return torch.exp(- error / self.sigma).mean(1, True)
 
     class feet_no_contact_when_motion_vel(TrackReward):
         def __init__(self, body_names: str | List[str], motion_vel_thres: float=0.1, **kwargs):
@@ -569,10 +547,32 @@ class MotionTrackingCommand(Command):
 
             self.motion_no_contact = torch.zeros((self.env.num_envs, len(body_names)), dtype=torch.bool, device=self.device)
         
+            if self.env.backend != "isaac":
+                return
+
+            from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+            import isaaclab.sim as sim_utils
+            vis_markers_cfg = VisualizationMarkersCfg(
+                prim_path="/Visuals/MotionNoContact",
+                markers={
+                    "motion_no_contact": sim_utils.SphereCfg(
+                        radius=0.06,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(0.5, 0.0, 1.0),
+                            metallic=1.0,
+                            roughness=0.1,
+                        ),
+                    ),
+                },
+            )
+
+            self.vis_markers = VisualizationMarkers(vis_markers_cfg)
+            self.vis_markers_pos_w = torch.zeros((self.env.num_envs, len(body_names), 3), device=self.device)
+        
         def update(self):
             # when feet vel in motion is large, feet should not be in contact
             feet_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion]
-            feet_vel_motion_norm = feet_vel_motion.norm(dim=-1)
+            feet_vel_motion_norm = feet_vel_motion[..., :2].norm(dim=-1)
             self.motion_no_contact[:] = feet_vel_motion_norm > self.motion_vel_thres
 
         def compute(self):
@@ -582,6 +582,17 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_feet]
             penalty = in_contact & self.motion_no_contact
             return -penalty.float().mean(dim=1, keepdim=True)
+
+        def debug_draw(self):
+            if self.env.backend != "isaac":
+                return
+            return
+
+            self.vis_markers_pos_w.fill_(-100.0)
+            self.vis_markers_pos_w[self.motion_no_contact] = self.command_manager.ref_body_pos_w[:, self.body_indices_motion][self.motion_no_contact]
+            self.vis_markers.visualize(
+                translations=self.vis_markers_pos_w.view(-1, 3),
+            )
 
     class feet_contact_when_motion_contact(TrackReward):
         def __init__(self, body_names: str | List[str], motion_vel_thres: float=0.1, motion_height_thres: float=0.1, **kwargs):
@@ -623,7 +634,7 @@ class MotionTrackingCommand(Command):
         def update(self):
             # when feet vel in motion is small
             feet_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion]
-            feet_vel_motion_norm = feet_vel_motion.norm(dim=-1)
+            feet_vel_motion_norm = feet_vel_motion[..., :2].norm(dim=-1)
             # when feet height is small
             feet_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
             feet_pos_motion_z = feet_pos_motion[..., 2]
@@ -641,7 +652,8 @@ class MotionTrackingCommand(Command):
         def debug_draw(self):
             if self.env.backend != "isaac":
                 return
-            
+            return
+
             self.vis_markers_pos_w.fill_(-100.0)
             self.vis_markers_pos_w[self.motion_contact] = self.command_manager.ref_body_pos_w[:, self.body_indices_motion][self.motion_contact]
             self.vis_markers.visualize(
@@ -692,7 +704,7 @@ class MotionTrackingCommand(Command):
         self._diff_body_ori_future_b = matrix_from_quat(diff_body_quat_future_b)
         self._diff_body_ang_vel_future_b = quat_rotate_inverse(root_quat_w, ref_body_ang_vel_future_w - body_ang_vel_w)
 
-        # current ref motion for reward computation
+        # Reward: current ref motion for reward computation
         self.current_ref_motion: MotionData = self.future_ref_motion[:, 0]
         self.ref_body_pos_w = self.current_ref_motion.body_pos_w + self.env.scene.env_origins[:, None, :]
         self.ref_body_lin_vel_w = self.current_ref_motion.body_lin_vel_w
@@ -700,8 +712,9 @@ class MotionTrackingCommand(Command):
         self.ref_body_ang_vel_w = self.current_ref_motion.body_ang_vel_w
         self.ref_joint_pos = self.current_ref_motion.joint_pos
         self.ref_joint_vel = self.current_ref_motion.joint_vel
+        # shape: [num_envs, num_future_steps, num_tracking_bodies, xxx]
         
-        # # shape: [num_envs, num_future_steps, num_tracking_bodies, xxx]
+        # Termination: tracking error
         cur_tracking_body_pos_w = self.asset.data.body_pos_w[:, self.tracking_body_indices_asset]
         ref_tracking_body_pos_w = self.ref_body_pos_w[:, self.tracking_body_indices_motion]
         cur_tracking_body_quat_w = self.asset.data.body_quat_w[:, self.tracking_body_indices_asset]
@@ -730,7 +743,7 @@ class MotionTrackingCommand(Command):
                 
         self.t += 1
     
-    def __init_debug_draw(self):
+    def _init_debug_draw(self):
         if self.env.backend != "isaac":
             return
         

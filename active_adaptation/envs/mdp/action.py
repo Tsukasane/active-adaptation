@@ -38,9 +38,8 @@ class JointPosition(ActionManager):
         env,
         action_scaling: Dict[str, float] = 0.5,
         max_delay: int = None,  # delay in simulation steps
-        alpha: Union[
-            float, Tuple[float, float], Dict[str, float], Dict[str, Tuple[float, float]]
-        ] = (0.5, 1.0),
+        alpha: float | Tuple[float, float] = 0.5,
+        **kwargs,
     ):
         super().__init__(env)
         self.joint_ids, self.joint_names, self.action_scaling = (
@@ -52,7 +51,7 @@ class JointPosition(ActionManager):
         self.action_dim = len(self.joint_ids)
 
         self.max_delay = max_delay if max_delay is not None else 0
-        self.max_delay = min(self.max_delay, self.env.decimation)
+        # self.max_delay = min(self.max_delay, self.env.decimation)
 
         import omegaconf
         if isinstance(alpha, float):
@@ -66,7 +65,7 @@ class JointPosition(ActionManager):
         self.offset = torch.zeros_like(self.default_joint_pos)
 
         with torch.device(self.device):
-            action_buf_hist = max(self.max_delay + 1, 3)
+            action_buf_hist = max((self.max_delay - 1) // self.env.decimation + 1, 3)
             self.action_buf = torch.zeros(
                 self.num_envs, self.action_dim, action_buf_hist
             )  # at least 3 for action_rate_2_l2 reward
@@ -82,15 +81,13 @@ class JointPosition(ActionManager):
         return transform
 
     def reset(self, env_ids: torch.Tensor):
-        self.delay[env_ids] = torch.randint(0, self.max_delay + 1, (len(env_ids), 1), device=self.device)
         self.action_buf[env_ids] = 0
         self.applied_action[env_ids] = 0
 
-        default_joint_pos = self.asset.data.default_joint_pos[env_ids]
-        self.default_joint_pos[env_ids] = default_joint_pos + self.offset[env_ids]
-
+        delay = torch.randint(0, self.max_delay + 1, (len(env_ids), 1), device=self.device)
+        self.delay[env_ids] = delay
         alpha = torch.empty(len(env_ids), 1, device=self.device).uniform_(
-            self.alpha_range[0], self.alpha_range[1]
+            *self.alpha_range
         )
         self.alpha[env_ids] = alpha
 
@@ -99,9 +96,21 @@ class JointPosition(ActionManager):
             action = tensordict["action"].clamp(-10, 10)
             self.action_buf[:, :, 1:] = self.action_buf[:, :, :-1]
             self.action_buf[:, :, 0] = action
-            action = self.action_buf.take_along_dim(self.delay.unsqueeze(1), dim=-1)
-            self.applied_action.lerp_(action.squeeze(-1), self.alpha)
+        # if delay = 1
+        #     substep = 0, action_dim: 1
+        #     substep = 1, action_dim: 0
+        #     substep = 2, action_dim: 0
+        #     substep = 3, action_dim: 0
+        # if delay = 2
+        #     substep = 0, action_dim: 1
+        #     substep = 1, action_dim: 1
+        #     substep = 2, action_dim: 0
+        #     substep = 3, action_dim: 0
+        action_dim = (self.delay - substep + self.env.decimation - 1) // self.env.decimation
+        action = self.action_buf.take_along_dim(action_dim.unsqueeze(1), dim=-1)
+        self.applied_action.lerp_(action.squeeze(-1), self.alpha)
 
-            pos_target = self.default_joint_pos.clone()
-            pos_target[:, self.joint_ids] += self.applied_action * self.action_scaling
-            self.asset.set_joint_position_target(pos_target)
+        pos_target = self.default_joint_pos + self.offset
+        pos_target[:, self.joint_ids] += self.applied_action * self.action_scaling
+        self.asset.set_joint_position_target(pos_target)
+        

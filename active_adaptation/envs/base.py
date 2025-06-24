@@ -179,7 +179,7 @@ class _Env(EnvBase):
             self._debug_draw_callbacks.append(addon.debug_draw)
         
         for key, params in self.cfg.randomization.items():
-            rand = RAND_FUNCS[key](self, **params if params is not None else {})
+            rand = mdp.Randomization.registry[key](env=self, **(params if params is not None else {}))
             self.randomizations[key] = rand
             self._startup_callbacks.append(rand.startup)
             self._reset_callbacks.append(rand.reset)
@@ -216,7 +216,7 @@ class _Env(EnvBase):
         self._stats_ema = {}
         self._stats_ema_decay = 0.99
 
-        self.reward_groups = OrderedDict()
+        self.reward_groups: Dict[str, RewardGroup] = OrderedDict()
         for group_name, func_specs in self.cfg.reward.items():
             print(f"Reward group: {group_name}")
             funcs = OrderedDict()
