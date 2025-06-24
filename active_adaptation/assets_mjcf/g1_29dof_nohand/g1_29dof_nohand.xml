@@ -3,19 +3,19 @@
 
   <default>
     <default class="torso_motor">
-      <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
+      <joint damping="0.4" armature="0.01" frictionloss="0.2"/>
     </default>
     <default class="leg_motor">
-      <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
+      <joint damping="0.4" armature="0.01" frictionloss="0.2"/>
     </default>
     <default class="ankle_motor">
-      <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
+      <joint damping="0.4" armature="0.01" frictionloss="0.2"/>
     </default>
     <default class="arm_motor">
-      <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
+      <joint damping="0.4" armature="0.01" frictionloss="0.2"/>
     </default>
     <default class="wrist_motor">
-      <joint damping="0.05" armature="0.01" frictionloss="0.1"/>
+      <joint damping="0.4" armature="0.01" frictionloss="0.1"/>
     </default>
     
   </default>
@@ -59,6 +59,26 @@
 
   <worldbody>
     <body name="pelvis" pos="0 0 0.793">
+
+      <body name="pelvis_contour_link" pos="0 0 0">
+      </body>
+      <body name="d435_link" pos="0 0 0">
+      </body>
+      <body name="head_link" pos="0 0 0">
+      </body>
+      <body name="imu_link" pos="0 0 0">
+      </body>
+      <body name="logo_link" pos="0 0 0">
+      </body>
+      <body name="mid360_link" pos="0 0 0">
+      </body>
+      <body name="waist_support_link" pos="0 0 0">
+      </body>
+      <body name="left_hand_marker" pos="0 0 0">
+      </body>
+      <body name="right_hand_marker" pos="0 0 0">
+      </body>
+
       <site name="pelvis_site" pos="0 0 0" size="0.05" rgba="1 0 0 1" type="sphere" />
       <inertial pos="0 0 -0.07605" quat="1 0 -0.000399148 0" mass="3.813"
         diaginertia="0.010549 0.0093089 0.0079184" />
