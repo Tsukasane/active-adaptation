@@ -16,7 +16,10 @@ setup(
         "pandas",
         "termcolor",
         "pygame", # for game controller
-        "onnxscript",
-        "onnxruntime",
+        "onnxscript==0.3.0",
+        "onnxruntime==1.22.0",
+        "torch==2.7.1",
+        "torchrl==0.7.0",
+        "tensordict==0.7.0",
     ],
 )

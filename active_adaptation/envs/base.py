@@ -272,6 +272,11 @@ class _Env(EnvBase):
         self.input_tensordict = None
         self.extra = {}
 
+        self.current_iter = 0
+    
+    def set_progress(self, progress: int):
+        self.current_iter = progress
+
     @property
     def action_dim(self) -> int:
         return self.action_manager.action_dim

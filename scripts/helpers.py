@@ -147,7 +147,7 @@ def make_env_policy(cfg: DictConfig):
     # setup policy
     policy_cls = hydra.utils.get_class(cfg.algo._target_)
     active_adaptation.print(f"Creating policy {policy_cls} on device {base_env.device}")
-    policy = policy_cls(
+    policy: ModBase = policy_cls(
         cfg.algo,
         env.observation_spec, 
         env.action_spec, 
@@ -178,6 +178,7 @@ def evaluate(
     policy: torch.nn.Module,
     seed: int=0, 
     exploration_type: ExplorationType=ExplorationType.MODE,
+    # exploration_type: ExplorationType=ExplorationType.RANDOM,
     render=False,
     keys=[("next", "stats")],
 ):
@@ -187,6 +188,8 @@ def evaluate(
     """
     keys = set(keys)
     keys.add(("next", "done"))
+    keys.add(("next", "stats"))
+
 
     env.base_env.eval()
     env.eval()

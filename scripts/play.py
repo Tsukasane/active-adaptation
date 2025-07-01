@@ -76,11 +76,43 @@ def main(cfg):
         torch.save(_policy, path)
 
         meta = {}
-        # meta["action_scaling"] = dict(cfg.task.action.get("action_scaling"))
-        # meta["stiffness"] = dict(cfg.task.robot.stiffness)
-        # meta["damping"] = dict(cfg.task.robot.damping)
-        # meta["effort_limit"] = dict(cfg.task.robot.effort_limit)
         export_onnx(_policy, fake_input, path.replace(".pt", ".onnx"), meta)
+
+        # export policy config
+        dict_cfg = OmegaConf.to_container(cfg, resolve=True)
+        ## observation
+        policy_config = dict()
+        obs_cfg = dict()
+        obs_keys = ["policy", "command"]
+        for k in obs_keys:
+            obs_cfg[k] = dict_cfg["task"]["observation"][k]
+        policy_config["observation"] = obs_cfg
+        
+        ## action
+        policy_config["action_scale"] = dict_cfg["task"]["action"]["action_scaling"]
+
+        ## joint names and stiffness/damping
+        from active_adaptation.assets import get_asset_meta
+        asset_meta = get_asset_meta(env.scene["robot"])
+        policy_config["isaac_joint_names"] = asset_meta["joint_names_isaac"]
+        policy_config["joint_kp"] = asset_meta["actuators"]["base_legs"]["stiffness"]
+        policy_config["joint_kd"] = asset_meta["actuators"]["base_legs"]["damping"]
+        policy_config["default_joint_pos"] = asset_meta["init_state"]["joint_pos"]
+
+        ## policy joint names
+        from active_adaptation.envs.mdp.action import JointPosition
+        action_manager: JointPosition = env.action_manager
+        policy_config["policy_joint_names"] = action_manager.joint_names
+
+        ## motion length
+        from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
+        command: MotionTrackingCommand = env.command_manager
+        policy_config["motion_duration_second"] = command.dataset.lengths[0].item() * env.step_dt
+
+        import yaml
+        with open(path.replace(".pt", ".yaml"), "w") as f:
+            yaml.dump(policy_config, f, sort_keys=False)
+        print(f"Policy config saved to {path.replace('.pt', '.yaml')}")
 
     stats_keys = [
         k for k in env.reward_spec.keys(True, True) 

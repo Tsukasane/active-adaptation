@@ -164,10 +164,10 @@ class Actor(nn.Module):
     
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
-        if self.load_noise_scale is not None:
-            self.actor_std.data.fill_(self.load_noise_scale)
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
                                       missing_keys, unexpected_keys, error_msgs)
+        if self.load_noise_scale is not None:
+            self.actor_std.data.fill_(self.load_noise_scale)
 
 
 class ActorCov(nn.Module):

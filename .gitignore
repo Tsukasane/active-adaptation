@@ -161,6 +161,7 @@ cython_debug/
 
 # hydra and wandb
 outputs/
+outputs_play/
 wandb/
 artifacts/
 

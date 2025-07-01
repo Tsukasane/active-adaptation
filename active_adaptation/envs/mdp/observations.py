@@ -282,6 +282,26 @@ class joint_pos_target(Observation):
         return joint_pos_target.reshape(self.num_envs, -1)
 
 
+class root_ang_vel_history(Observation):
+    def __init__(self, env, noise_std: float=0., history_steps: list[int]=[1]):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.noise_std = noise_std
+        self.history_steps = history_steps
+        buffer_size = max(history_steps) + 1
+        self.buffer = torch.zeros((self.num_envs, buffer_size, 3), device=self.device)
+        self.update()
+    
+    def update(self):
+        root_angvel_w = self.asset.data.root_ang_vel_w
+        root_quat_w = self.asset.data.root_quat_w
+        root_angvel_b = quat_rotate_inverse(root_quat_w, root_angvel_w)
+        self.buffer = self.buffer.roll(1, dims=1)
+        self.buffer[:, 0] = root_angvel_b
+
+    def compute(self) -> torch.Tensor:
+        return self.buffer[:, self.history_steps].reshape(self.num_envs, -1)
+    
 class root_angvel_b(Observation):
     def __init__(self, env, noise_std: float=0., yaw_only: bool=False):
         super().__init__(env)
@@ -364,6 +384,27 @@ class projected_gravity_b(Observation):
         gravity = torch.lerp(obs_tm1, obs_t, t)
         gravity = gravity / gravity.norm(dim=-1, keepdim=True)
         return gravity
+
+class projected_gravity_history(Observation):
+    def __init__(self, env, noise_std: float=0., history_steps: list[int]=[1]):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.noise_std = noise_std
+        self.history_steps = history_steps
+        buffer_size = max(history_steps) + 1
+        self.buffer = torch.zeros((self.num_envs, buffer_size, 3), device=self.device)
+        self.update()
+    
+    def update(self):
+        projected_gravity_b = self.asset.data.projected_gravity_b
+        noise = torch.randn_like(projected_gravity_b).clip(-3., 3.) * self.noise_std
+        projected_gravity_b += noise
+        projected_gravity_b = projected_gravity_b / projected_gravity_b.norm(dim=-1, keepdim=True)
+        self.buffer = self.buffer.roll(1, dims=1)
+        self.buffer[:, 0] = projected_gravity_b
+    
+    def compute(self):
+        return self.buffer[:, self.history_steps].reshape(self.num_envs, -1)
 
 
 class gravity_multistep(Observation):
@@ -478,6 +519,9 @@ class joint_pos_multistep(Observation):
         self.steps = steps
         self.noise_std = max(noise_std, 0.)
         self.asset: Articulation = self.env.scene["robot"]
+        from active_adaptation.envs.mdp.action import JointPosition
+        action_manager: JointPosition = self.env.action_manager
+        self.joint_pos_offset = action_manager.offset
         self.joint_ids, self.joint_names = self.asset.find_joints(joint_names)
         self.num_joints = len(self.joint_ids)
 
@@ -496,14 +540,47 @@ class joint_pos_multistep(Observation):
         self.joint_pos_multistep[:, 0] = joint_pos
     
     def compute(self):
-        joint_pos = self.joint_pos_multistep.clone()
+        joint_pos = self.joint_pos_multistep - self.joint_pos_offset.unsqueeze(1)
         return joint_pos.reshape(self.num_envs, -1)
     
-    def symmetry_transforms(self):
-        transform = sym_utils.joint_space_symmetry(self.asset, self.joint_names)
-        return transform.repeat(self.steps)
+class joint_pos_history(Observation):
+    def __init__(
+        self,
+        env,
+        joint_names: str=".*",
+        history_steps: list[int]=[1], 
+        noise_std: float=0.,
+    ):
+        super().__init__(env)
+        self.history_steps = history_steps
+        self.buffer_size = max(history_steps) + 1
+        self.noise_std = max(noise_std, 0.)
+        self.asset: Articulation = self.env.scene["robot"]
+        from active_adaptation.envs.mdp.action import JointPosition
+        action_manager: JointPosition = self.env.action_manager
+        self.joint_pos_offset = action_manager.offset
+        self.joint_ids, self.joint_names = self.asset.find_joints(joint_names)
+        self.num_joints = len(self.joint_ids)
 
-
+        shape = (self.num_envs, self.buffer_size, self.num_joints)
+        self.joint_pos_multistep = torch.zeros(shape, device=self.device)
+        self.joint_pos = torch.zeros(self.num_envs, 2, self.num_joints, device=self.device)
+    
+    def post_step(self, substep):
+        self.joint_pos[:, substep % 2] = self.asset.data.joint_pos[:, self.joint_ids]
+    
+    def update(self):
+        self.joint_pos_multistep = self.joint_pos_multistep.roll(1, 1)
+        joint_pos = self.joint_pos.mean(1)
+        if self.noise_std > 0:
+            joint_pos = random_noise(joint_pos, self.noise_std)
+        self.joint_pos_multistep[:, 0] = joint_pos
+    
+    def compute(self):
+        joint_pos = self.joint_pos_multistep - self.joint_pos_offset.unsqueeze(1)
+        joint_pos_selected = joint_pos[:, self.history_steps]
+        return joint_pos_selected.reshape(self.num_envs, -1)
+    
 class joint_vel_multistep(Observation):
     def __init__(
         self,

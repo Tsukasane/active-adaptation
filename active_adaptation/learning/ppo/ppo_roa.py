@@ -29,6 +29,7 @@ import warnings
 import functools
 import einops
 import copy
+import numpy as np
 
 from torchrl.data import CompositeSpec, TensorSpec, Unbounded
 from torchrl.modules import ProbabilisticActor
@@ -46,7 +47,7 @@ from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
-from ..modules.rnn import GRU, set_recurrent_mode, recurrent_mode
+from ..modules.rnn import set_recurrent_mode, recurrent_mode
 from .common import *
 
 torch.set_float32_matmul_precision('high')
@@ -63,13 +64,21 @@ class PPOConfig:
     entropy_coef_start: float = 0.004
     entropy_coef_end: float = 0.001
     init_noise_scale: float = 1.5
-    load_noise_scale: float | None = 1.0
+    load_noise_scale: float | None = None
     clip_neg_reward: bool = True
+    # opt_type: Literal["adam", "adamw"] = "adam"
+    opt_type: str = "adam"
+
+    schedule: str = "fixed"  # "fixed", "adaptive"
+    desired_kl: float = 0.01
 
     reg_lambda: float = 0.0
     rec_weight: float = 0.0
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
+
+    adapt_module: str = "mlp" # "gru", "mlp"
+    priv_feature_dim: int = 128 # 128
 
     grad_pen: bool = False
 
@@ -254,7 +263,7 @@ class PPOROA(TensorDictModuleBase):
 
         fake_input = observation_spec.zero()
         
-        priv_feature_dim = 128
+        priv_feature_dim = self.cfg.priv_feature_dim
         self.encoder_priv = Seq(
             Mod(nn.Sequential(make_mlp([priv_feature_dim]), nn.LazyLinear(priv_feature_dim)), [OBS_PRIV_KEY], ["priv_feature"]),
         ).to(self.device)
@@ -270,12 +279,23 @@ class PPOROA(TensorDictModuleBase):
             self.priv_transform = env.observation_funcs[OBS_PRIV_KEY].symmetry_transforms().to(self.device)
             self.ext_transform = env.observation_funcs["ext"].symmetry_transforms().to(self.device)
             self.act_transform = env.action_manager.symmetry_transforms().to(self.device)
+        self.env = env
 
-        self.adapt_module =  Mod(
-            GRUModule(priv_feature_dim, split=None), 
-            [OBS_KEY, "is_init", "adapt_hx"], 
-            ["priv_pred", ("next", "adapt_hx")]
-        ).to(self.device)
+        if self.cfg.adapt_module == "gru":
+            self.adapt_module =  Mod(
+                GRUModule(priv_feature_dim, split=None), 
+                [OBS_KEY, "is_init", "adapt_hx"], 
+                ["priv_pred", ("next", "adapt_hx")]
+            ).to(self.device)
+        elif self.cfg.adapt_module == "mlp":
+            self.adapt_module =  Mod(
+                make_mlp([512, 256, priv_feature_dim]), 
+                # nn.Sequential(make_mlp([512, 256]), nn.LazyLinear(priv_feature_dim)), 
+                [OBS_KEY], 
+                ["priv_pred"]
+            ).to(self.device)
+        else:
+            raise ValueError(f"Invalid adapt module: {self.cfg.adapt_module}")
         
         in_keys = [CMD_KEY, OBS_KEY, "priv_feature"]
         self.actor: ProbabilisticActor = ProbabilisticActor(
@@ -329,29 +349,42 @@ class PPOROA(TensorDictModuleBase):
         self.adapt_ema = copy.deepcopy(self.adapt_module)
         self.adapt_ema.requires_grad_(False)
 
-        self.opt = torch.optim.Adam(
+        if self.cfg.opt_type == "adam":
+            opt_cls = torch.optim.Adam
+            opt_kwargs = {}
+        elif self.cfg.opt_type == "adamw":
+            opt_cls = torch.optim.AdamW
+            opt_kwargs = {"weight_decay": 0.01}
+        else:
+            raise ValueError(f"Invalid optimizer type: {self.cfg.opt_type}")
+        
+        self.opt = opt_cls(
             [
                 {"params": self.actor.parameters()},
                 {"params": self.critic.parameters()},
                 {"params": self.encoder_priv.parameters()},
             ],
-            lr=cfg.lr
+            lr=cfg.lr,
+            **opt_kwargs
         )
 
-        self.opt_adapt = torch.optim.Adam(
+        self.opt_adapt = opt_cls(
             [
                 {"params": self.adapt_module.parameters()},
             ],
-            lr=cfg.lr
+            lr=cfg.lr,
+            **opt_kwargs
         )
 
-        self.opt_finetune = torch.optim.Adam(
+        self.opt_finetune = opt_cls(
             [
                 {"params": self.actor_adapt.parameters()},
                 {"params": self.critic.parameters()},
             ],
-            lr=cfg.lr
+            lr=cfg.lr,
+            **opt_kwargs
         )
+        self.lr = cfg.lr
         
         def init_(module):
             if isinstance(module, nn.Linear):
@@ -508,6 +541,20 @@ class PPOROA(TensorDictModuleBase):
 
         log_probs, entropy, grad = policy_inference(tensordict, grad_pen=self.cfg.grad_pen)
 
+        if self.cfg.desired_kl != None and self.cfg.schedule == 'adaptive':
+            with torch.inference_mode():
+                sample_log_prob = tensordict["sample_log_prob"]
+                ratio = log_probs - sample_log_prob
+                approx_kl = (ratio.exp() - 1 - ratio).abs().mean()
+
+                if approx_kl > self.cfg.desired_kl * 2.0:
+                    self.lr = max(1e-5, self.lr / 1.5)
+                elif approx_kl < self.cfg.desired_kl / 2.0 and approx_kl > 0.0:
+                    self.lr = min(1e-2, self.lr * 1.5)
+
+                for param_group in opt.param_groups:
+                    param_group['lr'] = self.lr
+
         if self.cfg.phase == "train":
             valid = (tensordict["step_count"] > 1)
         else:
@@ -563,6 +610,7 @@ class PPOROA(TensorDictModuleBase):
             "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
+            "opt/lr": self.lr,
         }
         if self.symaug:
             info["actor/symmetry_loss"] = symmetry_loss.detach()
@@ -573,6 +621,7 @@ class PPOROA(TensorDictModuleBase):
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
         state_dict["last_phase"] = self.cfg.phase
+        state_dict["last_iter"] = self.env.current_iter
         return state_dict
     
     def load_state_dict(self, state_dict, strict=True):
@@ -590,6 +639,9 @@ class PPOROA(TensorDictModuleBase):
         if state_dict.get("last_phase", "train") == "train":
             # only copy to initialize the actor once
             hard_copy_(self.actor, self.actor_adapt)
+
+        self.env.set_progress(state_dict.get("last_iter", 0))
+
         return failed_keys
 
 

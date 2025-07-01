@@ -4,9 +4,9 @@ import torch
 
 from .quadruped import *
 from .humanoid import *
-from .scene import *
 from .arm import *
 from .sirius import *
+from .objects import *
 
 
 ASSET_PATH = os.path.dirname(__file__)
@@ -25,6 +25,11 @@ ROBOTS = {
     "g1_waist_unlocked": G1_WAIST_UNLOCKED_CFG,
     "gr1": GR1_CFG,
     "g1_29dof": G1_29DOF_CFG,
+}
+
+OBJECTS = {
+    "door": DOOR_CFG,
+    "box": BOX_CFG,
 }
 
 

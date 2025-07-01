@@ -181,42 +181,60 @@ class motor_params(Randomization):
 #         self.armature_range     = parse(armature_range, torch.zeros(len(self.joint_ids), device=self.device))
 
 class motor_params_implicit(Randomization):
-    def __init__(self, env, stiffness_range, damping_range, armature_range):
-        super().__init__(env),
+    def __init__(self, env, stiffness_range=None, damping_range=None, armature_range=None, friction_range=None):
+        super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
-        self.stiffness_range = dict(stiffness_range)
-        self.damping_range = dict(damping_range)
-        self.armature_range = dict(armature_range)
+        self.stiffness_range = dict(stiffness_range) if stiffness_range is not None else None
+        self.damping_range = dict(damping_range) if damping_range is not None else None
+        self.armature_range = dict(armature_range) if armature_range is not None else None
+        self.friction_range = dict(friction_range) if friction_range is not None else None
 
-        ids, _, value = string_utils.resolve_matching_names_values(self.stiffness_range, self.asset.joint_names)
-        self.stiffness_id = torch.tensor(ids, device=self.device)
-        self.stiffness_default = self.asset.data.joint_stiffness[0, self.stiffness_id]
-        low, high = (torch.tensor(value, device=self.device) * self.stiffness_default.unsqueeze(1)).unbind(1)
-        self.stiffness_low = low
-        self.stiffness_scale = high - low
+        if self.stiffness_range is not None:
+            ids, _, value = string_utils.resolve_matching_names_values(self.stiffness_range, self.asset.joint_names)
+            self.stiffness_id = torch.tensor(ids, device=self.device)
+            self.stiffness_default = self.asset.data.joint_stiffness[0, self.stiffness_id]
+            low, high = (torch.tensor(value, device=self.device) * self.stiffness_default.unsqueeze(1)).unbind(1)
+            self.stiffness_low = low
+            self.stiffness_scale = high - low
 
-        ids, _, value = string_utils.resolve_matching_names_values(self.damping_range, self.asset.joint_names)
-        self.damping_id = torch.tensor(ids, device=self.device)
-        self.damping_default = self.asset.data.joint_damping[0, self.damping_id]
-        low, high = (torch.tensor(value, device=self.device) * self.damping_default.unsqueeze(1)).unbind(1)
-        self.damping_low = low
-        self.damping_scale = high - low
+        if self.damping_range is not None:
+            ids, _, value = string_utils.resolve_matching_names_values(self.damping_range, self.asset.joint_names)
+            self.damping_id = torch.tensor(ids, device=self.device)
+            self.damping_default = self.asset.data.joint_damping[0, self.damping_id]
+            low, high = (torch.tensor(value, device=self.device) * self.damping_default.unsqueeze(1)).unbind(1)
+            self.damping_low = low
+            self.damping_scale = high - low
 
-        ids, _, value = string_utils.resolve_matching_names_values(self.armature_range, self.asset.joint_names)
-        self.armature_id = torch.tensor(ids, device=self.device)
-        low, high = torch.tensor(value, device=self.device).unbind(1)
-        self.armature_low = low
-        self.armature_scale = high - low
+        if self.armature_range is not None:
+            ids, _, value = string_utils.resolve_matching_names_values(self.armature_range, self.asset.joint_names)
+            self.armature_id = torch.tensor(ids, device=self.device)
+            low, high = torch.tensor(value, device=self.device).unbind(1)
+            self.armature_low = low
+            self.armature_scale = high - low
+        
+        if self.friction_range is not None:
+            ids, _, value = string_utils.resolve_matching_names_values(self.friction_range, self.asset.joint_names)
+            self.friction_id = torch.tensor(ids, device=self.device)
+            low, high = torch.tensor(value, device=self.device).unbind(1)
+            self.friction_low = low
+            self.friction_scale = high - low
     
     def reset(self, env_ids):
-        stiffness = torch.rand(len(env_ids), len(self.stiffness_id), device=self.device) * self.stiffness_scale + self.stiffness_low
-        self.asset.write_joint_stiffness_to_sim(stiffness, self.stiffness_id, env_ids)
+        if self.stiffness_range is not None:
+            stiffness = torch.rand(len(env_ids), len(self.stiffness_id), device=self.device) * self.stiffness_scale + self.stiffness_low
+            self.asset.write_joint_stiffness_to_sim(stiffness, self.stiffness_id, env_ids)
 
-        damping = torch.rand(len(env_ids), len(self.damping_id), device=self.device) * self.damping_scale + self.damping_low
-        self.asset.write_joint_damping_to_sim(damping, self.damping_id, env_ids)
+        if self.damping_range is not None:
+            damping = torch.rand(len(env_ids), len(self.damping_id), device=self.device) * self.damping_scale + self.damping_low
+            self.asset.write_joint_damping_to_sim(damping, self.damping_id, env_ids)
 
-        armature = torch.rand(len(env_ids), len(self.armature_id), device=self.device) * self.armature_scale + self.armature_low
-        self.asset.write_joint_armature_to_sim(armature, self.armature_id, env_ids)
+        if self.armature_range is not None:
+            armature = torch.rand(len(env_ids), len(self.armature_id), device=self.device) * self.armature_scale + self.armature_low
+            self.asset.write_joint_armature_to_sim(armature, self.armature_id, env_ids)
+
+        if self.friction_range is not None:
+            friction = torch.rand(len(env_ids), len(self.friction_id), device=self.device) * self.friction_scale + self.friction_low
+            self.asset.write_joint_friction_coefficient_to_sim(friction, self.friction_id, env_ids)
 
 
 class random_motor_failure(Randomization):
@@ -386,6 +404,19 @@ class perturb_body_mass(Randomization):
         self.asset.root_physx_view.set_inertias(inertias, indices)
         assert torch.allclose(self.asset.root_physx_view.get_masses(), masses)
 
+class perturb_body_com(Randomization):
+    def __init__(self, env, body_names, com_range=(-0.05, 0.05)):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.com_range = com_range
+        self.body_ids, self.body_names = self.asset.find_bodies(body_names)
+        self.ALL_INDICES = torch.arange(self.asset.num_instances)
+    
+    def startup(self):
+        coms = self.asset.root_physx_view.get_coms()
+        rand_offset = sample_uniform((self.asset.num_instances, len(self.body_ids), 3), *self.com_range)
+        coms[:, self.body_ids, :3] += rand_offset
+        self.asset.root_physx_view.set_coms(coms, indices=self.ALL_INDICES)
 
 class JointFriction(Randomization):
     def __init__(
@@ -840,28 +871,52 @@ class spring_grf(Randomization):
 
 from active_adaptation.envs.mdp.utils.forces import ImpulseForce, ConstantForce
 class impulse(Randomization):
-    def __init__(self, env):
+    def __init__(
+        self, env,
+        body_names: str = "pelvis",
+        impulse_scale: Tuple[float, float, float] = (100., 100., 20.),
+        duration_range: Tuple[float, float] = (0.40, 0.60),
+        impulse_prob: float = 0.005,
+    ):
         super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
-        self.impulse_force = ImpulseForce.sample(self.num_envs, device=self.device)
+        self.impulse_scale = impulse_scale
+        self.duration_range = duration_range
+        self.impulse_prob = impulse_prob
+        self.impulse_force = self.__sample_impulse(size=self.num_envs)
+
+        # random sample a body id
+        body_ids = self.asset.find_bodies(body_names)[0]
+        assert len(body_ids) == 1, "Only one body is supported"
+        self.body_id = body_ids[0]
+        # self.body_ids = torch.tensor(body_ids, device=self.device)
+        # body_id = torch.randint(0, len(self.body_ids), (self.num_envs,), device=self.device)
+        # self.body_id = self.body_ids[body_id] # shape: [num_envs]
+
+    def __sample_impulse(self, size: int) -> ImpulseForce:
+        return ImpulseForce.sample(size, self.device, self.impulse_scale, self.duration_range)
         
     def step(self, substep):
         forces_b = self.asset._external_force_b
         impulse_force = self.impulse_force.get_force()
-        forces_b[:, 0] += quat_rotate_inverse(self.asset.data.root_quat_w, impulse_force)
+        body_quat_w = self.asset.data.body_link_quat_w[:, self.body_id]
+        ext_force_b = quat_rotate_inverse(body_quat_w, impulse_force)
+        forces_b[:, self.body_id] += ext_force_b
         self.asset.has_external_wrench = True
 
     def update(self):
         expire = self.impulse_force.time > self.impulse_force.duration
-        r = (torch.rand(self.num_envs, 1, device=self.device) < 0.005)
+        r = (torch.rand(self.num_envs, 1, device=self.device) < self.impulse_prob)
         sample = r & expire
-        impulse_force = ImpulseForce.sample(self.num_envs, self.device)
+
+        impulse_force = self.__sample_impulse(size=self.num_envs)
+
         self.impulse_force.time.add_(self.env.step_dt)
         self.impulse_force: ImpulseForce = impulse_force.where(sample, self.impulse_force)
 
     def debug_draw(self):
         self.env.debug_draw.vector(
-            self.asset.data.root_pos_w,
+            self.asset.data.body_link_pos_w[:, self.body_id],
             self.impulse_force.get_force() /  9.81,
             color=(1.0, 0.6, 0.0, 1.0),
             size=3.0,

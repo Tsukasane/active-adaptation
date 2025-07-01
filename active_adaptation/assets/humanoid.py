@@ -474,7 +474,7 @@ G1_WAIST_UNLOCKED_CFG = ArticulationCfg( # no wrist pitch and yaw
 G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{ASSET_PATH}/G1/g1_29dof_nohand/g1_29dof_nohand.usd",
-        usd_path=f"{ASSET_PATH}/G1/g1_29dof_nohand/g1_29dof_nohand-feet_sphere.usd",
+        usd_path=f"{ASSET_PATH}" + "/G1/g1_29dof_nohand/{ROBOT_TYPE}.usd",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -494,10 +494,10 @@ G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.78),
         joint_pos={
-            ".*_hip_pitch_joint": -0.1,
-            ".*_knee_joint": 0.6,
-            ".*_ankle_pitch_joint": -0.2,
-            ".*_elbow_joint": 1.0,
+            ".*_hip_pitch_joint": -0.15,
+            ".*_knee_joint": 0.3,
+            ".*_ankle_pitch_joint": -0.15,
+            ".*_elbow_joint": 0.8,
         },
         joint_vel={".*": 0.0},
     ),
@@ -505,8 +505,52 @@ G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
     actuators={
         "base_legs": ImplicitActuatorCfg(
             joint_names_expr=".*",
-            effort_limit=300,
-            velocity_limit=100.0,
+            effort_limit_sim={
+                ".*_hip_yaw_joint": 88.0,
+                ".*_hip_roll_joint": 139.0,
+                ".*_hip_pitch_joint": 88.0,
+                ".*_knee_joint": 139.0,
+                ".*_ankle_pitch_joint": 35.0,
+                ".*_ankle_roll_joint": 35.0,
+
+                ".*waist_yaw_joint": 88.0,
+                ".*waist_roll_joint": 35.0,
+                ".*waist_pitch_joint": 35.0,
+
+                ".*_shoulder_pitch_joint": 25.0,
+                ".*_shoulder_roll_joint": 25.0,
+                ".*_shoulder_yaw_joint": 25.0,
+
+                ".*_elbow_joint": 25.0,
+
+                ".*_wrist_yaw_joint": 5.0,
+                ".*_wrist_roll_joint": 25.0,
+                ".*_wrist_pitch_joint": 5.0,
+
+            },
+            velocity_limit_sim={
+                ".*_hip_yaw_joint": 32.0,
+                ".*_hip_roll_joint": 20.0,
+                ".*_hip_pitch_joint": 32.0,
+                ".*_knee_joint": 20.0,
+                ".*_ankle_pitch_joint": 30.0,
+                ".*_ankle_roll_joint": 30.0,
+
+                ".*waist_yaw_joint": 32.0,
+                ".*waist_roll_joint": 30.0,
+                ".*waist_pitch_joint": 30.0,
+
+                ".*_shoulder_pitch_joint": 37.0,
+                ".*_shoulder_roll_joint": 37.0,
+                ".*_shoulder_yaw_joint": 37.0,
+
+                ".*_elbow_joint": 37.0,
+
+                ".*_wrist_yaw_joint": 22.0,
+                ".*_wrist_roll_joint": 37.0,
+                ".*_wrist_pitch_joint": 22.0,
+            },
+
             stiffness={
                 ".*_hip_yaw_joint": 150.0,
                 ".*_hip_roll_joint": 150.0,
@@ -515,8 +559,11 @@ G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
                 "waist_yaw_joint": 150.0, # unitree_ros
                 "waist_roll_joint": 150.0, # unitree_ros
                 "waist_pitch_joint": 150.0, # unitree_ros
-                ".*ankle_pitch_joint": 20.0,
-                ".*ankle_roll_joint": 20.0,
+                # ".*ankle_pitch_joint": 20.0,
+                # ".*ankle_roll_joint": 20.0,
+                # reduced on 0630
+                ".*ankle_pitch_joint": 10.0,
+                ".*ankle_roll_joint": 2.0,
                 ".*_shoulder_.*": 40.0,
                 ".*_elbow_joint": 40.0,
                 ".*_wrist_.*_joint": 4.0,
@@ -535,7 +582,17 @@ G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
                 ".*ankle_roll_joint": 1.0,
                 ".*_wrist_.*_joint": 0.5,
             },
-            armature=0.01,
+            armature={
+                ".*_hip_pitch_joint": 0.0103,
+                ".*_hip_roll_joint": 0.0251,
+                ".*_hip_yaw_joint": 0.0103,
+                ".*_knee_joint": 0.0251,
+                ".*_ankle_.*_joint": 0.003597,
+                "waist_.*_joint": 0.0103,
+                ".*_shoulder_.*": 0.003597,
+                ".*_elbow_joint": 0.003597,
+                ".*_wrist_.*_joint": 0.003597,
+            },
             friction=0.01,
         ),
     },

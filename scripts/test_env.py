@@ -134,12 +134,14 @@ def main(cfg: DictConfig):
     rollout_policy: TensorDictModuleBase = policy.get_rollout_policy("train")
     
     env_frames = 0
+    start_iter = env.current_iter
     for i in progress:
 
         data = []
         rollout_start = time.perf_counter()
         with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
             torch.compiler.cudagraph_mark_step_begin() # for compiled policy
+            env.set_progress(start_iter + i)
             for _ in range(cfg.algo.train_every):
                 carry = rollout_policy(carry)
                 td, carry = env.step_and_maybe_reset(carry)

@@ -46,10 +46,9 @@ class survival(Reward):
         return torch.ones(self.num_envs, 1, device=self.device)
 
 class cum_error_penalty(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True, thres: float = 0.85, min_steps: int = 50):
+    def __init__(self, env, weight: float, enabled: bool = True, thres: float = 0.85):
         super().__init__(env, weight, enabled)
         self.thres = torch.tensor(thres, device=self.env.device)
-        self.min_steps = min_steps # tolerate the first few steps
         self.error_exceeded_count = torch.zeros(self.env.num_envs, 1, device=self.env.device, dtype=torch.int32)
         self.command_manager = self.env.command_manager
     
@@ -118,7 +117,7 @@ class angvel_xy_l2(Reward):
             r = -self.angvel[:, :, :2].square().sum(-1).mean(1)
         else:
             r = -self.angvel[:, :2].square().sum(-1)
-        return r.reshape(self.num_envs, 1)
+        return r.reshape(self.num_envs, 1).clamp_min(-1.0)
 
 
 class energy_l1(Reward):
@@ -282,7 +281,7 @@ class impact_force_l2(Reward):
             dim=-1
         ).mean(1)
         force = contact_forces[:, self.body_ids] / self.default_mass_total
-        return -(force.square() * first_contact).sum(1, True)
+        return -(force.square() * first_contact).clamp_max(10.0).sum(1, True)
 
 
 class linvel_rational(Reward):
@@ -675,8 +674,31 @@ class feet_slip(Reward):
             self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02
         )
         feet_vel = self.asset.data.body_lin_vel_w[:, self.articulation_body_ids, :2]
-        feet_vel = (feet_vel.norm(dim=-1) - self.tolerance).clamp_min(0.0)
+        feet_vel = (feet_vel.norm(dim=-1) - self.tolerance).clamp(min=0.0, max=1.0)
         slip = (in_contact * feet_vel).sum(dim=1, keepdim=True)
+        return -slip
+
+class feet_slip_angvel(Reward):
+    def __init__(
+        self, env: "LocomotionEnv", body_names: str, weight: float, tolerance: float = 0.0, enabled: bool = True
+    ):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+
+        self.articulation_body_ids = self.asset.find_bodies(body_names)[0]
+        self.body_ids, self.body_names = self.contact_sensor.find_bodies(body_names)
+        self.body_ids = torch.tensor(self.body_ids, device=self.env.device)
+
+        self.tolerance = tolerance
+
+    def compute(self) -> torch.Tensor:
+        in_contact = (
+            self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02
+        )
+        feet_angvel = self.asset.data.body_ang_vel_w[:, self.articulation_body_ids, :2]
+        feet_angvel = (feet_angvel.norm(dim=-1) - self.tolerance).clamp(min=0.0, max=4.0)
+        slip = (in_contact * feet_angvel).sum(dim=1, keepdim=True)
         return -slip
 
 
@@ -896,7 +918,8 @@ class max_feet_height(Reward):
             dim=1, keepdim=True
         )
         is_standing = self.env.command_manager.is_standing_env.squeeze(1)
-        r[~is_standing] -= r[~is_standing].mean()
+        # sometimes the policy can decied is_standing, so we need to set the mean reward to 0
+        # r[~is_standing] -= r[~is_standing].mean()
         r[is_standing] = 0
         return r
 
@@ -1144,7 +1167,7 @@ class joint_vel_l2(Reward):
 
     def compute(self) -> torch.Tensor:
         joint_vel = self.joint_vel.mean(1)
-        return -joint_vel.square().sum(1, True)
+        return -joint_vel.square().clamp_max(5.0).sum(1, True)
 
 
 
@@ -1606,6 +1629,22 @@ class oscillator_biped(Reward):
         r = (-grf/self.gravity * self.sin_phase).clamp_max(0.8).sum(1, True)
         return r
 
+class oscillator_biped_contact(Reward):
+    def __init__(self, env, weight, enabled=True):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.gravity = self.asset.data.default_mass[0].sum().item() * 9.81
+        self.contact_forces: ContactSensor = self.env.scene["contact_forces"]
+        self.feet_ids = self.contact_forces.find_bodies(".*_ankle_roll_link")[0]
+
+    def compute(self):
+        self.sin_phase = self.asset.phi.sin()
+        grf = self.contact_forces.data.net_forces_w[:, self.feet_ids].norm(dim=-1)
+        should_contact = self.sin_phase > 0.0 # shape: [N, 2]
+        in_contact = grf > 1.0 # shape: [N, 2]
+        r = -(should_contact ^ in_contact).float().mean(1, True)
+        return r
+
 
 class quadruped_stand(Reward):
     def __init__(self, env, feet_names: str, weight: float, enabled: bool = True):
@@ -1652,17 +1691,49 @@ class lateral_swing_height(Reward):
         )
         return rew.sum(1, True)
 
-
-class joint_torque_limits(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True):
+class joint_pos_limits(Reward):
+    def __init__(self, env, weight: float, joint_names: str | List[str] =".*", soft_factor: float=0.9, enabled: bool = True):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
-        self.soft_limits = self.asset.data.joint_effort_limits * 0.9
+        self.joint_ids, self.joint_names = string_utils.resolve_matching_names(joint_names, self.asset.joint_names)
+        jpos_limits = self.asset.data.joint_pos_limits[:, self.joint_ids]
+        jpos_mean = (jpos_limits[..., 0] + jpos_limits[..., 1]) / 2
+        jpos_range = jpos_limits[..., 1] - jpos_limits[..., 0]
+        self.soft_limits = torch.zeros_like(jpos_limits)
+        self.soft_limits[..., 0] = jpos_mean - 0.5 * jpos_range * soft_factor
+        self.soft_limits[..., 1] = jpos_mean + 0.5 * jpos_range * soft_factor
+
+    def compute(self) -> torch.Tensor:
+        jpos = self.asset.data.joint_pos[:, self.joint_ids]
+        violation_min = (self.soft_limits[..., 0] - jpos).clamp_min(0.0)
+        violation_max = (jpos - self.soft_limits[..., 1]).clamp_min(0.0)
+        return -(violation_min + violation_max).sum(1, keepdim=True).clamp_max(1.0)
+
+class joint_torque_limits_exp(Reward):
+    def __init__(self, env, weight: float, soft_factor: float=0.9, sigma_factor: float=0.1, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.soft_limits = self.asset.data.joint_effort_limits * soft_factor
+        self.sigma_factor = self.asset.data.joint_effort_limits * sigma_factor
     
     def compute(self) -> torch.Tensor:
-        violation_high = (self.asset.data.applied_torque - self.soft_limits).clamp_min(0.)
-        violation_low = (-self.soft_limits - self.asset.data.applied_torque).clamp_min(0.)
-        return - (violation_high + violation_low).sum(1, True)
+        violation_high = (self.asset.data.applied_torque / self.soft_limits - 1.0).clamp(0., 1.0)
+        violation_low = (-self.asset.data.applied_torque / self.soft_limits - 1.0).clamp(0., 1.0)
+        violation = (violation_high + violation_low) * self.soft_limits
+        rew = torch.exp(-violation / self.sigma_factor)
+        return rew.mean(dim=1, keepdim=True)
+
+class joint_torque_limits(Reward):
+    def __init__(self, env, weight: float, soft_factor: float=0.9, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.soft_limits = self.asset.data.joint_effort_limits * soft_factor
+    
+    def compute(self) -> torch.Tensor:
+        violation_high = (self.asset.data.applied_torque / self.soft_limits - 1.0).clamp(0., 1.0)
+        violation_low = (-self.asset.data.applied_torque / self.soft_limits - 1.0).clamp(0., 1.0)
+        violation = (violation_high + violation_low) * self.soft_limits
+        return - violation.sum(dim=1, keepdim=True)
 
 
 class action_rate_l2(Reward):
@@ -1674,6 +1745,17 @@ class action_rate_l2(Reward):
         self.action_buf = self.env.action_buf # TODO: fix this
         action_diff = self.action_buf[:, :, 0] - self.action_buf[:, :, 1]
         return - action_diff.square().sum(dim=-1, keepdim=True)
+
+class action_rate_l1_exp(Reward):
+    """Penalize the rate of change of the action"""
+    def __init__(self, env, weight: float, sigma: float=50, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.sigma = sigma
+
+    def compute(self) -> torch.Tensor:
+        self.action_buf = self.env.action_buf # TODO: fix this
+        action_diff = self.action_buf[:, :, 0] - self.action_buf[:, :, 1]
+        return torch.exp(- action_diff.abs().sum(dim=-1, keepdim=True) / self.sigma)
 
 
 class action_rate2_l2(Reward):

@@ -83,14 +83,23 @@ class ImpulseForce(TensorClass):
     peak: torch.Tensor
 
     @classmethod
-    def sample(cls, size: int, device: str):
-        duration = torch.zeros(size, 1, device=device)
-        duration.uniform_(0.40, 0.60)
-        peak = torch.zeros(size, 3, device=device)
-        peak[:, 0].uniform_(80., 200.)
-        peak[:, 1].uniform_(80., 200.)
-        peak[:, 2].uniform_(0., 20.)
-        peak *= (torch.rand(size, 3, device=device) - 0.5).sign()
+    def sample(
+        cls,
+        size: int,
+        device: str,
+        impulse_scale: Tuple[float, float, float] = (100., 100., 20.),
+        duration_range: Tuple[float, float] = (0.40, 0.60),
+    ):
+        with torch.device(device):
+            duration = torch.empty(size, 1)
+            duration.uniform_(*duration_range)
+            impulse = torch.empty(size, 3)
+            for i in range(3):
+                impulse[:, i].uniform_(0, impulse_scale[i])
+            impulse *= (torch.rand(size, 3) - 0.5).sign()
+
+        # impule = peak * duration / 2
+        peak = 2 * impulse / duration
         return cls(
             duration=duration,
             time=torch.zeros(size, 1, device=device),
