@@ -754,9 +754,9 @@ class MotionTrackingCommand(Command):
             else:
                 raise ValueError(f"Invalid type for vel_tolerance: {type(vel_tolerance)}")
         
-        # def update(self):
-        #     self.stiffness = self.stiffness_start * max(1.0 - self.env.current_iter / self.annealing_steps, 0.0)
-        #     self.damping = self.stiffness.sqrt() * 2
+        def update(self):
+            self.stiffness = self.stiffness_start * max(1.0 - self.env.current_iter / self.annealing_steps, 0.0)
+            self.damping = self.stiffness.sqrt() * 2
 
         def step(self, substep):
             ref_keypoint_pos_w = self.command_manager.ref_body_pos_w[:, self.tracking_body_indices_motion]
