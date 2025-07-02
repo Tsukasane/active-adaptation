@@ -939,6 +939,9 @@ class MotionTrackingCommand(Command):
             if self.env.backend != "isaac":
                 return
 
+            if self.env.current_iter >= self.annealing_steps:
+                return
+
             # draw force as vectors
             body_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.apply_force_body_indices_asset]
             self.env.debug_draw.vector(
