@@ -16,6 +16,7 @@ class ActionManager:
     def __init__(self, env):
         self.env: _Env = env
         self.asset: Articulation = self.env.scene["robot"]
+        self.action_buf: torch.Tensor
 
     def reset(self, env_ids: torch.Tensor):
         pass
@@ -91,9 +92,11 @@ class JointPosition(ActionManager):
         )
         self.alpha[env_ids] = alpha
 
-    def __call__(self, tensordict: TensorDictBase, substep: int):
+    def __call__(self, action: torch.Tensor, substep: int):
         if substep == 0:
-            action = tensordict["action"].clamp(-10, 10)
+            if isinstance(action, TensorDictBase):
+                action = action["action"]
+            action = action.clamp(-10, 10)
             self.action_buf[:, :, 1:] = self.action_buf[:, :, :-1]
             self.action_buf[:, :, 0] = action
         # if delay = 1

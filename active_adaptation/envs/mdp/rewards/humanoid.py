@@ -229,17 +229,22 @@ class body_orientation(Reward):
 
 
 class body_upright(Reward):
+    """
+    Reward for keeping the specified body upright.
+    """
     def __init__(self, env, body_name: str, weight, enabled = True):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         self.body_id, body_name = self.asset.find_bodies(body_name)
-        self.body_id = self.body_id[0]
-        self.down = torch.tensor([[0., 0., -1.]], device=self.device)
     
     def compute(self) -> torch.Tensor:
-        g = quat_rotate_inverse(self.asset.data.body_quat_w[:, self.body_id], self.down)
-        r = dot(g, self.down)
-        return r.reshape(self.num_envs, 1)
+        down = torch.tensor([[0., 0., -1.]], device=self.device)
+        g = quat_rotate_inverse(
+            self.asset.data.body_quat_w[:, self.body_id],
+            down.expand(self.num_envs, len(self.body_id), 3)
+        )
+        rew = 1. - g[:, :, :2].square().sum(-1)
+        return rew.mean(1, True)
 
 
 class arm_swing(Reward):
