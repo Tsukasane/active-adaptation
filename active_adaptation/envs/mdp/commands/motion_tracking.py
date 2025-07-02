@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from active_adaptation.assets.objects import DoorArticulation
     from isaaclab.assets.rigid_object import RigidObject
 
-from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation, Randomization as BaseRandomization
+from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation, Randomization as BaseRandomization, Termination as BaseTermination
 from active_adaptation.utils.motion import MotionDataset, MotionData
 from active_adaptation.utils.math import (
     quat_rotate_inverse,
@@ -19,7 +19,7 @@ from active_adaptation.utils.math import (
 )
 from .base import Command
 from isaaclab.utils.math import yaw_quat, matrix_from_quat, quat_from_angle_axis, wrap_to_pi, quat_apply, euler_xyz_from_quat, matrix_from_euler, sample_uniform, quat_from_euler_xyz
-from isaaclab.utils.string import resolve_matching_names_values
+from isaaclab.utils.string import resolve_matching_names_values, resolve_matching_names
 from active_adaptation.utils.helpers import batchify
 
 quat_apply = batchify(quat_apply)
@@ -38,9 +38,7 @@ def rand_uniform(low: float, high: float, size: Tuple[int, ...], device: torch.d
 class MotionTrackingCommand(Command):
     def __init__(
         self, env, data_path: str,
-        cum_keypoint_pos_scale: float = 1.0,
-        cum_keypoint_ori_scale: float = 3.0,
-        cum_joint_pos_scale: float = 1.0,
+        # reset parameters
         lift_height: float = 0.02,
         pose_range: Dict[str, Tuple[float, float]] = {
             "x": (-0.05, 0.05),
@@ -58,6 +56,7 @@ class MotionTrackingCommand(Command):
             "yaw": (-0.1, 0.1)},
         init_joint_pos_noise: float = 0.1,
         init_joint_vel_noise: float = 0.1,
+        # observation parameters
         future_steps: List[int] = [1, 2, 8, 16],
         call_update: bool = True,
     ):
@@ -116,7 +115,6 @@ class MotionTrackingCommand(Command):
         self.asset_joint_idx_motion = [self.dataset.joint_names.index(joint_name) for joint_name in asset_joint_names]
 
         with torch.device(self.device):
-            self._cum_error = torch.zeros(self.num_envs, 3)
             self.is_standing_env = torch.zeros(self.num_envs, 1, dtype=bool)
             self.future_steps = torch.tensor(future_steps)
 
@@ -125,10 +123,6 @@ class MotionTrackingCommand(Command):
             self.t = torch.zeros(self.num_envs, dtype=torch.long)
 
             self.eval_t = torch.randint(0, self.dataset.lengths[0], (self.num_envs,), device=self.device)
-
-        self._cum_keypoint_pos_scale = cum_keypoint_pos_scale
-        self._cum_keypoint_ori_scale = cum_keypoint_ori_scale
-        self._cum_joint_pos_scale = cum_joint_pos_scale
 
         self.lift_height = lift_height
 
@@ -209,9 +203,6 @@ class MotionTrackingCommand(Command):
 
         self.asset.write_joint_state_to_sim(init_joint_pos, init_joint_vel, env_ids=env_ids)
 
-    def reset(self, env_ids):
-        self._cum_error[env_ids] = 0.0
-
     @property
     def success(self):
         return (self.t >= self.motion_len - 1).unsqueeze(1)
@@ -229,71 +220,220 @@ class MotionTrackingCommand(Command):
     class ref_joint_vel_future(TrackObservation):
         def compute(self):
             return self.command_manager.ref_joint_vel_future_.view(self.num_envs, -1)
+        
+    class ref_root_pos_future_b(TrackObservation):
+        """
+        Reference root position in robot root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            num_future_steps = self.command_manager.num_future_steps
+            self.ref_root_pos_future_b = torch.zeros(self.num_envs, num_future_steps, 3, device=self.device)
+
+        def update(self):
+            ref_root_pos_future_w = self.command_manager.ref_root_pos_future_w # shape: [num_envs, num_future_steps, 3]
+            robot_root_pos_w = self.command_manager.robot_root_pos_w[:, None, :] # shape: [num_envs, 1, 3]
+            robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, :] # shape: [num_envs, 1, 4]
+            
+            ref_root_pos_future_b = quat_rotate_inverse(robot_root_quat_w, ref_root_pos_future_w - robot_root_pos_w)
+            self.ref_root_pos_future_b = ref_root_pos_future_b
+
+        def compute(self):
+            return self.ref_root_pos_future_b.view(self.num_envs, -1)
+        
+    class ref_root_ori_future_b(TrackObservation):
+        """
+        Reference root orientation in robot root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            num_future_steps = self.command_manager.num_future_steps
+            self.ref_root_ori_future_b = torch.zeros(self.num_envs, num_future_steps, 2, 3, device=self.device)
+
+        def update(self):
+            ref_root_quat_future_w = self.command_manager.ref_root_quat_future_w # shape: [num_envs, num_future_steps, 4]
+            robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, :] # shape: [num_envs, 1, 4]
+            
+            ref_root_quat_future_b = quat_mul(
+                quat_conjugate(robot_root_quat_w).expand_as(ref_root_quat_future_w),
+                ref_root_quat_future_w
+            )
+            ref_root_ori_future_b = matrix_from_quat(ref_root_quat_future_b)
+            self.ref_root_ori_future_b = ref_root_ori_future_b[:, :, :2, :]
+
+        def compute(self):
+            return self.ref_root_ori_future_b.reshape(self.num_envs, -1)
+
+    class ref_body_pos_future_b(TrackObservation):
+        """
+        Reference body position in robot root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_pos_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+
+        def update(self):
+            ref_body_pos_future_w = self.command_manager.ref_body_pos_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            robot_root_pos_w = self.command_manager.robot_root_pos_w[:, None, None, :] # shape: [num_envs, 1, 1, 3]
+            robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
+
+            ref_body_pos_future_b = quat_rotate_inverse(robot_root_quat_w, ref_body_pos_future_w - robot_root_pos_w)
+            self.ref_body_pos_future_b = ref_body_pos_future_b
+
+        def compute(self):
+            return self.ref_body_pos_future_b.view(self.num_envs, -1)
+        
+    class ref_body_pos_future_local(TrackObservation):
+        """
+        Reference body position in motion root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_pos_future_local = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+        
+        def update(self):
+            ref_body_pos_future_w = self.command_manager.ref_body_pos_future_w    # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            ref_root_pos_w = self.command_manager.ref_root_pos_w[:, None, None, :].clone() # shape: [num_envs, 1, 1, 3]
+            ref_root_quat_w = self.command_manager.ref_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
+
+            ref_root_pos_w[..., 2] = 0.0
+            ref_root_quat_w = yaw_quat(ref_root_quat_w)
+
+            ref_body_pos_future_local = quat_rotate_inverse(ref_root_quat_w, ref_body_pos_future_w - ref_root_pos_w)
+            self.ref_body_pos_future_local = ref_body_pos_future_local
+        
+        def compute(self):
+            return self.ref_body_pos_future_local.view(self.num_envs, -1)
 
     class diff_body_pos_future_b(TrackObservation):
+        """
+        Reference body position in each robot body frame.
+        """
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.diff_body_pos_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
 
         def update(self):
-            ref_body_pos_future_w = self.command_manager.ref_body_pos_future_w
-            robot_body_pos_w = self.command_manager.robot_body_pos_w.unsqueeze(1)
-            robot_body_quat_w = self.command_manager.robot_body_quat_w.unsqueeze(1)
+            ref_body_pos_future_w = self.command_manager.ref_body_pos_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            robot_body_pos_w = self.command_manager.robot_body_pos_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 3]
+            robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
 
-            diff_body_pos_future_w = ref_body_pos_future_w - robot_body_pos_w
-            diff_body_pos_future_b = quat_rotate_inverse(robot_body_quat_w, diff_body_pos_future_w)
+            diff_body_pos_future_b = quat_rotate_inverse(robot_body_quat_w, ref_body_pos_future_w - robot_body_pos_w)
             self.diff_body_pos_future_b = diff_body_pos_future_b
 
         def compute(self):
             return self.diff_body_pos_future_b.view(self.num_envs, -1)
+        
+    class ref_body_lin_vel_future_b(TrackObservation):
+        """
+        Reference body linear velocity in robot root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_lin_vel_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+        
+        def update(self):
+            ref_body_lin_vel_future_w = self.command_manager.ref_body_lin_vel_future_w      # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
+
+            ref_body_lin_vel_future_b = quat_rotate_inverse(robot_root_quat_w, ref_body_lin_vel_future_w)
+            self.ref_body_lin_vel_future_b = ref_body_lin_vel_future_b
+        
+        def compute(self):
+            return self.ref_body_lin_vel_future_b.view(self.num_envs, -1)
     
+    class ref_body_lin_vel_future_local(TrackObservation):
+        """
+        Reference body linear velocity in motion root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_lin_vel_future_local = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+        
+        def update(self):
+            ref_body_lin_vel_future_w = self.command_manager.ref_body_lin_vel_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            ref_root_quat_w = self.command_manager.ref_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
+
+            ref_body_lin_vel_future_local = quat_rotate_inverse(ref_root_quat_w, ref_body_lin_vel_future_w)
+            self.ref_body_lin_vel_future_local = ref_body_lin_vel_future_local
+        
+        def compute(self):
+            return self.ref_body_lin_vel_future_local.view(self.num_envs, -1)
+
     class diff_body_lin_vel_future_b(TrackObservation):
+        """
+        Reference body linear velocity in each robot body frame.
+        """
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.diff_body_lin_vel_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
 
         def update(self):
-            ref_body_lin_vel_future_w = self.command_manager.ref_body_lin_vel_future_w
-            robot_body_lin_vel_w = self.command_manager.robot_body_lin_vel_w.unsqueeze(1)
-            robot_body_quat_w = self.command_manager.robot_body_quat_w.unsqueeze(1)
+            ref_body_lin_vel_future_w = self.command_manager.ref_body_lin_vel_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+            robot_body_lin_vel_w = self.command_manager.robot_body_lin_vel_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 3]
+            robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
 
-            diff_body_lin_vel_future_w = ref_body_lin_vel_future_w - robot_body_lin_vel_w
-            diff_body_lin_vel_future_b = quat_rotate_inverse(robot_body_quat_w, diff_body_lin_vel_future_w)
+            diff_body_lin_vel_future_b = quat_rotate_inverse(robot_body_quat_w, ref_body_lin_vel_future_w - robot_body_lin_vel_w)
             self.diff_body_lin_vel_future_b = diff_body_lin_vel_future_b
 
         def compute(self):
             return self.diff_body_lin_vel_future_b.view(self.num_envs, -1)
+        
+    class ref_body_ori_future_b(TrackObservation):
+        """
+        Reference body orientation in robot root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_ori_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, 3, device=self.device)
+        
+        def update(self):
+            ref_body_quat_future_w = self.command_manager.ref_body_quat_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 4]
+            robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
 
+            ref_body_quat_future_b = quat_rotate_inverse(robot_root_quat_w, ref_body_quat_future_w)
+            self.ref_body_ori_future_b = matrix_from_quat(ref_body_quat_future_b)
+        
+        def compute(self):
+            return self.ref_body_ori_future_b[:, :, :, :2, :].reshape(self.num_envs, -1)
+    
+    class ref_body_ori_future_local(TrackObservation):
+        """
+        Reference body orientation in motion root frame
+        """
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.ref_body_ori_future_local = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, 3, device=self.device)
+        
+        def update(self):
+            ref_body_quat_future_w = self.command_manager.ref_body_quat_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 4]
+            ref_root_quat_w = self.command_manager.ref_root_quat_w[:, None, None, :] # shape: [num_envs, 1, 1, 4]
+
+            ref_root_quat_w = yaw_quat(ref_root_quat_w)
+
+            ref_body_quat_future_local = quat_rotate_inverse(ref_root_quat_w, ref_body_quat_future_w)
+            self.ref_body_ori_future_local = matrix_from_quat(ref_body_quat_future_local)
+        
+        def compute(self):
+            return self.ref_body_ori_future_local[:, :, :, :2, :].reshape(self.num_envs, -1)
+    
     class diff_body_ori_future_b(TrackObservation):
+        """
+        Reference body orientation in each robot body frame.
+        """
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.diff_body_ori_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, 3, device=self.device)
-
+        
         def update(self):
-            ref_body_quat_future_w = self.command_manager.ref_body_quat_future_w
-            robot_body_quat_w = self.command_manager.robot_body_quat_w.unsqueeze(1)
+            ref_body_quat_future_w = self.command_manager.ref_body_quat_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 4]
+            robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
+
             diff_body_quat_future_b = quat_mul(quat_conjugate(robot_body_quat_w), ref_body_quat_future_w)
             self.diff_body_ori_future_b = matrix_from_quat(diff_body_quat_future_b)
-
+        
         def compute(self):
             return self.diff_body_ori_future_b[:, :, :, :2, :].reshape(self.num_envs, -1)
-
-    class diff_body_ang_vel_future_b(TrackObservation):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            self.diff_body_ang_vel_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
-
-        def update(self):
-            ref_body_ang_vel_future_w = self.command_manager.ref_body_ang_vel_future_w
-            robot_body_ang_vel_w = self.command_manager.robot_body_ang_vel_w.unsqueeze(1)
-            robot_body_quat_w = self.command_manager.robot_body_quat_w.unsqueeze(1)
-            
-            diff_body_ang_vel_future_w = ref_body_ang_vel_future_w - robot_body_ang_vel_w
-            diff_body_ang_vel_future_b = quat_rotate_inverse(robot_body_quat_w, diff_body_ang_vel_future_w)
-            self.diff_body_ang_vel_future_b = diff_body_ang_vel_future_b
-
-        def compute(self):
-            return self.diff_body_ang_vel_future_b.view(self.num_envs, -1)
 
     class ref_motion_phase(TrackObservation):
         def compute(self):
@@ -303,70 +443,17 @@ class MotionTrackingCommand(Command):
         def compute(self):
             return torch.randn(self.num_envs, 1, device=self.device)
     
-    class motion_feet_contact(TrackObservation):
-        def __init__(self, body_names: str | List[str], motion_vel_thres: float=0.1, motion_height_thres: float=0.05, **kwargs):
-            super().__init__(**kwargs)
-            self.motion_vel_thres = motion_vel_thres
-            self.motion_height_thres = motion_height_thres
-            body_names = self.command_manager.asset.find_bodies(body_names)[1]
-            self.body_indices_motion = []
-            self.body_indices_sensor = []
-            for name in body_names:
-                body_idx_motion = self.command_manager.dataset.body_names.index(name)
-                body_idx_sensor = self.command_manager.contact_forces.body_names.index(name)
-
-                self.body_indices_motion.append(body_idx_motion)
-                self.body_indices_sensor.append(body_idx_sensor)
-
-            shape = (self.env.num_envs, self.command_manager.num_future_steps, len(body_names))
-            self.motion_contact = torch.zeros(shape, dtype=torch.bool, device=self.device)
-            
-        def update(self):
-            feet_vel_motion = self.command_manager.future_ref_motion.body_lin_vel_w[:, :, self.body_indices_motion]
-            feet_vel_motion_norm = feet_vel_motion.norm(dim=-1)
-            feet_pos_motion = self.command_manager.future_ref_motion.body_pos_w[:, :, self.body_indices_motion]
-            feet_pos_motion_z = feet_pos_motion[..., 2]
-            self.motion_contact[:] = (feet_vel_motion_norm < self.motion_vel_thres) & (feet_pos_motion_z < self.motion_height_thres)
-
-        def compute(self):
-            return self.motion_contact.view(self.num_envs, -1)
-    
-    class motion_feet_no_contact(TrackObservation):
-        def __init__(self, body_names: str | List[str], motion_vel_thres: float=0.1, **kwargs):
-            super().__init__(**kwargs)
-            self.motion_vel_thres = motion_vel_thres
-            body_names = self.command_manager.asset.find_bodies(body_names)[1]
-            self.body_indices_motion = []
-            self.body_indices_sensor = []
-            for name in body_names:
-                body_idx_motion = self.command_manager.dataset.body_names.index(name)
-                body_idx_sensor = self.command_manager.contact_forces.body_names.index(name)
-
-                self.body_indices_motion.append(body_idx_motion)
-                self.body_indices_sensor.append(body_idx_sensor)
-
-            shape = (self.env.num_envs, self.command_manager.num_future_steps, len(body_names))
-            self.motion_no_contact = torch.zeros(shape, dtype=torch.bool, device=self.device)
-
-        def update(self):
-            feet_vel_motion = self.command_manager.future_ref_motion.body_lin_vel_w[:, :, self.body_indices_motion]
-            feet_vel_motion_norm = feet_vel_motion.norm(dim=-1)
-            self.motion_no_contact[:] = feet_vel_motion_norm > self.motion_vel_thres
-
-        def compute(self):
-            return self.motion_no_contact.view(self.num_envs, -1)
-    
     TrackReward = BaseReward["MotionTrackingCommand"]
 
-    class tracking_keypoint(TrackReward):
+    class _tracking_keypoint(TrackReward):
         def __init__(self, body_names: List[str] | str | None = None, sigma: float = 0.03, tolerance: float | Dict[str, float] = 0.0, **kwargs):
             super().__init__(**kwargs)
             if body_names is None:
                 body_names = self.command_manager.tracking_keypoint_names
             
             self.sigma = sigma
-            body_indices_motion, matched_names_motion = self.command_manager.dataset.find_bodies(body_names)
-            body_indices_asset, matched_names_asset = self.command_manager.asset.find_bodies(body_names)
+            body_indices_motion, matched_names_motion = resolve_matching_names(body_names, self.command_manager.tracking_keypoint_names)
+            body_indices_asset, matched_names_asset = resolve_matching_names(body_names, self.command_manager.asset.body_names)
 
             matched_names = set(matched_names_motion) & set(matched_names_asset)
             assert set(matched_names) == set(matched_names_motion) == set(matched_names_asset), "body names in motion dataset and robot not matched"
@@ -396,7 +483,7 @@ class MotionTrackingCommand(Command):
         def compute(self):
             raise NotImplementedError
 
-    class keypoint_pos_tracking_product(tracking_keypoint):
+    class keypoint_pos_tracking_product(_tracking_keypoint):
         def compute(self):
             body_pos_asset = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
             body_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
@@ -406,20 +493,15 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_pos_tracking_local_product(tracking_keypoint):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            root_body_name = "pelvis"
-            self.root_body_idx_motion = self.command_manager.tracking_keypoint_names.index(root_body_name)
-
+    class keypoint_pos_tracking_local_product(_tracking_keypoint):
         def compute(self):
             body_pos_asset = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
             body_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
 
-            root_pos_asset = self.command_manager.asset.data.root_link_pos_w.clone()
-            root_pos_motion = self.command_manager.ref_body_pos_w[:, self.root_body_idx_motion].clone()
-            root_quat_asset = self.command_manager.asset.data.root_link_quat_w
-            root_quat_motion = self.command_manager.ref_body_quat_w[:, self.root_body_idx_motion]
+            root_pos_asset = self.command_manager.robot_root_pos_w.clone()
+            root_pos_motion = self.command_manager.ref_root_pos_w.clone()
+            root_quat_asset = self.command_manager.robot_root_quat_w
+            root_quat_motion = self.command_manager.ref_root_quat_w
             
             root_pos_asset[..., 2] = 0.0
             root_pos_motion[..., 2] = 0.0
@@ -440,7 +522,7 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ori_tracking_product(tracking_keypoint):
+    class keypoint_ori_tracking_product(_tracking_keypoint):
         def compute(self):
             body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.body_indices_asset]
             body_ori_motion = self.command_manager.ref_body_quat_w[:, self.body_indices_motion]
@@ -451,13 +533,13 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class keypoint_ori_tracking_local_product(tracking_keypoint):
+    class keypoint_ori_tracking_local_product(_tracking_keypoint):
         def compute(self):
             body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.body_indices_asset]
             body_ori_motion = self.command_manager.ref_body_quat_w[:, self.body_indices_motion]
 
-            root_quat_asset = self.command_manager.asset.data.root_link_quat_w
-            root_quat_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.root_body_idx_motion]
+            root_quat_asset = self.command_manager.robot_root_quat_w
+            root_quat_motion = self.command_manager.ref_root_quat_w
 
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
@@ -475,7 +557,7 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class keypoint_lin_vel_tracking_product(tracking_keypoint):
+    class keypoint_lin_vel_tracking_product(_tracking_keypoint):
         def compute(self):
             body_lin_vel_asset = self.command_manager.asset.data.body_link_lin_vel_w[:, self.body_indices_asset]
             body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion]
@@ -485,20 +567,15 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_lin_vel_tracking_local_product(tracking_keypoint):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            root_body_name = "pelvis"
-            self.root_body_idx_motion = self.command_manager.tracking_keypoint_names.index(root_body_name)
-
+    class keypoint_lin_vel_tracking_local_product(_tracking_keypoint):
         def compute(self):
             body_lin_vel_asset = self.command_manager.asset.data.body_link_lin_vel_w[:, self.body_indices_asset].clone()
             body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion].clone()
 
-            root_pos_asset = self.command_manager.asset.data.root_link_pos_w.clone()
-            root_pos_motion = self.command_manager.ref_body_pos_w[:, self.root_body_idx_motion].clone()
-            root_quat_asset = self.command_manager.asset.data.root_link_quat_w
-            root_quat_motion = self.command_manager.ref_body_quat_w[:, self.root_body_idx_motion]
+            root_pos_asset = self.command_manager.robot_root_pos_w.clone()
+            root_pos_motion = self.command_manager.ref_root_pos_w.clone()
+            root_quat_asset = self.command_manager.robot_root_quat_w
+            root_quat_motion = self.command_manager.ref_root_quat_w
 
             root_pos_asset[..., 2] = 0.0
             root_pos_motion[..., 2] = 0.0
@@ -519,7 +596,7 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ang_vel_tracking_product(tracking_keypoint):
+    class keypoint_ang_vel_tracking_product(_tracking_keypoint):
         def compute(self):
             body_ang_vel_asset = self.command_manager.asset.data.body_link_ang_vel_w[:, self.body_indices_asset]
             body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
@@ -529,13 +606,13 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class keypoint_ang_vel_tracking_local_product(tracking_keypoint):
+    class keypoint_ang_vel_tracking_local_product(_tracking_keypoint):
         def compute(self):
             body_ang_vel_asset = self.command_manager.asset.data.body_link_ang_vel_w[:, self.body_indices_asset]
             body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
 
-            root_quat_asset = self.command_manager.asset.data.root_link_quat_w
-            root_quat_motion = self.command_manager.ref_body_quat_w[:, self.command_manager.root_body_idx_motion]
+            root_quat_asset = self.command_manager.robot_root_quat_w
+            root_quat_motion = self.command_manager.ref_root_quat_w
 
             root_quat_asset = yaw_quat(root_quat_asset)
             root_quat_motion = yaw_quat(root_quat_motion)
@@ -552,7 +629,7 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
 
-    class tracking_joint(TrackReward):
+    class _tracking_joint(TrackReward):
         def __init__(self, joint_names: List[str] | str | None = None, sigma: float = 0.03, tolerance: float | Dict[str, float] = 0.0, **kwargs):
             super().__init__(**kwargs)
             if joint_names is None:
@@ -586,7 +663,7 @@ class MotionTrackingCommand(Command):
             else:
                 raise ValueError(f"Invalid tolerance type: {type(tolerance)}")
 
-    class joint_pos_tracking_product(tracking_joint):
+    class joint_pos_tracking_product(_tracking_joint):
         def compute(self):
             joint_pos_asset = self.command_manager.asset.data.joint_pos[:, self.joint_indices_asset]
             joint_pos_motion = self.command_manager.ref_joint_pos[:, self.joint_indices_motion]
@@ -595,7 +672,7 @@ class MotionTrackingCommand(Command):
             # shape: [num_envs, num_tracking_joints]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
         
-    class joint_vel_tracking_product(tracking_joint):
+    class joint_vel_tracking_product(_tracking_joint):
         def compute(self):
             joint_vel_asset = self.command_manager.asset.data.joint_vel[:, self.joint_indices_asset]
             joint_vel_motion = self.command_manager.ref_joint_vel[:, self.joint_indices_motion]
@@ -863,14 +940,65 @@ class MotionTrackingCommand(Command):
                 return
 
             # draw force as vectors
-            body_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.command_manager.tracking_body_indices_asset]
+            body_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.apply_force_body_indices_asset]
             self.env.debug_draw.vector(
                 body_pos_w.reshape(-1, 3),
                 (self.forces_w / self.stiffness).reshape(-1, 3) * 2.0,
                 # orange
                 color=(1.0, 0.5, 0.0, 1.0)
             )
+    
+    TrackTermination = BaseTermination["MotionTrackingCommand"]
+    class _cum_error(TrackTermination):
+        def __init__(self, min_steps: int=25, threshold: float=0.25, **kwargs):
+            super().__init__(**kwargs)
+            self.min_steps = min_steps
+            self.threshold = threshold
+
+            with torch.device(self.device):
+                self.error = torch.zeros(self.num_envs)
+                self.__exceeded = torch.zeros(self.num_envs, dtype=bool)
+                self.__cum_steps = torch.zeros(self.num_envs, dtype=torch.int32)
+
+        def update(self):
+            self.__exceeded = self.error >= self.threshold
+            self.__cum_steps[self.__exceeded] += 1
+            self.__cum_steps[~self.__exceeded] = 0
+
+        def reset(self, env_ids):
+            self.__cum_steps[env_ids] = 0
+        
+        def __call__(self):
+            return (self.__cum_steps >= self.min_steps).unsqueeze(-1)
             
+    class cum_body_pos_error(_cum_error):
+        def __init__(self, body_names: str | List[str] = ".*", **kwargs):
+            super().__init__(**kwargs)
+            self.body_names = resolve_matching_names(body_names, self.command_manager.tracking_keypoint_names)[1]
+            self.body_indices_asset = [self.command_manager.asset.body_names.index(name) for name in self.body_names]
+            self.body_indices_motion = [self.command_manager.tracking_keypoint_names.index(name) for name in self.body_names]
+
+        def update(self):
+            ref_body_pos_w = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
+            robot_body_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
+            # shape: [num_envs, num_tracking_bodies, 3]
+            body_pos_error = (ref_body_pos_w - robot_body_pos_w).norm(dim=-1)
+            self.error[:] = body_pos_error.max(dim=1).values
+            super().update()
+        
+    class cum_joint_pos_error(_cum_error):
+        def __init__(self, joint_names: str | List[str] = ".*", **kwargs):
+            super().__init__(**kwargs)
+            self.joint_names = resolve_matching_names(joint_names, self.command_manager.tracking_joint_names)[1]
+            self.joint_indices_asset = [self.command_manager.asset.joint_names.index(name) for name in self.joint_names]
+            self.joint_indices_motion = [self.command_manager.tracking_joint_names.index(name) for name in self.joint_names]
+
+        def update(self):
+            ref_joint_pos = self.command_manager.ref_joint_pos[:, self.joint_indices_motion]
+            robot_joint_pos = self.command_manager.asset.data.joint_pos[:, self.joint_indices_asset]
+            self.error[:] = (ref_joint_pos - robot_joint_pos).abs().max(dim=1).values
+            super().update()
+
     def update(self):
         # future ref motion for actor observation
         self.future_ref_motion = self.dataset.get_slice(self.motion_ids, self.t, steps=self.future_steps)
@@ -883,13 +1011,19 @@ class MotionTrackingCommand(Command):
         self.ref_body_ang_vel_future_w = self.future_ref_motion.body_ang_vel_w[..., self.tracking_body_indices_motion, :]
         self.ref_joint_pos_future_ = self.future_ref_motion.joint_pos[..., self.tracking_joint_indices_motion]
         self.ref_joint_vel_future_ = self.future_ref_motion.joint_vel[..., self.tracking_joint_indices_motion]
+        self.ref_root_pos_future_w = self.future_ref_motion.body_pos_w[..., self.root_body_idx_motion, :]
+        self.ref_root_quat_future_w = self.future_ref_motion.body_quat_w[..., self.root_body_idx_motion, :]
 
+        # Reward: current robot and ref motion for reward computation
         self.robot_body_pos_w = self.asset.data.body_link_pos_w[:, self.tracking_body_indices_asset]
         self.robot_body_lin_vel_w = self.asset.data.body_link_lin_vel_w[:, self.tracking_body_indices_asset]
         self.robot_body_quat_w = self.asset.data.body_link_quat_w[:, self.tracking_body_indices_asset]
         self.robot_body_ang_vel_w = self.asset.data.body_link_ang_vel_w[:, self.tracking_body_indices_asset]
+        self.robot_joint_pos = self.asset.data.joint_pos[:, self.tracking_joint_indices_asset]
+        self.robot_joint_vel = self.asset.data.joint_vel[:, self.tracking_joint_indices_asset]
+        self.robot_root_pos_w = self.asset.data.root_link_pos_w
+        self.robot_root_quat_w = self.asset.data.root_link_quat_w
 
-        # Reward: current ref motion for reward computation
         self.current_ref_motion: MotionData = self.future_ref_motion[:, 0]
         self.ref_body_pos_w = self.ref_body_pos_future_w[:, 0]
         self.ref_body_lin_vel_w = self.ref_body_lin_vel_future_w[:, 0]
@@ -897,34 +1031,16 @@ class MotionTrackingCommand(Command):
         self.ref_body_ang_vel_w = self.ref_body_ang_vel_future_w[:, 0]
         self.ref_joint_pos = self.ref_joint_pos_future_[:, 0]
         self.ref_joint_vel = self.ref_joint_vel_future_[:, 0]
+        self.ref_root_pos_w = self.ref_root_pos_future_w[:, 0]
+        self.ref_root_quat_w = self.ref_root_quat_future_w[:, 0]
         # shape: [num_envs, num_future_steps, num_tracking_bodies, xxx]
 
-        # Termination: tracking error
-        cur_tracking_body_pos_w = self.asset.data.body_link_pos_w[:, self.tracking_body_indices_asset]
-        ref_tracking_body_pos_w = self.ref_body_pos_w
-        cur_tracking_body_quat_w = self.asset.data.body_link_quat_w[:, self.tracking_body_indices_asset]
-        ref_tracking_body_quat_w = self.ref_body_quat_w
-        cur_tracking_joint_pos = self.asset.data.joint_pos[:, self.tracking_joint_indices_asset]
-        ref_tracking_joint_pos = self.ref_joint_pos
 
         if self.env.backend == "isaac":
-            self.all_marker_pos_w[0] = cur_tracking_body_pos_w
-            self.all_marker_pos_w[1] = ref_tracking_body_pos_w
-            # self.all_marker_pos_w[0] = ref_body_pos_future_w[:, 0]
-            # self.all_marker_pos_w[1] = ref_body_pos_future_w[:, -1]
-
-
-        diff_body_pos_w = ref_tracking_body_pos_w - cur_tracking_body_pos_w
-        diff_body_quat_w = quat_mul(quat_conjugate(ref_tracking_body_quat_w), cur_tracking_body_quat_w)
-        diff_joint_pos = ref_tracking_joint_pos - cur_tracking_joint_pos
-
-        error_body_pos = diff_body_pos_w.norm(dim=-1)
-        error_body_ori = torch.norm(axis_angle_from_quat(diff_body_quat_w), dim=-1)
-        error_joint_pos = diff_joint_pos.abs()
-
-        self._cum_error[:, 0] = error_body_pos.mean(dim=1) / self._cum_keypoint_pos_scale
-        self._cum_error[:, 1] = error_body_ori.mean(dim=1) / self._cum_keypoint_ori_scale
-        self._cum_error[:, 2] = error_joint_pos.mean(dim=1) / self._cum_joint_pos_scale
+            self.all_marker_pos_w[0] = self.robot_body_pos_w
+            self.all_marker_pos_w[1] = self.ref_body_pos_w
+            # self.all_marker_pos_w[2] = self.ref_body_pos_future_w[:, 0]
+            # self.all_marker_pos_w[3] = self.ref_body_pos_future_w[:, -1]
 
         self.t += 1
     
@@ -1012,7 +1128,6 @@ class MotionTrackingDoor(MotionTrackingCommand):
         self.door_joint_id_asset = self.door.joint_names.index(door_joint_name)
 
         with torch.device(self.device):
-            self._cum_error = torch.zeros(self.num_envs, 4)
             self.lost_contact_steps = torch.zeros(self.num_envs, dtype=torch.int32)
 
             self.contact_target_pos = torch.tensor(contact_target_pos).unsqueeze(0).expand(self.num_envs, -1)
@@ -1329,6 +1444,8 @@ class MotionTrackingDoor(MotionTrackingCommand):
         self.lost_contact_steps[increment_mask] += 1
         self.lost_contact_steps[~increment_mask] = 0
 
+        print(f"lost contact should implement its own termination")
+        breakpoint()
         self._cum_error[:, 3] = self.lost_contact_steps / self._cum_lost_contact_steps
     
     def _init_debug_draw(self):

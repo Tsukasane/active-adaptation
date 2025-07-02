@@ -134,14 +134,13 @@ class _Env(EnvBase):
         members = dict(inspect.getmembers(self.__class__, inspect.isclass))
         self.command_manager: mdp.Command = hydra.utils.instantiate(self.cfg.command, env=self)
 
-        RAND_FUNCS = mdp.RAND_FUNCS
-        RAND_FUNCS.update(mdp.get_obj_by_class(members, mdp.Randomization))
-        TERM_FUNCS = mdp.TERM_FUNCS
+        # RAND_FUNCS = mdp.RAND_FUNCS
+        # RAND_FUNCS.update(mdp.get_obj_by_class(members, mdp.Randomization))
+        # TERM_FUNCS = mdp.TERM_FUNCS
+        # for k, v in inspect.getmembers(self.command_manager):
+        #     if getattr(v, "is_termination", False):
+        #         TERM_FUNCS[k] = mdp.termination_wrapper(v)
         ADDONS = mdp.ADDONS
-
-        for k, v in inspect.getmembers(self.command_manager):
-            if getattr(v, "is_termination", False):
-                TERM_FUNCS[k] = mdp.termination_wrapper(v)
 
         self.addons = OrderedDict()
         self.randomizations = OrderedDict()
@@ -260,7 +259,8 @@ class _Env(EnvBase):
 
         self.termination_funcs = OrderedDict()
         for key, params in self.cfg.termination.items():
-            term_func = TERM_FUNCS[key](self, **params)
+            term_cls = mdp.Termination.registry[key]
+            term_func = term_cls(env=self, **params)
             self.termination_funcs[key] = term_func
             self._update_callbacks.append(term_func.update)
             self._reset_callbacks.append(term_func.reset)

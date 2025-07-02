@@ -114,6 +114,8 @@ class _RegistryMixin:
         cls_name = cls.__name__
         cls._file = inspect.getfile(cls)
         cls._line = inspect.getsourcelines(cls)[1]
+        if cls_name.startswith("_"):
+            return
         if cls_name not in cls.registry:
             cls.registry[cls_name] = cls    
         else:

@@ -16,6 +16,7 @@ setup(
         "pandas",
         "termcolor",
         "pygame", # for game controller
+        "mujoco",
         "onnxscript==0.3.0",
         "onnxruntime==1.22.0",
         "torch==2.7.1",

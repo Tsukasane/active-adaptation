@@ -1,16 +1,19 @@
 import torch
 import abc
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
     from isaaclab.sensors import ContactSensor
+    from active_adaptation.envs.base import _Env
 
+from active_adaptation.envs.mdp.base import _RegistryMixin, CT
 
-class Termination:
+class Termination(Generic[CT], _RegistryMixin):
     def __init__(self, env):
-        self.env = env
+        self.env: _Env = env
+        self.command_manager: CT = env.command_manager
     
     def update(self):
         pass
@@ -25,6 +28,10 @@ class Termination:
     @property
     def num_envs(self) -> int:
         return self.env.num_envs
+
+    @property
+    def device(self):
+        return self.env.device
 
 
 def termination_func(func):

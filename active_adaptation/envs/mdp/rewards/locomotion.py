@@ -914,9 +914,12 @@ class max_feet_height(Reward):
             self.impact_point[:, :, 2], self.detach_point[:, :, 2]
         )
         max_height = self.max_height - reference_height
-        r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(
-            dim=1, keepdim=True
-        )
+        # r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(
+        #     dim=1, keepdim=True
+        # )
+        # this should be penalty, otherwise encourages the feet to contact more often
+        penalty = self.impact * (1 - max_height / self.target_height).clamp_min(0.0)
+        r = -penalty.sum(dim=1, keepdim=True)
         is_standing = self.env.command_manager.is_standing_env.squeeze(1)
         # sometimes the policy can decied is_standing, so we need to set the mean reward to 0
         # r[~is_standing] -= r[~is_standing].mean()
