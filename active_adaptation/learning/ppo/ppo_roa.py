@@ -416,8 +416,13 @@ class PPOROA(TensorDictModuleBase):
         elif self.cfg.phase == "finetune":
             modules.append(self.adapt_ema)
             modules.append(self.actor_adapt)
-        
-        policy = Seq(*modules)
+
+        out_keys = ["sample_log_prob", "action"]
+        if self.cfg.adapt_module == "gru":
+            out_keys.append(("next", "adapt_hx"))
+        if self.cfg.phase == "finetune":
+            out_keys.append("priv_pred")
+        policy = Seq(*modules, selected_out_keys=out_keys)
         return policy
     
     def step_schedule(self, progress: float):

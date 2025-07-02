@@ -110,6 +110,7 @@ class _Env(EnvBase):
         )
         self.episode_length_buf = torch.zeros(self.num_envs, dtype=int, device=self.device)
         self.episode_count = 0
+        self.current_iter = 0
 
         # parse obs and reward functions
         self.done_spec = Composite(
@@ -271,8 +272,6 @@ class _Env(EnvBase):
     
         self.input_tensordict = None
         self.extra = {}
-
-        self.current_iter = 0
     
     def set_progress(self, progress: int):
         self.current_iter = progress
@@ -307,13 +306,11 @@ class _Env(EnvBase):
             env_ids = torch.arange(self.num_envs, device=self.device)
         if len(env_ids):
             self._reset_idx(env_ids)
-        self.episode_length_buf[env_ids] = 0
-        self.scene.update(self.step_dt)
-        for callback in self._reset_callbacks:
-            callback(env_ids)
+            self.episode_length_buf[env_ids] = 0
+            for callback in self._reset_callbacks:
+                callback(env_ids)
         tensordict = TensorDict({}, self.num_envs, device=self.device)
-        # tensordict.update(self.observation_spec.zero())
-        self._compute_observation(tensordict)
+        tensordict.update(self.observation_spec.zero())
         return tensordict
 
     @abstractmethod
