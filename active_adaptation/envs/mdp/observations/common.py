@@ -827,6 +827,23 @@ class external_forces(Observation):
     def symmetry_transforms(self):
         return sym_utils.cartesian_space_symmetry(self.asset, self.body_names)
 
+class external_forces_b(Observation):
+    def __init__(self, env, body_names, divide_by_mass: bool=True, scale: float = 1.0):
+        super().__init__(env)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.body_indices, self.body_names = self.asset.find_bodies(body_names)
+        self.forces_b = torch.zeros(self.env.num_envs, len(self.body_indices) * 3, device=self.device)
+
+    def update(self):
+        forces_b = self.asset._external_force_b[:, self.body_indices]
+        self.forces_b[:] = forces_b.reshape(self.env.num_envs, -1)
+
+    def compute(self) -> torch.Tensor:
+        return self.forces_b
+
+    def symmetry_transforms(self):
+        return sym_utils.cartesian_space_symmetry(self.asset, self.body_names)
+
 
 class external_torques(Observation):
     def __init__(self, env, body_names, divide_by_mass: bool=True, scale: float = 0.2):

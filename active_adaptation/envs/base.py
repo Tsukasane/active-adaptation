@@ -282,10 +282,13 @@ class _Env(EnvBase):
     
         self.input_tensordict = None
         self.extra = {}
+        self.reset_time = 0.
         self.simulation_time = 0.
-        self.observation_time = 0.
+        self.update_time = 0.
         self.reward_time = 0.
         self.command_time = 0.
+        self.termination_time = 0.
+        self.observation_time = 0.
         self.ema_cnt = 0.
         
     def set_progress(self, progress: int):
@@ -307,16 +310,20 @@ class _Env(EnvBase):
             result[group_key] = {}
             for rew_key, (sum, cnt) in group.items():
                 result[group_key][rew_key] = (sum / cnt).item()
+        result["performance/reset_time"] = self.reset_time / self.ema_cnt
         result["performance/observation_time"] = self.observation_time / self.ema_cnt
         result["performance/reward_time"] = self.reward_time / self.ema_cnt
-        result["performance/simulation_time"] = self.simulation_time / self.ema_cnt
         result["performance/command_time"] = self.command_time / self.ema_cnt
+        result["performance/termination_time"] = self.termination_time / self.ema_cnt
+        result["performance/update_time"] = self.update_time / self.ema_cnt
+        result["performance/simulation_time"] = self.simulation_time / self.ema_cnt
         return result
     
     def setup_scene(self):
         raise NotImplementedError
     
     def _reset(self, tensordict: TensorDictBase | None = None, **kwargs) -> TensorDictBase:
+        start = time.perf_counter()
         if tensordict is not None:
             env_mask = tensordict.get("_reset").reshape(self.num_envs)
             env_ids = env_mask.nonzero().squeeze(-1)
@@ -331,6 +338,8 @@ class _Env(EnvBase):
             callback(env_ids)
         tensordict = TensorDict({}, self.num_envs, device=self.device)
         tensordict.update(self.observation_spec.zero())
+        end = time.perf_counter()
+        self.reset_time = self.reset_time * self._stats_ema_decay + (end - start)
         return tensordict
 
     @abstractmethod
@@ -372,6 +381,7 @@ class _Env(EnvBase):
         return {"reward": rewards}
     
     def _compute_termination(self) -> TensorDictBase:
+        start = time.perf_counter()
         if not self.termination_funcs:
             return torch.zeros((self.num_envs, 1), dtype=bool, device=self.device)
         
@@ -381,15 +391,20 @@ class _Env(EnvBase):
             self.stats["termination", key][:] = flag.float()
             flags.append(flag)
         flags = torch.cat(flags, dim=-1)
+        end = time.perf_counter()
+        self.termination_time = self.termination_time * self._stats_ema_decay + (end - start)
         return flags.any(dim=-1, keepdim=True)
 
     def _update(self):
+        start = time.perf_counter()
         for callback in self._update_callbacks:
             callback()
         if self.sim.has_gui():
             self.sim.render()
         self.episode_length_buf.add_(1)
         self.timestamp += 1
+        end = time.perf_counter()
+        self.update_time = self.update_time * self._stats_ema_decay + (end - start)
 
     def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
         start = time.perf_counter()
@@ -414,13 +429,14 @@ class _Env(EnvBase):
         
         tensordict = TensorDict({}, self.num_envs, device=self.device)
         tensordict.update(self._compute_reward())
+
         # Note that command update is a special case
         # it should take place after reward computation
         start = time.perf_counter()
         self.command_manager.update()
         end = time.perf_counter()
-
         self.command_time = self.command_time * self._stats_ema_decay + (end - start)
+
         self._compute_observation(tensordict)
         terminated = self._compute_termination()
         truncated = (self.episode_length_buf >= self.max_episode_length).unsqueeze(1)

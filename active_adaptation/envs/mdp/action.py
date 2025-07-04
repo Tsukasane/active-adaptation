@@ -37,8 +37,8 @@ class JointPosition(ActionManager):
     def __init__(
         self,
         env,
-        action_scaling: Dict[str, float] = 0.5,
-        max_delay: int = None,  # delay in simulation steps
+        action_scaling: float | Dict[str, float] = 0.5,
+        max_delay: int | None = None,  # delay in simulation steps
         alpha: float | Tuple[float, float] = 0.5,
         **kwargs,
     ):
@@ -96,7 +96,6 @@ class JointPosition(ActionManager):
         if substep == 0:
             if isinstance(action, TensorDictBase):
                 action = action["action"]
-            action = action.clamp(-10, 10)
             self.action_buf[:, :, 1:] = self.action_buf[:, :, :-1]
             self.action_buf[:, :, 0] = action
         # if delay = 1

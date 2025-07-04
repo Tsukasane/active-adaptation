@@ -636,6 +636,25 @@ G1_29DOF_CFG = ArticulationCfg( # no wrist pitch and yaw
     })
 )
 
+G1_GMT_29DOF_CFG = copy.deepcopy(G1_29DOF_CFG)
+G1_GMT_29DOF_CFG.actuators["base_legs"].stiffness = {
+    ".*_hip_.*_joint": 100.0,
+    ".*_knee_joint": 150.0,
+    ".*_ankle_.*_joint": 40.0,
+    "waist_.*_joint": 150.0,
+    ".*_shoulder_.*_joint": 40.0,
+    ".*_elbow_joint": 40.0,
+    ".*_wrist_.*_joint": 4.0,
+}
+G1_GMT_29DOF_CFG.actuators["base_legs"].damping = {
+    ".*_hip_.*_joint": 2.0,
+    ".*_knee_joint": 4.0,
+    ".*_ankle_.*_joint": 2.0,
+    "waist_.*_joint": 4.0,
+    ".*_shoulder_.*_joint": 5.0,
+    ".*_elbow_joint": 5.0,
+    ".*_wrist_.*_joint": 0.5,
+}
 
 H2_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
