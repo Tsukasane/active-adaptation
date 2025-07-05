@@ -879,7 +879,7 @@ class contact_forces(Observation):
     def compute(self) -> torch.Tensor:
         contact_forces = self.contact_sensor.data.net_forces_w_history.mean(1)
         force = contact_forces[:, self.body_ids] / self.denom
-        return force.view(self.num_envs, -1)
+        return force.view(self.num_envs, -1).clamp(min=0., max=10.)
 
 
 class body_materials(Observation):

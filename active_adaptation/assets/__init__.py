@@ -15,16 +15,12 @@ ROBOTS = {
     "go2": UNITREE_GO2_CFG,
     "aliengo": UNITREE_ALIENGO_CFG,
     "h1": H1_CFG,
-    "cy1": CY1_CFG,
     "a1-arm": A1_CFG,
     "sirius_wheel": SIRIUS_WHEEL_CFG,
-    "g1_27dof": G1_27DOF_CFG,
-    "g1_23dof": G1_23DOF_CFG,
-    "h2": H2_CFG,
     "b1z1": UNITREE_B1Z1_CFG,
-    "g1_waist_unlocked": G1_WAIST_UNLOCKED_CFG,
-    "gr1": GR1_CFG,
     "g1_29dof": G1_29DOF_CFG,
+    "g1_GMT": G1_GMT_29DOF_CFG,
+    "g1_HV": G1_HV_29DOF_CFG,
 }
 
 OBJECTS = {

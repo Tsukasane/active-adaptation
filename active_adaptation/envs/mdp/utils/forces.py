@@ -56,10 +56,11 @@ class ConstantForce(TensorClass):
         size: int,
         force_scales: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         force_offsets: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        duration_range: Tuple[float, float] = (1.0, 4.0),
         device: str = "cpu",
     ):
         duration = torch.zeros(size, 1, device=device)
-        duration.uniform_(1.0, 4.0)
+        duration.uniform_(*duration_range)
         offset = torch.rand(size, 3, device=device) * 2. - 1.
         offset *= torch.as_tensor(force_offsets, device=device)
         force = torch.rand(size, 3, device=device) * 2. - 1.

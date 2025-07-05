@@ -57,7 +57,7 @@ class PPOConfig:
     _target_: str = "active_adaptation.learning.ppo.ppo_roa.PPOROA"
     name: str = "ppo_roa"
     train_every: int = 32
-    ppo_epochs: int = 5
+    ppo_epochs: int = 3
     num_minibatches: int = 4
     lr: float = 5e-4
     clip_param: float = 0.2
@@ -81,7 +81,9 @@ class PPOConfig:
     priv_feature_dim: int = 128 # 128
 
     grad_pen: bool = False
+    max_grad_norm: float = 1.0
 
+    clip_adv: float | None = None
     symaug: bool = False
     phase: str = "train"
     short_history: int = 0
@@ -250,7 +252,6 @@ class PPOROA(TensorDictModuleBase):
         assert self.cfg.phase in ["train", "adapt", "finetune"]
 
         self.entropy_coef = self.cfg.get("entropy_coef_start", 0.001)
-        self.max_grad_norm = 1.0
         self.clip_param = self.cfg.clip_param
         self.critic_loss_fn = nn.MSELoss(reduction="none")
         self.adapt_loss_fn = nn.MSELoss(reduction="none")
@@ -258,6 +259,7 @@ class PPOROA(TensorDictModuleBase):
         self.action_dim = action_spec.shape[-1]
         self.gae = GAE(0.99, 0.95)
         self.reg_lambda = 0.0
+        self.joint_names = env.action_manager.joint_names
         
         self.value_norm = ValueNormFake(input_shape=1).to(self.device)
 
@@ -441,12 +443,20 @@ class PPOROA(TensorDictModuleBase):
             info.update(self.train_policy(tensordict.copy()))
             info.update(self.train_adapt(tensordict.copy()))
         self.num_updates += 1
+
+        if self.cfg.phase == "train":
+            actor = self.actor
+        else:
+            actor = self.actor_adapt
+        action_std = actor.module[0][2].module.actor_std.detach().cpu().numpy()
+        for joint_name, std in zip(self.joint_names, action_std):
+            info[f"actor_std/{joint_name}"] = std
+        info["actor_std/mean"] = action_std.mean()
         return info
     
     def train_policy(self, tensordict: TensorDict):    
         infos = []
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
-        tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
         reward_sum = tensordict[REWARD_KEY].sum(-1)
 
         # tensordict = tensordict.select(*self.train_in_keys)
@@ -520,11 +530,22 @@ class PPOROA(TensorDictModuleBase):
         next_values = self.value_norm.denormalize(next_values)
 
         adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
+
+        adv_mean = adv.mean()
+        adv_std = adv.std().clamp(1e-7)
+        adv_norm = (adv - adv_mean) / adv_std
+        if self.cfg.clip_adv is not None:
+            adv_clipped = adv_norm.clip(-self.cfg.clip_adv, self.cfg.clip_adv)
+        else:
+            adv_clipped = adv_norm
+        ret = values + (adv_clipped * adv_std + adv_mean)
+
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
 
-        tensordict.set(adv_key, adv)
+        tensordict["adv_before_clip"] = adv_norm
+        tensordict.set(adv_key, adv_clipped)
         tensordict.set(ret_key, ret)
         return tensordict
 
@@ -549,8 +570,8 @@ class PPOROA(TensorDictModuleBase):
         if self.cfg.desired_kl != None and self.cfg.schedule == 'adaptive':
             with torch.inference_mode():
                 sample_log_prob = tensordict["sample_log_prob"]
-                ratio = log_probs - sample_log_prob
-                approx_kl = (ratio.exp() - 1 - ratio).abs().mean()
+                log_ratio = log_probs - sample_log_prob
+                approx_kl = (log_ratio.exp() - 1 - log_ratio).abs().mean()
 
                 if approx_kl > self.cfg.desired_kl * 2.0:
                     self.lr = max(1e-5, self.lr / 1.5)
@@ -586,18 +607,30 @@ class PPOROA(TensorDictModuleBase):
             reg_loss = 0.
         
         loss = policy_loss + entropy_loss + value_loss + reg_loss + 0.002 * gradient_penalty
+        # approx_kl = (ratio - 1 - log_ratio).mean()
+        # loss += 0.002 * approx_kl
         
         opt.zero_grad()
         loss.backward()
-        actor_grad_norm = nn.utils.clip_grad_norm_(policy_inference.actor.parameters(), self.max_grad_norm)
-        critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+        actor_grad_norm = nn.utils.clip_grad_norm_(policy_inference.actor.parameters(), self.cfg.max_grad_norm)
+        critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.cfg.max_grad_norm)
         if self.cfg.phase == "train":
-            nn.utils.clip_grad_norm_(policy_inference.encoder.parameters(), self.max_grad_norm)
+            priv_grad_norm = nn.utils.clip_grad_norm_(policy_inference.encoder.parameters(), self.cfg.max_grad_norm)
+        else:
+            priv_grad_norm = 0.
         opt.step()
         
         with torch.no_grad():
             explained_var = 1 - value_loss / b_returns[~tensordict["is_init"]].var()
             clipfrac = ((ratio - 1).abs() > self.clip_param).float().mean()
+            adv_before_clip = tensordict["adv_before_clip"]
+            if self.cfg.clip_adv is not None:
+                adv_clip_ratio = (adv_before_clip.abs() > self.cfg.clip_adv).float().mean()
+            else:
+                adv_clip_ratio = 0.
+            adv_max = adv_before_clip.max()
+            adv_min = adv_before_clip.min()
+            adv_mean = adv_before_clip.mean()
             if self.symaug:
                 symmetry_loss = F.mse_loss(
                     tensordict["loc"][bsize:], 
@@ -608,6 +641,7 @@ class PPOROA(TensorDictModuleBase):
             "actor/entropy": entropy.detach(),
             "actor/mean_std": tensordict["scale"].detach().mean(),
             "actor/grad_norm": actor_grad_norm,
+            "actor/priv_grad_norm": priv_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
             "actor/gradient_penalty": gradient_penalty.detach(),
             "actor/clamp_ratio": clipfrac.detach(),
@@ -616,6 +650,10 @@ class PPOROA(TensorDictModuleBase):
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
             "opt/lr": self.lr,
+            "opt/max_adv": adv_max,
+            "opt/min_adv": adv_min,
+            "opt/mean_adv": adv_mean,
+            "opt/adv_clip_ratio": adv_clip_ratio,
         }
         if self.symaug:
             info["actor/symmetry_loss"] = symmetry_loss.detach()

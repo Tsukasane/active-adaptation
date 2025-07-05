@@ -208,6 +208,8 @@ class MotionTrackingCommand(Command):
     
     @property
     def finished(self):
+        # if not self.env.training:
+        #     return torch.ones(self.num_envs, 1, dtype=bool, device=self.device)
         return (self.t >= self.motion_len).unsqueeze(1)
     
     TrackObservation = BaseObservation["MotionTrackingCommand"]
@@ -580,6 +582,16 @@ class MotionTrackingCommand(Command):
         def compute(self):
             raise NotImplementedError
 
+    class keypoint_pos_tracking_l2(_tracking_keypoint):
+        def compute(self):
+            body_pos_asset = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
+            body_pos_motion = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
+            diff = body_pos_motion - body_pos_asset
+            # shape: [num_envs, num_tracking_bodies, 3]
+            error = (diff.norm(dim=-1) - self.tolerance).clamp(min=0.0, max=1.0)
+            # shape: [num_envs, num_tracking_bodies]
+            return -error.square().mean(dim=-1).unsqueeze(1)
+
     class keypoint_pos_tracking_product(_tracking_keypoint):
         def compute(self):
             body_pos_asset = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
@@ -673,6 +685,17 @@ class MotionTrackingCommand(Command):
             error = (error - self.tolerance).clamp_min(0.0)
             # shape: [num_envs, num_tracking_bodies]
             return torch.exp(- error.mean(dim=1) / self.sigma).unsqueeze(1)
+        
+    class keypoint_ori_tracking_l2(_tracking_keypoint):
+        def compute(self):
+            body_ori_asset = self.command_manager.asset.data.body_quat_w[:, self.body_indices_asset]
+            body_ori_motion = self.command_manager.ref_body_quat_w[:, self.body_indices_motion]
+            diff = quat_mul(quat_conjugate(body_ori_motion), body_ori_asset)
+            # shape: [num_envs, num_tracking_bodies, 4]
+            error = torch.norm(axis_angle_from_quat(diff), dim=-1)
+            error = (error - self.tolerance).clamp(min=0.0, max=1.0)
+            # shape: [num_envs, num_tracking_bodies]
+            return -error.square().mean(dim=-1).unsqueeze(1)
         
     class keypoint_ori_tracking_local_product(_tracking_keypoint):
         def compute(self):
@@ -903,28 +926,7 @@ class MotionTrackingCommand(Command):
                 self.body_indices_sensor.append(body_idx_sensor)
 
             self.motion_no_contact = torch.zeros((self.env.num_envs, len(body_names)), dtype=torch.bool, device=self.device)
-        
-            if self.env.backend != "isaac":
-                return
-
-            from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-            import isaaclab.sim as sim_utils
-            vis_markers_cfg = VisualizationMarkersCfg(
-                prim_path="/Visuals/MotionNoContact",
-                markers={
-                    "motion_no_contact": sim_utils.SphereCfg(
-                        radius=0.06,
-                        visual_material=sim_utils.PreviewSurfaceCfg(
-                            diffuse_color=(0.5, 0.0, 1.0),
-                            metallic=1.0,
-                            roughness=0.1,
-                        ),
-                    ),
-                },
-            )
-
-            self.vis_markers = VisualizationMarkers(vis_markers_cfg)
-            self.vis_markers_pos_w = torch.zeros((self.env.num_envs, len(body_names), 3), device=self.device)
+            self.contact_force_norm = torch.zeros((self.env.num_envs, len(body_names)), device=self.device)
         
         def update(self):
             # when feet vel in motion is large, feet should not be in contact
@@ -932,25 +934,13 @@ class MotionTrackingCommand(Command):
             feet_vel_motion_norm = feet_vel_motion[..., :2].norm(dim=-1)
             self.motion_no_contact[:] = feet_vel_motion_norm > self.motion_vel_thres
 
-        def compute(self):
-            # shape: [num_envs, num_feet]
             contact_forces = self.command_manager.contact_forces.data.net_forces_w[:, self.body_indices_sensor]
-            contact_force_norm = contact_forces.norm(dim=-1).clamp_max(50.0)
-            # shape: [num_envs, num_feet]
-            penalty = (contact_force_norm > 0.1) & self.motion_no_contact
+            self.contact_force_norm[:] = contact_forces.norm(dim=-1)
+
+        def compute(self):
+            penalty = (self.contact_force_norm > 0.1) & self.motion_no_contact
             self.env.discount[penalty.any(dim=1)] *= self.soft_discount
-            return -(penalty * contact_force_norm).mean(dim=1, keepdim=True)
-
-        def debug_draw(self):
-            if self.env.backend != "isaac":
-                return
-            # return
-
-            self.vis_markers_pos_w.fill_(-100.0)
-            self.vis_markers_pos_w[self.motion_no_contact] = self.command_manager.ref_body_pos_w[:, self.body_indices_motion][self.motion_no_contact]
-            self.vis_markers.visualize(
-                translations=self.vis_markers_pos_w.view(-1, 3),
-            )
+            return -(penalty * self.contact_force_norm).mean(dim=1, keepdim=True)
 
     class feet_contact_when_motion_contact(TrackReward):
         def __init__(

@@ -924,7 +924,7 @@ class impulse(Randomization):
 
 
 class constant_force(Randomization):
-    def __init__(self, env, force_range, offset_range, body_names = None):
+    def __init__(self, env, force_range, offset_range, body_names = None, duration_range = (1.0, 4.0)):
         super().__init__(env)
         self.asset: Articulation = self.env.scene["robot"]
         if body_names is None:
@@ -941,9 +941,12 @@ class constant_force(Randomization):
 
         self.force_range = torch.tensor(force_range, device=self.device)
         self.offset_range = torch.tensor(offset_range, device=self.device)
-        
+        self.duration_range = torch.tensor(duration_range, device=self.device)
+
+        self.arange = torch.arange(self.num_envs, device=self.device)
+
     def step(self, substep):
-        arange = torch.arange(self.num_envs, device=self.device)
+        arange = self.arange
         quat = self.asset.data.body_quat_w[arange, self.body_id]
         forces_b = quat_rotate_inverse(
             quat.reshape(self.num_envs, 4),
@@ -960,7 +963,7 @@ class constant_force(Randomization):
         resample = (self.env.episode_length_buf % self.resample_interval == 0)
         expired = self.force.time > self.force.duration
         resample = resample & expired.squeeze(-1) & (torch.rand(self.num_envs, device=self.device) < self.resample_prob)
-        force = ConstantForce.sample(self.num_envs, self.force_range, self.offset_range, self.device)
+        force = ConstantForce.sample(self.num_envs, self.force_range, self.offset_range, self.duration_range, self.device)
         self.force.time.add_(self.env.step_dt)
         self.force = force.where(resample, self.force)
         body_id = self.all_body_ids[torch.randint(0, len(self.all_body_ids), (self.num_envs,), device=self.device)]
