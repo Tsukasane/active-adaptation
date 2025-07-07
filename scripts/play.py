@@ -108,6 +108,9 @@ def main(cfg):
         from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
         command: MotionTrackingCommand = env.command_manager
         policy_config["motion_duration_second"] = command.dataset.lengths[0].item() * env.step_dt
+        policy_config["future_steps"] = command.future_steps.tolist()
+        policy_config["tracking_keypoint_names"] = command.tracking_keypoint_names
+        policy_config["tracking_joint_names"] = command.tracking_joint_names
 
         import yaml
         with open(path.replace(".pt", ".yaml"), "w") as f:

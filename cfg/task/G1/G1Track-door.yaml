@@ -3,8 +3,9 @@ name: G1TrackDoor
 
 viewer:
   resolution: [1280, 720]
-  lookat: [0., 0., 0.]
-  eye: [5.0, 2.0, 2.0]
+  lookat: [0., 0., -1.0]
+  eye: [7.0, 7.0, 3.0]
+  env_spacing: 4.0
 
 terrain: plane
 
@@ -18,7 +19,7 @@ sim:
   mujoco_physics_dt: 0.002
 
 robot: 
-  name: g1_29dof
+  name: g1_HV
   # robot_type: g1_29dof_rev_1_0
   robot_type: g1_29dof_nohand
 
@@ -33,99 +34,139 @@ action:
     .*ankle.*: 0.25
     .*shoulder.*: 0.25
     .*elbow_joint: 0.25
-    # .*_wrist_.*_joint: 0.25
-  max_delay: 2
+  max_delay: 4
   alpha: [0.8, 1.0]
 
 command:
   _target_: active_adaptation.envs.mdp.commands.motion_tracking.MotionTrackingDoor
   data_path: data/motion/push_door/push_door-3steps-no_door_amass-processed
 
+  pose_range:
+    x: [0.0, 0.2]
+    y: [-0.3, 0.1]
+    z: [-0.01, 0.01]
+    roll: [-0.05, 0.05]
+    pitch: [-0.05, 0.05]
+    yaw: [-0.3, 0.3]
+  
   reset_range: [0, 301]
+
+  door_reset_offset: [0.1, 0.0, 0.0]
 
   lift_height: 0.05
 
-  future_steps: [1, 2, 8, 16, 24, 32]
+  future_steps: [1, 2, 8, 16, 32]
 
 object_names: ["door"]
 
 observation:
   command:
-    ref_motion_phase: {}
+    ref_joint_pos_future: {}
+    ref_body_pos_future_local: {}
+    ref_body_ori_future_local: {}
   policy:
-    root_ang_vel_history:      {history_steps: [0, 1, 2, 3], noise_std: 0.05}
-    projected_gravity_history: {history_steps: [0, 1, 2, 3, 4, 8, 16, 32], noise_std: 0.01}
-    joint_pos_history:         {history_steps: [0, 1, 2, 3, 4, 8, 16, 32], noise_std: 0.01}
+    root_ang_vel_history:      {history_steps: [0], noise_std: 0.05}
+    projected_gravity_history: {history_steps: [0], noise_std: 0.05}
+    joint_pos_history:         {history_steps: [0, 1, 2, 3, 4, 8], noise_std: 0.01}
     prev_actions:              {steps: 3}
     door_pos_b:                {noise_std: 0.1}
     root_yaw:                  {noise_std: 0.0}
   priv:
-    ref_joint_pos_future: {}
-    ref_joint_vel_future: {}
-
     ref_root_pos_future_b: {}
     ref_root_ori_future_b: {}
 
-    ref_body_pos_future_b: {}
-    ref_body_ori_future_b: {}
-
     # for better reward estimation
-    diff_body_pos_future_b: {}
-    diff_body_ori_future_b: {}
-    diff_body_lin_vel_future_b: {}
+    diff_body_pos_future_local: {}
+    diff_body_ori_future_local: {}
+    diff_body_lin_vel_future_local: {}
 
     root_linvel_b:    {}
-    body_pos_b:       {body_names: .*ankle_roll_link}
-    body_vel_b:       {body_names: .*ankle_roll_link}
-    body_height:      {body_names: .*ankle_roll_link}
+    body_pos_b:       {body_names: ".*ankle_roll_link"}
+    body_vel_b:       {body_names: ".*ankle_roll_link"}
+    body_height:      {body_names: [".*ankle_roll_link", "pelvis", "torso_link"]}
+    contact_forces:   {body_names: [".*ankle_roll_link"]}
 
     applied_action:   {}
     applied_torque:   {}
+    external_forces_b:   {body_names: .*}
 
     door_joint_pos: {}
     door_joint_vel: {}
     door_joint_torque: {}
     ref_door_joint_pos_future: {}
-  # joint_state_:
-  #   joint_pos_multistep: {steps: 1, noise_std: 0.0}
-  #   joint_vel_multistep: {steps: 1, noise_std: 0.0}
 
 reward:
   tracking:
-    keypoint_pos_tracking_product:     {weight: 1.0, sigma: 0.2, body_names: [".*_knee_link", ".*_ankle_roll_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 0.2}}
-    keypoint_ori_tracking_product:     {weight: 1.0, sigma: 0.4, body_names: [".*_knee_link", ".*_elbow_link", ".*_wrist_yaw_link"]}
-    keypoint_lin_vel_tracking_product: {weight: 1.0, sigma: 1.0, body_names: [".*_knee_link", ".*_ankle_roll_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 1.0}}
-    keypoint_ang_vel_tracking_product: {weight: 1.0, sigma: 2.0, body_names: [".*_knee_link", ".*_elbow_link", ".*_wrist_yaw_link"]}
-  tracking_root:
-    keypoint_pos_tracking_product:     {weight: 0.5, sigma: 0.3, body_names: "pelvis", tolerance: 0.2}
-    keypoint_ori_tracking_product:     {weight: 0.5, sigma: 0.4, body_names: "pelvis", tolerance: 0.4}
-  tracking_ee:
-    keypoint_pos_tracking_product:     {weight: 1.0, sigma: 0.1, body_names: [".*_ankle_roll_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 0.05}}
-    keypoint_ori_tracking_product:     {weight: 1.0, sigma: 0.2, body_names: [".*_wrist_yaw_link"]}
-  tracking_joints:
-    joint_pos_tracking_product: {weight: 0.5, sigma: 0.4, joint_names: [".*_hip_.*_joint", ".*_knee_joint", "waist_.*_joint", ".*_shoulder_.*_joint", ".*_elbow_joint"], tolerance: {".*_hip_.*_joint": 0.5}}
-    joint_vel_tracking_product: {weight: 0.5, sigma: 2.0, joint_names: [".*_hip_.*_joint", ".*_knee_joint", "waist_.*_joint", ".*_shoulder_.*_joint", ".*_elbow_joint"], tolerance: {".*_hip_.*_joint": 0.5}}
-  tracking_door:
-    door_joint_pos_tracking:           {weight: 1.0, sigma: 0.25}
-    eef_door_contact_force:            {weight: 1.0, force_thres: 20.0, force_sigma: 10.0}
-    eef_door_contact_slippage:         {weight: 1.0, slippage_thres: 0.01, slippage_sigma: 0.1}
+
+    tracking_ee_pos(keypoint_pos_tracking_local_product):
+      body_names: [".*_ankle_roll_link", ".*knee_link", ".*_wrist_yaw_link", ".*_elbow_link"]
+      weight: 1.0
+      sigma: 0.1
+      tolerance:
+        .*_ankle_roll_link: 0.05
+        left_wrist_yaw_link: 0.2
+        left_elbow_link: 0.2
+    tracking_ee_ori(keypoint_ori_tracking_local_product):
+      body_names: [".*knee_link", ".*_wrist_yaw_link", ".*_elbow_link"]
+      weight: 1.0
+      sigma: 0.5
+
+    tracking_root_pos(keypoint_pos_tracking_local_product):
+      body_names: ["pelvis"]
+      weight: 0.5
+      sigma: 0.5
+    tracking_root_ori(keypoint_ori_tracking_product):
+      body_names: ["pelvis"]
+      weight: 0.5
+      sigma: 1.0
+    tracking_root_linvel(keypoint_lin_vel_tracking_local_product):
+      body_names: ["pelvis"]
+      weight: 0.1
+      sigma: 1.0
+
+    joint_pos_tracking_product:
+      weight: 0.5
+      sigma: 0.5
+      tolerance:
+        waist_.*_joint: 0.1
+
+    joint_vel_tracking_product:
+      weight: 0.5
+      sigma: 4.0
+ 
+  push_door:
+    # door_joint_pos_tracking:           {weight: 0.2, sigma: 1.0}
+    eef_door_contact_pos:              {weight: 5.0, pos_tolerance: 0.0, pos_sigma: 0.5, eef_target_pos_offset: [0.0, -0.7, 1.0]}
+    eef_door_contact_force:            {weight: 5.0, force_thres: 20.0, force_sigma: 40.0}
+    eef_door_contact_slippage:         {weight: 5.0, slippage_thres: 0.01, slippage_sigma: 0.05}
+
+    root_vel_pass_door:                {weight: 1.0, max_vel: 0.5}
+    root_pos_pass_door:                {weight: 1.0, max_pos_x: 0.5, pos_sigma: 1.0}
+    # root_pos_pass_door_l1:             {weight: 0.2, max_pos_x: 0.5}
+
+    # regularization
     undesired_contact_force_xy:        {weight: 1.0, body_names: "^(?!.*(right_wrist_.*_link|right_elbow_link)).*$", thres: 0.01}
+    eef_impact_force(impact_force_l2):    {weight: 5.0, enabled: true, body_names: "right_wrist_.*_link|right_elbow_link"}
+    door_joint_vel_l2:                    {weight: 1.0, enabled: true, joint_names: "door_joint", tolerance: 1.0}
   loco:
     action_rate_l2:     {weight: 0.01, enabled: true}
-    joint_vel_l2:       {weight: 1.0e-3, enabled: true, joint_names: .*}
+    joint_vel_l2:       {weight: 2.0e-3, enabled: true, joint_names: .*}
     joint_pos_limits:   {weight: 20.0, enabled: true, soft_factor: 0.9, joint_names: [".*_ankle_.*_joint", ".*_knee_joint", "waist_.*_joint"]}
-    joint_torque_limits: {weight: 2.0e-3, enabled: true, soft_factor: 0.3}
-    angvel_xy_l2:       {weight: 0.05, enabled: true, body_names: ["pelvis", "torso_link"]}
+    joint_torque_limits: {weight: 1.0e-2, enabled: true, soft_factor: 0.9}
+    # angvel_xy_l2:       {weight: 0.01, enabled: true, body_names: ["pelvis", "torso_link"]}
     survival:           {weight: 1.0, enabled: true}
   feet:
-    feet_no_contact_when_motion_vel:  {weight: 5.0, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.4, soft_discount: 1.0}
-    feet_no_contact_force_when_motion_vel: {weight: 0.1, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.4}
-    feet_contact_when_motion_contact: {weight: 5.0, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.2, motion_height_thres: 0.05}
+    feet_no_contact_when_motion_vel:  {weight: 5.0, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.8, soft_discount: 1.0}
+    # feet_no_contact_force_when_motion_vel: {weight: 0.1, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.4}
+    feet_contact_when_motion_contact: {weight: 5.0, enabled: true, body_names: .*ankle_roll_link, motion_vel_thres: 0.4, motion_height_thres: 0.05}
+    feet_close_xy: {weight: 20.0, enabled: true, body_names: .*ankle_roll_link, thres: 0.1}
 
-    impact_force_l2:    {weight: 0.5, enabled: true, body_names: .*ankle_roll_link}
-    feet_slip:          {weight: 0.2, tolerance: 0.05, enabled: true, body_names: .*ankle_roll_link}
-    feet_slip_angvel:   {weight: 0.2, tolerance: 0.05, enabled: true, body_names: .*ankle_roll_link}
-    feet_swing_height:  {weight: 1.0, enabled: true, body_names: .*ankle_roll_link, target_height: 0.1}
+    # impact_force_l2:    {weight: 5.0, enabled: true, body_names: .*ankle_roll_link}
+    feet_slip:          {weight: 5.0, tolerance: 0.05, enabled: true, body_names: .*ankle_roll_link}
+    feet_air_time:      {weight: 5.0, enabled: true, body_names: .*ankle_roll_link, thres: 0.5, soft_discount: 1.0}
+    feet_upright_when_contact: {weight: 1.0, enabled: true, body_names: .*ankle_roll_link, xy_sigma: 0.1}
+    # feet_slip_angvel:   {weight: 0.2, tolerance: 0.05, enabled: true, body_names: .*ankle_roll_link}
+    # feet_swing_height:  {weight: 1.0, enabled: false, body_names: .*ankle_roll_link, target_height: 0.1}
   debug:
     impact_force_l2:    {weight: 0.1, enabled: false, body_names: .*ankle_roll_link}
     feet_slip:          {weight: 0.1, tolerance: 0.05, enabled: false, body_names: .*ankle_roll_link}
@@ -136,17 +177,20 @@ reward:
     feet_air_time:      {weight: 5.0, enabled: false, body_names: .*ankle_roll_link, thres: 0.2, soft_discount: 1.0}
     feet_contact_count: {weight: 1.0, enabled: false, body_names: .*ankle_roll_link}
 
+    eef_impact_force(impact_force_l2):    {weight: 1.0, enabled: false, body_names: "right_wrist_.*_link|right_elbow_link"}
+
 randomization:
-  # perturb_body_mass:
-  #   .*: [0.8, 1.2]
+  perturb_body_mass:
+    .*: [0.8, 1.2]
   perturb_body_materials:
     body_names: ".*ankle_roll_link"
-    static_friction_range: [0.1, 2.0]
-    dynamic_friction_range: [0.1, 2.0]
+    static_friction_range: [0.1, 1.0]
+    dynamic_friction_range: [0.1, 1.0]
     restitution_range: [0.0, 0.2]
-  # perturb_body_com:
-  #   body_names: ["pelvis", "torso_link"]
-  #   com_range: [-0.05, 0.05]
+  perturb_body_com:
+    body_names: ["pelvis", "torso_link"]
+    com_range: [-0.05, 0.05]
+
   # motor_params_implicit:
   #   stiffness_range:
   #     .*: [0.9, 1.1]
@@ -158,19 +202,20 @@ randomization:
   random_joint_offset: 
     .*: [-0.05, 0.05]
 
-  impulse:
-    impulse_scale: [5., 5., 1.]
-    duration_range: [0.1, 0.5]
-    impulse_prob: 0.005
+  # impulse:
+  #   impulse_scale: [10., 10., 1.]
+  #   duration_range: [0.1, 0.5]
+  #   impulse_prob: 0.001
 
   constant_force:
-    body_names: ["pelvis", "torso_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"]
-    force_range: [5, 5, 1]
+    body_names: ["pelvis", ".*_knee_link", "torso_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"]
+    force_range: [10, 10, 5]
     offset_range: [0.2, 0.2, 0.2]
+    duration_range: [1.0, 2.0]
 
   door_joint_randomization:
-    friction_range: [2.0, 5.0]
-    damping_range: [1.0, 2.0]
+    friction_range: [5.0, 10.0]
+    damping_range: [2.0, 4.0]
     armature_range: [0.0, 0.01]
 
   door_body_randomization:
@@ -178,8 +223,8 @@ randomization:
     static_friction_range: [0.1, 0.5]
     dynamic_friction_range: [0.1, 0.5]
     restitution_range: [0.0, 0.2]
-    mass_range: [20.0, 30.0]
+    mass_range: [5.0, 10.0]
   
 termination:
-  cum_body_pos_error: {body_names: ".*", min_steps: 25, threshold: 0.5}
-  cum_joint_pos_error: {joint_names: "^(?!.*ankle_.*_joint).*$", min_steps: 25, threshold: 1.0}
+  cum_body_pos_error_local: {body_names: ".*", min_steps: 25, threshold: 0.5}
+  cum_joint_pos_error: {joint_names: "^(?!.*(ankle|hip)_.*_joint).*$", min_steps: 25, threshold: 1.0}

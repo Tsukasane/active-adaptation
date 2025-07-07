@@ -16,7 +16,11 @@ class SimpleEnv(_Env):
             from isaaclab.envs.ui import BaseEnvWindow, ViewportCameraController
             from isaaclab.envs import ViewerCfg
             # hacks to make IsaacLab happy. we don't use them.
-            self.cfg.viewer.env_index = 0
+            self.lookat_env_i = (
+                self.scene._default_env_origins.cpu() 
+                - torch.tensor(self.cfg.viewer.lookat)
+            ).norm(dim=-1).argmin().item()
+            self.cfg.viewer.env_index = self.lookat_env_i
             self.manager_visualizers = {}
             self.window = BaseEnvWindow(self, window_name="IsaacLab")
             self.viewport_camera_controller = ViewportCameraController(
@@ -39,7 +43,8 @@ class SimpleEnv(_Env):
             from active_adaptation.assets import ROBOTS, OBJECTS, get_asset_meta
             from active_adaptation.envs.terrain import TERRAINS
             
-            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=2.0)
+            env_spacing = self.cfg.viewer.get("env_spacing", 2.0)
+            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=env_spacing)
             scene_cfg.sky_light = AssetBaseCfg(
                 prim_path="/World/skyLight",
                 spawn=sim_utils.DomeLightCfg(
@@ -140,10 +145,10 @@ class SimpleEnv(_Env):
         self.stats[env_ids] = 0.
 
     def render(self, mode: str="human"):
-        # look_at_env_id = self.lookat_env_i
-        # self.sim.set_camera_view(
-        #     eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
-        #     target=self.robot.data.root_pos_w[look_at_env_id].cpu()
-        # )
+        look_at_env_id = self.lookat_env_i
+        self.sim.set_camera_view(
+            eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
+            target=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.lookat)
+        )
         return super().render(mode)
 

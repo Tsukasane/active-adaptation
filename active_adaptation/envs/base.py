@@ -307,9 +307,8 @@ class _Env(EnvBase):
     def stats_ema(self):
         result = {}
         for group_key, group in self._stats_ema.items():
-            result[group_key] = {}
             for rew_key, (sum, cnt) in group.items():
-                result[group_key][rew_key] = (sum / cnt).item()
+                result[f"reward.{group_key}/{rew_key}"] = (sum / cnt).item()
         result["performance/reset_time"] = self.reset_time / self.ema_cnt
         result["performance/observation_time"] = self.observation_time / self.ema_cnt
         result["performance/reward_time"] = self.reward_time / self.ema_cnt

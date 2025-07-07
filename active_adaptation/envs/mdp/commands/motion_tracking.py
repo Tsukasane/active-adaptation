@@ -1196,6 +1196,18 @@ class MotionTrackingCommand(Command):
                 self.error = torch.zeros(self.num_envs)
                 self.__exceeded = torch.zeros(self.num_envs, dtype=bool)
                 self.__cum_steps = torch.zeros(self.num_envs, dtype=torch.int32)
+            
+            self._register_obs_cls()
+        
+        def _register_obs_cls(self):
+            cls = type(
+                self.__class__.__name__,
+                (BaseObservation,),
+                {
+                    'compute': lambda self: self.error.unsqueeze(-1)
+                }
+            )
+            print("registering", self.__class__.__name__, cls.__name__)
 
         def update(self):
             self.__exceeded = self.error >= self.threshold
@@ -1375,6 +1387,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
         self,
         contact_eef_name: str="right_wrist_yaw_link",
         reset_range: Tuple[int, int]=(0, 200),
+        door_reset_offset: Tuple[float, float, float]=(0.0, 0.0, 0.0),
         **kwargs
     ):
         super().__init__(**kwargs, call_update=False)
@@ -1391,6 +1404,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
         self.door_joint_id_asset = self.door.joint_names.index(door_joint_name)
         self.door_body_id_asset = self.door.body_names.index(door_body_name)
 
+        self.door_reset_offset = torch.tensor(door_reset_offset, device=self.device)
         self.reset_range = reset_range
 
         self.eef_idx_sensor = self.contact_forces.body_names.index(contact_eef_name)
@@ -1410,7 +1424,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
         super().sample_init(env_ids)
 
         motion: MotionData = self._motion_reset
-        init_door_pos = motion.body_pos_w[:, self.wall_body_id_motion]
+        init_door_pos = motion.body_pos_w[:, self.wall_body_id_motion] + self.door_reset_offset
         init_door_pos[:, 2].fill_(0.0)
         init_door_quat = motion.body_quat_w[:, self.wall_body_id_motion]
 
@@ -1491,8 +1505,68 @@ class MotionTrackingDoor(MotionTrackingCommand):
         def compute(self):
             door_joint_pos = self.command_manager.asset.data.joint_pos[:, self.command_manager.door_joint_id_asset]
             ref_door_joint_pos = self.command_manager.ref_door_joint_pos
-            error = (door_joint_pos - ref_door_joint_pos).square()
+            error = (door_joint_pos - ref_door_joint_pos).abs()
             return torch.exp(- error / self.sigma).unsqueeze(-1)
+        
+    class eef_door_contact_pos(TrackDoorReward):
+        def __init__(self, pos_tolerance: float=0.2, pos_sigma: float=0.2, eef_target_pos_offset: Tuple[float, float, float]=(0.0, -0.6, 1.5), **kwargs):
+            super().__init__(**kwargs)
+            self.pos_tolerance = pos_tolerance
+            self.pos_sigma = pos_sigma
+
+            self.eef_idx_sensor = self.command_manager.eef_idx_sensor
+            self.eef_idx_asset = self.command_manager.eef_idx_asset
+            self.door_body_id_asset = self.command_manager.door_body_id_asset
+
+            self.eef_target_pos_offset = torch.tensor(eef_target_pos_offset, device=self.device).unsqueeze(0)
+
+            self.eef_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+            self.eef_target_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+            self.eef_in_contact = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+
+            if not self.env.backend == "isaac":
+                return
+            
+            # init debug draw
+            from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+            from isaaclab.sim import SphereCfg, PreviewSurfaceCfg
+            vis_markers_cfg = VisualizationMarkersCfg(
+                prim_path="/Visuals/EefDoorContactPos",
+                markers={
+                    "eef_target": SphereCfg(radius=0.04, visual_material=PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0))),
+                    "eef_pos": SphereCfg(radius=0.04, visual_material=PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0))),
+                },
+            )
+            self.vis_markers = VisualizationMarkers(vis_markers_cfg)
+            self.marker_indices = [0] * self.num_envs + [1] * self.num_envs
+            self.all_marker_pos_w = torch.zeros(2, self.num_envs, 3, device=self.device)
+        
+        def update(self):
+            self.eef_pos_w[:] = self.command_manager.asset.data.body_link_pos_w[:, self.eef_idx_asset]
+            door_pos_w = self.command_manager.door.data.body_link_pos_w[:, self.door_body_id_asset]
+            door_quat_w = self.command_manager.door.data.body_link_quat_w[:, self.door_body_id_asset]
+            self.eef_target_pos_w[:] = door_pos_w + quat_apply(door_quat_w, self.eef_target_pos_offset)
+
+            contact_force = self.command_manager.contact_forces.data.net_forces_w[:, self.eef_idx_sensor]
+            self.eef_in_contact[:] = (contact_force.norm(dim=-1) > 1.0)
+
+        def compute(self):
+            pos_error = (self.eef_pos_w - self.eef_target_pos_w).norm(dim=-1)
+            pos_error = (pos_error - self.pos_tolerance).clamp_min(0.0)
+            rew = torch.exp(- pos_error / self.pos_sigma)
+            rew = (rew - 1.0) * self.eef_in_contact
+            return rew.float().unsqueeze(-1)
+        
+        def debug_draw(self):
+            if not self.env.backend == "isaac":
+                return
+            
+            self.all_marker_pos_w[0] = self.eef_target_pos_w
+            self.all_marker_pos_w[1] = self.eef_pos_w
+            self.vis_markers.visualize(
+                translations=self.all_marker_pos_w.reshape(-1, 3),
+                marker_indices=self.marker_indices,
+            )
     
     class eef_door_contact_force(TrackDoorReward):
         def __init__(self, force_thres: float=20.0, force_sigma: float=10.0, **kwargs):
@@ -1571,6 +1645,47 @@ class MotionTrackingDoor(MotionTrackingCommand):
             rew = (-self.root_vel_door[:, 0] / self.max_vel).clamp_max(1.0)
             return rew.float().unsqueeze(-1)
         
+    class root_pos_pass_door(TrackDoorReward):
+        def __init__(self, max_pos_x: float=0.5, pos_sigma: float=0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.max_pos_x = max_pos_x
+            self.pos_sigma = pos_sigma
+
+            self.root_pos_door = torch.zeros(self.num_envs, 3, device=self.device)
+        
+        def update(self):
+            root_pos_w = self.command_manager.asset.data.root_link_pos_w
+            door_pos_w = self.command_manager.door.data.root_link_pos_w
+            door_quat_w = self.command_manager.door.data.root_link_quat_w
+            root_pos_door = quat_rotate_inverse(door_quat_w, root_pos_w - door_pos_w)
+            self.root_pos_door[:] = root_pos_door
+        
+        def compute(self):
+            dist_x = (self.max_pos_x - (-self.root_pos_door[:, 0])).clamp_min(0.0)
+            dist_y = (self.root_pos_door[:, 1]).abs()
+            rew = torch.exp(- (dist_x + dist_y) / self.pos_sigma)
+            return rew.float().unsqueeze(-1)
+        
+    class root_pos_pass_door_l1(TrackDoorReward):
+        def __init__(self, max_pos_x: float=0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.max_pos_x = max_pos_x
+
+            self.root_pos_door = torch.zeros(self.num_envs, 3, device=self.device)
+        
+        def update(self):
+            root_pos_w = self.command_manager.asset.data.root_link_pos_w
+            door_pos_w = self.command_manager.door.data.root_link_pos_w
+            door_quat_w = self.command_manager.door.data.root_link_quat_w
+            root_pos_door = quat_rotate_inverse(door_quat_w, root_pos_w - door_pos_w)
+            self.root_pos_door[:] = root_pos_door
+        
+        def compute(self):
+            dist_x = (self.max_pos_x - (-self.root_pos_door[:, 0])).clamp_min(0.0)
+            dist_y = (self.root_pos_door[:, 1]).abs()
+            rew = - (dist_x + dist_y)
+            return rew.float().unsqueeze(-1)
+        
     class feet_contact_force_xy(TrackDoorReward):
         def __init__(self, thres: float=1.0, **kwargs):
             super().__init__(**kwargs)
@@ -1594,6 +1709,18 @@ class MotionTrackingDoor(MotionTrackingCommand):
             contact_forces = self.contact_forces.data.net_forces_w[:, self.feet_ids]
             contact_forces = (contact_forces[:, :, :2].norm(dim=-1) - self.thres).clamp_min(0.0)
             return - torch.log(contact_forces + 1.0).mean(1, True)
+    
+    class door_joint_vel_l2(TrackDoorReward):
+        def __init__(self, joint_names: str, tolerance: float=0.5, **kwargs):
+            super().__init__(**kwargs)
+            self.joint_names = joint_names
+            self.joint_ids = self.command_manager.door.find_joints(joint_names)[0]
+            self.tolerance = tolerance
+        
+        def compute(self):
+            door_joint_vel = self.command_manager.door.data.joint_vel[:, self.joint_ids]
+            door_joint_vel = (door_joint_vel.abs() - self.tolerance).clamp_min(0.0)
+            return - door_joint_vel.square().mean(1, True)
     
     TrackDoorRandomization = BaseRandomization["MotionTrackingDoor"]
     

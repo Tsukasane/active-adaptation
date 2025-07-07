@@ -42,7 +42,7 @@ command:
 
   lift_height: 0.05
 
-  future_steps: [1, 2, 8, 16, 24, 32]
+  future_steps: [1, 2, 8, 16, 32]
 
 observation:
   command:
@@ -60,9 +60,9 @@ observation:
     ref_root_ori_future_b: {}
 
     # for better reward estimation
-    diff_body_pos_future_b: {}
-    diff_body_ori_future_b: {}
-    diff_body_lin_vel_future_b: {}
+    diff_body_pos_future_local: {}
+    diff_body_ori_future_local: {}
+    diff_body_lin_vel_future_local: {}
 
     root_linvel_b:    {}
     body_pos_b:       {body_names: ".*ankle_roll_link"}
@@ -72,6 +72,7 @@ observation:
 
     applied_action:   {}
     applied_torque:   {}
+    external_forces_b:   {body_names: .*}
 
   # torque_:
   #   applied_torque: {}
@@ -106,50 +107,6 @@ reward:
     joint_vel_tracking_product:
       weight: 0.5
       sigma: 1.0
-
-
-  # tracking:
-  #   keypoint_pos_tracking_product:
-  #     weight: 1.0
-  #     sigma: 0.1
-  #     tolerance:
-  #       .*_ankle_roll_link: 0.2
-  #   keypoint_ori_tracking_product:
-  #     weight: 1.0
-  #     sigma: 0.5
-  #     tolerance:
-  #       .*_ankle_roll_link: 0.2
-  #   keypoint_lin_vel_tracking_product:
-  #     weight: 1.0
-  #     sigma: 1.0
-  #     tolerance:
-  #       .*_ankle_roll_link: 0.5
-  #   keypoint_ang_vel_tracking_product:
-  #     weight: 1.0
-  #     sigma: 2.0
-  #     tolerance:
-  #       .*_ankle_roll_link: 0.5
-  #   joint_pos_tracking_product:
-  #     weight: 0.5
-  #     sigma: 0.25
-  #   joint_vel_tracking_product:
-  #     weight: 0.5
-  #     sigma: 1.0
-
-  # tracking:
-  #   keypoint_pos_tracking_product:     {weight: 1.0, sigma: 0.2, body_names: [".*_knee_link", ".*_ankle_roll_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 0.2}}
-  #   keypoint_ori_tracking_product:     {weight: 1.0, sigma: 0.4, body_names: [".*_knee_link", ".*_elbow_link", ".*_wrist_yaw_link"]}
-  #   keypoint_lin_vel_tracking_product: {weight: 1.0, sigma: 1.0, body_names: [".*_knee_link", ".*_ankle_roll_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 1.0}}
-  #   keypoint_ang_vel_tracking_product: {weight: 1.0, sigma: 2.0, body_names: [".*_knee_link", ".*_elbow_link", ".*_wrist_yaw_link"]}
-  # tracking_root:
-  #   keypoint_pos_tracking_product:     {weight: 0.5, sigma: 0.3, body_names: "pelvis", tolerance: 0.2}
-  #   keypoint_ori_tracking_product:     {weight: 0.5, sigma: 0.4, body_names: "pelvis", tolerance: 0.4}
-  # tracking_ee:
-  #   keypoint_pos_tracking_product:     {weight: 1.0, sigma: 0.1, body_names: [".*_ankle_roll_link", ".*_wrist_yaw_link"], tolerance: {".*_ankle_roll_link": 0.05}}
-  #   keypoint_ori_tracking_product:     {weight: 1.0, sigma: 0.2, body_names: [".*_wrist_yaw_link"]}
-  # tracking_joints:
-  #   joint_pos_tracking_product: {weight: 0.5, sigma: 0.4, joint_names: [".*_hip_.*_joint", ".*_knee_joint", "waist_.*_joint", ".*_shoulder_.*_joint", ".*_elbow_joint"], tolerance: {".*_hip_.*_joint": 0.5}}
-  #   joint_vel_tracking_product: {weight: 0.5, sigma: 2.0, joint_names: [".*_hip_.*_joint", ".*_knee_joint", "waist_.*_joint", ".*_shoulder_.*_joint", ".*_elbow_joint"], tolerance: {".*_hip_.*_joint": 0.5}}
   loco:
     action_rate_l2:     {weight: 0.01, enabled: true}
     joint_vel_l2:       {weight: 2.0e-3, enabled: true, joint_names: .*}
@@ -179,16 +136,16 @@ reward:
     feet_contact_count: {weight: 1.0, enabled: false, body_names: .*ankle_roll_link}
 
 randomization:
-  # perturb_body_mass:
-  #   .*: [0.8, 1.2]
+  perturb_body_mass:
+    .*: [0.8, 1.2]
   perturb_body_materials:
     body_names: ".*ankle_roll_link"
-    static_friction_range: [0.1, 2.0]
-    dynamic_friction_range: [0.1, 2.0]
+    static_friction_range: [0.1, 1.0]
+    dynamic_friction_range: [0.1, 1.0]
     restitution_range: [0.0, 0.2]
-  # perturb_body_com:
-  #   body_names: ["pelvis", "torso_link"]
-  #   com_range: [-0.05, 0.05]
+  perturb_body_com:
+    body_names: ["pelvis", "torso_link"]
+    com_range: [-0.05, 0.05]
   # motor_params_implicit:
   #   stiffness_range:
   #     .*: [0.9, 1.1]
@@ -203,15 +160,15 @@ randomization:
   impulse:
     impulse_scale: [10., 10., 1.]
     duration_range: [0.1, 0.5]
-    impulse_prob: 0.005
+    impulse_prob: 0.001
 
   constant_force:
     body_names: ["pelvis", ".*_knee_link", "torso_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"]
     force_range: [10, 10, 5]
     offset_range: [0.2, 0.2, 0.2]
     duration_range: [1.0, 2.0]
-
+  
 termination:
   cum_body_pos_error: {body_names: ".*", min_steps: 25, threshold: 0.8}
   cum_body_pos_error_local: {body_names: ".*", min_steps: 25, threshold: 0.5}
-  cum_joint_pos_error: {joint_names: "^(?!.*(ankle|hip)_.*_joint).*$", min_steps: 25, threshold: 0.5}
+  cum_joint_pos_error: {joint_names: "^(?!.*(ankle|hip)_.*_joint).*$", min_steps: 25, threshold: 1.0}

@@ -39,7 +39,6 @@ action:
 command:
   _target_: active_adaptation.envs.mdp.commands.motion_tracking.MotionTrackingCommand
   data_path: data/motion/push_door/push_door-1steps-no_door_amass-refined-processed
-  # push_door-3steps-no_door_amass-processed
 
   pose_range:
     x: [-0.0, 0.0]
@@ -51,7 +50,7 @@ command:
 
   lift_height: 0.05
 
-  future_steps: [1, 2, 8, 16, 24, 32]
+  future_steps: [1, 2, 8, 16, 32]
 
 observation:
   command:
@@ -69,9 +68,9 @@ observation:
     ref_root_ori_future_b: {}
 
     # for better reward estimation
-    diff_body_pos_future_b: {}
-    diff_body_ori_future_b: {}
-    diff_body_lin_vel_future_b: {}
+    diff_body_pos_future_local: {}
+    diff_body_ori_future_local: {}
+    diff_body_lin_vel_future_local: {}
 
     root_linvel_b:    {}
     body_pos_b:       {body_names: ".*ankle_roll_link"}
@@ -81,6 +80,8 @@ observation:
 
     applied_action:   {}
     applied_torque:   {}
+    external_forces_b:   {body_names: .*}
+
 
   # torque_:
   #   applied_torque: {}
@@ -155,7 +156,7 @@ reward:
     action_rate_l2:     {weight: 0.01, enabled: true}
     joint_vel_l2:       {weight: 2.0e-3, enabled: true, joint_names: .*}
     joint_pos_limits:   {weight: 20.0, enabled: true, soft_factor: 0.9, joint_names: [".*_ankle_.*_joint", ".*_knee_joint", "waist_.*_joint"]}
-    joint_torque_limits: {weight: 2.0e-3, enabled: true, soft_factor: 0.3}
+    joint_torque_limits: {weight: 1.0e-2, enabled: true, soft_factor: 0.9}
     # angvel_xy_l2:       {weight: 0.01, enabled: true, body_names: ["pelvis", "torso_link"]}
     survival:           {weight: 1.0, enabled: true}
   feet:
@@ -180,16 +181,17 @@ reward:
     feet_contact_count: {weight: 1.0, enabled: false, body_names: .*ankle_roll_link}
 
 randomization:
-  # perturb_body_mass:
-  #   .*: [0.8, 1.2]
+  perturb_body_mass:
+    .*: [0.8, 1.2]
   perturb_body_materials:
     body_names: ".*ankle_roll_link"
-    static_friction_range: [0.1, 2.0]
-    dynamic_friction_range: [0.1, 2.0]
+    static_friction_range: [0.1, 1.0]
+    dynamic_friction_range: [0.1, 1.0]
     restitution_range: [0.0, 0.2]
-  # perturb_body_com:
-  #   body_names: ["pelvis", "torso_link"]
-  #   com_range: [-0.05, 0.05]
+  perturb_body_com:
+    body_names: ["pelvis", "torso_link"]
+    com_range: [-0.05, 0.05]
+
   # motor_params_implicit:
   #   stiffness_range:
   #     .*: [0.9, 1.1]
@@ -201,10 +203,10 @@ randomization:
   random_joint_offset: 
     .*: [-0.05, 0.05]
 
-  impulse:
-    impulse_scale: [10., 10., 1.]
-    duration_range: [0.1, 0.5]
-    impulse_prob: 0.005
+  # impulse:
+  #   impulse_scale: [10., 10., 1.]
+  #   duration_range: [0.1, 0.5]
+  #   impulse_prob: 0.001
 
   constant_force:
     body_names: ["pelvis", ".*_knee_link", "torso_link", ".*_shoulder_pitch_link", ".*_elbow_link", ".*_wrist_yaw_link"]
@@ -215,4 +217,4 @@ randomization:
 termination:
   cum_body_pos_error: {body_names: ".*", min_steps: 25, threshold: 0.8}
   cum_body_pos_error_local: {body_names: ".*", min_steps: 25, threshold: 0.5}
-  cum_joint_pos_error: {joint_names: "^(?!.*(ankle|hip)_.*_joint).*$", min_steps: 25, threshold: 0.5}
+  cum_joint_pos_error: {joint_names: "^(?!.*(ankle|hip)_.*_joint).*$", min_steps: 25, threshold: 1.0}

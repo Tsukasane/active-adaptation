@@ -725,6 +725,21 @@ class feet_upright_when_contact(Reward):
         rew = (torch.exp(-feet_projected_down_xy / self.xy_sigma) - 1.0) * in_contact
         return rew.float().mean(dim=1, keepdim=True)
 
+class feet_close_xy(Reward):
+    def __init__(self, env, body_names: str, thres: float=0.1, weight: float=1.0, enabled: bool=True):
+        super().__init__(env, weight, enabled)
+        self.threshold = thres
+        self.asset: Articulation = self.env.scene["robot"]
+        self.body_ids = self.asset.find_bodies(body_names)[0]
+        assert len(self.body_ids) == 2, "Only support two feet"
+
+    def compute(self):
+        feet_pos = self.asset.data.body_pos_w[:, self.body_ids]
+        distance_xy = (feet_pos[:, 0, :2] - feet_pos[:, 1, :2]).norm(dim=-1)
+        penalty = (distance_xy - self.threshold).clamp_max(0.0)
+        return penalty.unsqueeze(1)
+
+
 class feet_air_time_log(Reward):
     def __init__(
         self,

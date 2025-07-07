@@ -112,8 +112,13 @@ class _RegistryMixin:
             cls.registry = {}
             
         cls_name = cls.__name__
-        cls._file = inspect.getfile(cls)
-        cls._line = inspect.getsourcelines(cls)[1]
+        try:
+            cls._file = inspect.getfile(cls)
+            cls._line = inspect.getsourcelines(cls)[1]
+        except:
+            cls._file = "unknown"
+            cls._line = "unknown"
+        
         if cls_name.startswith("_"):
             return
         if cls_name not in cls.registry:
