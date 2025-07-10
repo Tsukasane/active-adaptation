@@ -29,10 +29,7 @@ from active_adaptation.utils.helpers import batchify
 quat_apply = batchify(quat_apply)
 
 def yaw_from_quat(quat: torch.Tensor) -> torch.Tensor:
-    qw = quat[:, 0]
-    qx = quat[:, 1]
-    qy = quat[:, 2]
-    qz = quat[:, 3]
+    qw, qx, qy, qz = torch.unbind(quat, dim=-1)
     yaw = torch.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
     return yaw
 
@@ -1900,16 +1897,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
 class MotionTrackingBox(MotionTrackingCommand):
     def __init__(
         self, 
-        # termination
-        cum_lost_contact_steps: int=1,
         contact_eef_name: str=".*_wrist_yaw_link",
-        contact_eef_pos_offset: List[Tuple[float, float, float]]=[(0.06, 0.0, 0.0), (0.06, 0.0, 0.0)], 
-        contact_eef_pos_thres: float=0.1,
-        contact_eef_ori_thres: float=0.5,
-        contact_eef_frc_thres: float=1.0,
-        cum_box_pos_error_scale: float=0.2,
-        cum_box_ori_error_scale: float=0.2,
-        # reset
         reset_range: Tuple[int, int]=(0, 100),
         box_reset_offset: Tuple[float, float, float]=(0.1, 0.0, 0.0),
         **kwargs
@@ -1923,39 +1911,40 @@ class MotionTrackingBox(MotionTrackingCommand):
         self.box_body_id_motion = self.dataset.body_names.index(box_body_name)
         self.box_body_id_asset = self.box.body_names.index(box_body_name)
 
-        scale = getattr(self.box.cfg.spawn, "scale", torch.ones(self.num_envs, 3))
+        scale = getattr(self.box.cfg.spawn, "scale", None)
+        if not isinstance(scale, torch.Tensor):
+            scale_tensor = torch.ones(self.num_envs, 3)
+            if scale is None:
+                pass
+            elif isinstance(scale, float):
+                scale_tensor[:] = scale
+            elif isinstance(scale, tuple):
+                scale_tensor[:] = torch.tensor(scale, device=self.device)
+            else:
+                raise ValueError(f"Invalid scale type: {type(scale)}")
+            scale = scale_tensor
         box_scale: torch.Tensor = scale.to(self.device)
-        box_size = torch.tensor(self.box.cfg.spawn.size, device=self.device)
+        # box_size = torch.tensor(self.box.cfg.spawn.size, device=self.device) # this is for cuboid
+        box_size = torch.tensor([1.0, 0.8, 0.8], device=self.device)
         self.box_size = box_size * box_scale
-        self.contact_target_pos_offset = torch.zeros(self.num_envs, 2, 3, device=self.device)
-        self.contact_target_pos_offset[:] = self.box_size.unsqueeze(1) / 2
-        self.contact_target_pos_offset[:, 0, 1] = -0.15
-        self.contact_target_pos_offset[:, 1, 1] = 0.15
-
         _, contact_eef_names = self.asset.find_bodies(contact_eef_name)
-        assert len(contact_eef_names) == 2 == len(contact_eef_pos_offset)
+        assert len(contact_eef_names) == 2
 
         with torch.device(self.device):
-            self._cum_error = torch.zeros(self.num_envs, 6)
-            self.lost_contact_steps = torch.zeros(self.num_envs, dtype=torch.int32)
+            self.contact_target_pos_offset = torch.zeros(self.num_envs, 2, 3, device=self.device)
+            self.contact_target_pos_offset[:] = self.box_size.unsqueeze(1)
+            self.contact_target_pos_offset[:, :, 0] = 0.0
+            self.contact_target_pos_offset[:, 0, 1] = -0.15
+            self.contact_target_pos_offset[:, 1, 1] = 0.15
 
-            self.contact_eef_pos_offset = torch.tensor(contact_eef_pos_offset).unsqueeze(0).expand(self.num_envs, -1, -1)
+            self.contact_eef_pos_offset = torch.tensor([(0.06, 0.0, 0.0), (0.06, 0.0, 0.0)]).unsqueeze(0).expand(self.num_envs, -1, -1)
+
             self.contact_target_pos_w = torch.zeros(self.num_envs, len(contact_eef_names), 3)
             self.contact_eef_pos_w = torch.zeros(self.num_envs, len(contact_eef_names), 3)
             self.eef_contact_force = torch.zeros(self.num_envs, len(contact_eef_names), 3)
             # shape: [num_envs, num_contact_eefs, 3]
 
             self.box_reset_offset = torch.tensor(box_reset_offset).unsqueeze(0)
-        
-        self._cum_lost_contact_steps = cum_lost_contact_steps
-        self._cum_box_pos_error_scale = cum_box_pos_error_scale
-        self._cum_box_ori_error_scale = cum_box_ori_error_scale
-        
-        self.reset_range = reset_range
-
-        self.contact_eef_pos_thres = contact_eef_pos_thres
-        self.contact_eef_ori_thres = contact_eef_ori_thres
-        self.contact_eef_frc_thres = contact_eef_frc_thres
         
         self.eef_idx_asset = []
         self.eef_idx_sensor = []
@@ -1973,33 +1962,33 @@ class MotionTrackingBox(MotionTrackingCommand):
         self.box_contact = torch.from_numpy(box_contact).to(self.device).type(torch.bool).squeeze(-1)
         # shape: [n_steps]
         
+        self.reset_range = reset_range
+
         self._init_debug_draw()
         self.update()
     
     def _sample_motions(self, env_ids: torch.Tensor) -> None:
         super()._sample_motions(env_ids)
-        start_t = torch.randint(self.reset_range[0], self.reset_range[1], (len(env_ids),), device=self.device)
+        start_t = torch.randint(*self.reset_range, (len(env_ids),), device=self.device)
         self.t[env_ids] = start_t
+        if not self.env.training:
+            self.t[env_ids] = 0
 
     def sample_init(self, env_ids: torch.Tensor) -> None:
         super().sample_init(env_ids)
 
         motion: MotionData = self._motion_reset
-        init_box_pos = motion.body_pos_w[:, self.box_body_id_motion]
+        init_box_pos = motion.body_pos_w[:, self.box_body_id_motion] + self.box_reset_offset
         init_box_quat = motion.body_quat_w[:, self.box_body_id_motion]
-        init_box_pos[:, 2] = self.box_size[env_ids, 2] / 2
+        init_box_pos[:, 2] = 0.0
 
         init_box_state_w = self.box.data.default_root_state[env_ids]
-        init_box_state_w[:, 0:3] = init_box_pos + self.env.scene.env_origins[env_ids] + self.box_reset_offset
+        init_box_state_w[:, 0:3] = init_box_pos + self.env.scene.env_origins[env_ids]
         init_box_state_w[:, 3:7] = init_box_quat
         init_box_state_w[:, 7:] = 0.0
         
         self.box.write_root_link_pose_to_sim(init_box_state_w[:, :7], env_ids=env_ids)
         self.box.write_root_link_velocity_to_sim(init_box_state_w[:, 7:], env_ids=env_ids)
-
-    def reset(self, env_ids: torch.Tensor) -> None:
-        super().reset(env_ids)
-        self.lost_contact_steps[env_ids] = 0
 
     TrackBoxObservation = BaseObservation["MotionTrackingBox"]
 
@@ -2028,7 +2017,7 @@ class MotionTrackingBox(MotionTrackingCommand):
             box_quat_w = self.command_manager.box.data.root_link_quat_w
             robot_yaw_w = yaw_from_quat(robot_quat_w)
             box_yaw_w = yaw_from_quat(box_quat_w)
-            box_yaw = wrap_to_pi(box_yaw_w - robot_yaw_w)
+            box_yaw = wrap_to_pi(box_yaw_w + torch.pi - robot_yaw_w)
             if self.noise_std > 0.0:
                 box_yaw = box_yaw + torch.randn_like(box_yaw).clamp(-3., 3.) * self.noise_std
             return box_yaw.unsqueeze(-1)
@@ -2060,6 +2049,15 @@ class MotionTrackingBox(MotionTrackingCommand):
             diff_box_pos_future_w_b = quat_rotate_inverse(robot_quat_yaw_w, diff_box_pos_future_w)
             return diff_box_pos_future_w_b[..., :2].reshape(self.num_envs, -1)
         
+    class diff_box_yaw_future(TrackBoxObservation):
+        def compute(self):
+            ref_box_quat_future_w = self.command_manager.future_ref_motion.body_quat_w[:, :, self.command_manager.box_body_id_motion]
+            cur_box_quat_w = self.command_manager.box.data.root_link_quat_w.unsqueeze(1)
+            ref_box_yaw_future_w = yaw_from_quat(ref_box_quat_future_w)
+            cur_box_yaw_w = yaw_from_quat(cur_box_quat_w)
+            diff_box_yaw_future_w = ref_box_yaw_future_w - cur_box_yaw_w
+            return diff_box_yaw_future_w.view(self.num_envs, -1)
+        
     class box_friction(TrackBoxObservation):
         def compute(self):
             raise NotImplementedError
@@ -2068,6 +2066,20 @@ class MotionTrackingBox(MotionTrackingCommand):
     class box_contact_future(TrackBoxObservation):
         def compute(self):
             return self.command_manager.future_ref_box_contact.float()
+    
+    class eef_contact_pos_b(TrackBoxObservation):
+        def __init__(self, noise_std: float=0.0, **kwargs):
+            super().__init__(**kwargs)
+            self.noise_std = max(0.0, noise_std)
+
+        def compute(self):
+            robot_quat_w = self.command_manager.asset.data.root_link_quat_w.unsqueeze(1)
+            robot_pos_w = self.command_manager.asset.data.root_link_pos_w.unsqueeze(1)
+            eef_contact_pos_w = self.command_manager.contact_eef_pos_w
+            eef_contact_diff_b = quat_rotate_inverse(robot_quat_w, eef_contact_pos_w - robot_pos_w)
+            if self.noise_std > 0.0:
+                eef_contact_diff_b = eef_contact_diff_b + torch.randn_like(eef_contact_diff_b).clamp(-3., 3.) * self.noise_std
+            return eef_contact_diff_b.view(self.num_envs, -1)
     
     class eef_contact_diff_pos_b(TrackBoxObservation):
         def compute(self):
@@ -2078,7 +2090,7 @@ class MotionTrackingBox(MotionTrackingCommand):
     
     class eef_contact_diff_ori_b(TrackBoxObservation):
         def compute(self):
-            eef_contact_diff_euler = self.command_manager.eef_target_euler_xyz - self.command_manager.eef_euler_xyz
+            eef_contact_diff_euler = self.command_manager.contact_target_euler_xyz - self.command_manager.contact_eef_euler_xyz
             eef_contact_diff_mat = matrix_from_euler(eef_contact_diff_euler, "XYZ")
             return eef_contact_diff_mat[:, :, :2, :].reshape(self.num_envs, -1)
         
@@ -2124,7 +2136,8 @@ class MotionTrackingBox(MotionTrackingCommand):
 
         def compute(self):
             rew = torch.exp(-self.eef_pos_error / self.sigma).mean(dim=-1)
-            return (rew * self.in_range.float()).unsqueeze(-1)
+            rew = (rew - 1.0) * self.in_range.float()
+            return rew.unsqueeze(-1)
         
     class eef_contact_ori(TrackBoxReward):
         def __init__(self, sigma: float=0.1, **kwargs):
@@ -2136,12 +2149,13 @@ class MotionTrackingBox(MotionTrackingCommand):
         
         def update(self):
             self.in_range = self.command_manager.ref_box_contact
-            eef_ori_diff = wrap_to_pi(self.command_manager.eef_euler_xyz - self.command_manager.eef_target_euler_xyz)
+            eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
             self.eef_ori_error[:] = eef_ori_diff.abs()
 
         def compute(self):
             rew = torch.exp(-self.eef_ori_error / self.sigma).mean(dim=(1, 2))
-            return (rew * self.in_range.float()).unsqueeze(-1)
+            rew = (rew - 1.0) * self.in_range.float()
+            return rew.unsqueeze(-1)
         
     class eef_contact_all(TrackBoxReward):
         def __init__(
@@ -2166,7 +2180,7 @@ class MotionTrackingBox(MotionTrackingCommand):
             self.in_range = self.command_manager.ref_box_contact
 
             eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
-            eef_ori_diff = wrap_to_pi(self.command_manager.eef_euler_xyz - self.command_manager.eef_target_euler_xyz)
+            eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
             eef_frc = self.command_manager.eef_contact_force
 
             self.eef_pos_error[:] = eef_pos_diff.norm(dim=-1)
@@ -2184,8 +2198,90 @@ class MotionTrackingBox(MotionTrackingCommand):
         
     TrackBoxRandomization = BaseRandomization["MotionTrackingBox"]
     
-    # TODO: add randomization for box friction and mass
+    class box_body_randomization(TrackBoxRandomization):
+        def __init__(
+            self,
+            static_friction_range: Tuple[float, float]=(0.6, 1.0),
+            dynamic_friction_range: Tuple[float, float]=(0.6, 1.0),
+            restitution_range: Tuple[float, float]=(0.0, 0.2),
+            mass_range: Tuple[float, float]=(1.0, 10.0),
+            **kwargs
+        ):
+            super().__init__(**kwargs)
+            self.box = self.command_manager.box
 
+            self.mass_range = mass_range
+
+            self.all_indices_cpu = torch.arange(self.box.num_instances)
+
+            max_shapes = self.box.root_physx_view.max_shapes
+            self.shape_ids = torch.arange(0, max_shapes) 
+
+            self.num_buckets = 64
+            self.static_friction_buckets = rand_uniform(*tuple(static_friction_range), (self.num_buckets,), "cpu")
+            self.dynamic_friction_buckets = rand_uniform(*tuple(dynamic_friction_range), (self.num_buckets,), "cpu")
+            self.restitution_buckets = rand_uniform(*tuple(restitution_range), (self.num_buckets,), "cpu")
+
+        def startup(self):
+            masses = self.box.data.default_mass.clone()
+            inertias = self.box.data.default_inertia.clone()
+            new_masses = rand_uniform(*self.mass_range, (self.box.num_instances, 1), "cpu")
+            
+            scale = new_masses / masses
+            masses[:] *= scale
+            inertias[:] *= scale
+            self.box.root_physx_view.set_masses(masses, self.all_indices_cpu)
+            self.box.root_physx_view.set_inertias(inertias, self.all_indices_cpu)
+            assert torch.allclose(self.box.root_physx_view.get_masses(), masses, atol=1e-4)
+            assert torch.allclose(self.box.root_physx_view.get_inertias(), inertias, atol=1e-4)
+
+            materials = self.box.root_physx_view.get_material_properties().clone()
+            shape = (self.box.num_instances, len(self.shape_ids))
+            materials[:, self.shape_ids, 0] = self.static_friction_buckets[torch.randint(0, self.num_buckets, shape)]
+            materials[:, self.shape_ids, 1] = self.dynamic_friction_buckets[torch.randint(0, self.num_buckets, shape)]
+            materials[:, self.shape_ids, 2] = self.restitution_buckets[torch.randint(0, self.num_buckets, shape)]
+            self.box.root_physx_view.set_material_properties(materials.flatten(), self.all_indices_cpu)
+            assert torch.allclose(self.box.root_physx_view.get_material_properties(), materials, atol=1e-4)
+
+    TrackBoxTermination = BaseTermination["MotionTrackingBox"]
+    
+    class cum_box_pos_error(MotionTrackingCommand._cum_error):
+        command_manager: "MotionTrackingBox"
+        def update(self):
+            box_pos_w = self.command_manager.box.data.root_link_pos_w
+            box_pos_diff = self.command_manager.ref_box_pos_w - box_pos_w
+            self.error[:] = box_pos_diff.norm(dim=-1)
+            super().update()
+        
+    class cum_box_ori_error(MotionTrackingCommand._cum_error):
+        command_manager: "MotionTrackingBox"
+        def update(self):
+            box_quat_w = self.command_manager.box.data.root_link_quat_w
+            box_quat_diff = quat_mul(quat_conjugate(box_quat_w), self.command_manager.ref_box_quat_w)
+            self.error[:] = axis_angle_from_quat(box_quat_diff).norm(dim=-1)
+            super().update()
+    
+    class cum_lost_contact_steps(MotionTrackingCommand._cum_error):
+        command_manager: "MotionTrackingBox"
+        def __init__(self, pos_thres: float=0.05, ori_thres: float=0.1, frc_thres: float=2.0, threshold: float=1.0, **kwargs):
+            super().__init__(threshold=threshold, **kwargs)
+            self.pos_thres = pos_thres
+            self.ori_thres = ori_thres
+            self.frc_thres = frc_thres
+        
+        def update(self):
+            eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
+            eef_euler_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
+            eef_contact_frc_norm = self.command_manager.eef_contact_force.norm(dim=-1)
+
+            in_contact = (eef_pos_diff.norm(dim=-1) < self.pos_thres) \
+                & (eef_euler_diff.abs() < self.ori_thres).all(dim=-1) \
+                & (eef_contact_frc_norm > self.frc_thres)
+            in_range = self.command_manager.ref_box_contact
+            lost_contact = in_range & ((~in_contact).any(dim=-1))
+            self.error[:] = 2 * lost_contact.float()
+            super().update()
+        
     def update(self):
         super().update()
         self.ref_box_pos_w = self.current_ref_motion.body_pos_w[:, self.box_body_id_motion] + self.env.scene.env_origins
@@ -2211,41 +2307,15 @@ class MotionTrackingBox(MotionTrackingCommand):
         # eef target ori
         target_quat_w = yaw_quat(self.box.data.root_link_quat_w)
         eef_target_euler_xyz = euler_xyz_from_quat(target_quat_w)
-        self.eef_target_euler_xyz = torch.stack(eef_target_euler_xyz, dim=1).unsqueeze(1)
-        self.eef_target_euler_xyz[:, :, 2] += torch.pi
+        self.contact_target_euler_xyz = torch.stack(eef_target_euler_xyz, dim=1).unsqueeze(1)
+        self.contact_target_euler_xyz[:, :, 2] += torch.pi
 
         eef_quat_w = self.asset.data.body_quat_w[:, self.eef_idx_asset]
         eef_euler_xyz = euler_xyz_from_quat(eef_quat_w.view(-1, 4))
-        self.eef_euler_xyz = torch.stack(eef_euler_xyz, dim=1).view(self.num_envs, 2, 3)
+        self.contact_eef_euler_xyz = torch.stack(eef_euler_xyz, dim=1).view(self.num_envs, 2, 3)
 
         # eef contact
         self.eef_contact_force[:] = self.contact_forces.data.net_forces_w[:, self.eef_idx_sensor]
-
-        eef_pos_diff = self.contact_eef_pos_w - self.contact_target_pos_w
-        eef_euler_diff = wrap_to_pi(self.eef_euler_xyz - self.eef_target_euler_xyz)
-        eef_contact_frc_norm = self.eef_contact_force.norm(dim=-1)
-
-        in_contact = (eef_pos_diff.norm(dim=-1) < self.contact_eef_pos_thres) \
-            & (eef_euler_diff.abs() < self.contact_eef_ori_thres).all(dim=-1) \
-            & (eef_contact_frc_norm > self.contact_eef_frc_thres)
-        in_range = self.ref_box_contact
-
-        # if not self.env.training and in_range[0]:
-        #     print(eef_pos_diff[0].norm(dim=-1))
-        #     print(eef_euler_diff[0].abs().max(dim=-1).values)
-        #     print(self.lost_contact_steps[0])
-        #     print(self._cum_error[0])
-
-        increment_mask = (in_range.unsqueeze(-1) & ~in_contact).any(dim=-1)
-        self.lost_contact_steps[increment_mask] += 1
-        self.lost_contact_steps[~increment_mask] = 0
-        self._cum_error[:, 3] = self.lost_contact_steps / self._cum_lost_contact_steps
-
-        box_pos_error = (self.ref_box_pos_w - self.box.data.root_link_pos_w).norm(dim=-1)
-        box_quat_diff = quat_mul(quat_conjugate(self.box.data.root_link_quat_w), self.ref_box_quat_w)
-        box_ori_error = axis_angle_from_quat(box_quat_diff).norm(dim=-1)
-        self._cum_error[:, 4] = box_pos_error / self._cum_box_pos_error_scale
-        self._cum_error[:, 5] = box_ori_error / self._cum_box_ori_error_scale
     
     def _init_debug_draw(self):
         super()._init_debug_draw()

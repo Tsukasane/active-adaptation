@@ -68,15 +68,15 @@ DOOR_CFG = ArticulationCfg(
 
 BOX_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Box",
-    spawn=sim_utils.CuboidCfg(
-        size=(0.6, 0.6, 0.6),
+    # spawn=sim_utils.UrdfFileCfg(
+    #     asset_path=f"{ASSET_PATH}/box/box.urdf",
+    spawn=sim_utils.UsdFileCfg(
+        scale=(1.0, 1.0, 1.0),
+        usd_path=f"{ASSET_PATH}/box/box.usd",
         visual_material=sim_utils.PreviewSurfaceCfg(
             diffuse_color=(0.5, 0.5, 0.5),
             metallic=0.2,
             roughness=0.2,
-        ),
-        collision_props=sim_utils.CollisionPropertiesCfg(
-            collision_enabled=True,
         ),
         activate_contact_sensors=True,
         mass_props=sim_utils.MassPropertiesCfg(
@@ -93,3 +93,12 @@ BOX_CFG = RigidObjectCfg(
         ),
     ),
 )
+
+# from active_adaptation.assets.spawn import clone
+# spawn_func = BOX_CFG.spawn.func.__wrapped__
+# BOX_CFG.spawn.func = clone(spawn_func)
+# BOX_CFG.spawn.scale_range = (0.9, 1.1)
+
+# size: [1.0 0.8 0.8] z: 0.6 - 0.8
+# friction 0.5-1.0
+# mass 4-8

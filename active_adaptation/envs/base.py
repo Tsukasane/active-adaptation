@@ -190,6 +190,8 @@ class _Env(EnvBase):
             self._debug_draw_callbacks.append(addon.debug_draw)
         
         for key, params in self.cfg.randomization.items():
+            if key == "body_scale":
+                continue
             rand = mdp.Randomization.registry[key](env=self, **(params if params is not None else {}))
             self.randomizations[key] = rand
             self._startup_callbacks.append(rand.startup)

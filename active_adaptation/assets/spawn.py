@@ -289,21 +289,23 @@ def clone(func: Callable) -> Callable:
         if hasattr(cfg, "activate_contact_sensors") and cfg.activate_contact_sensors:
             schemas.activate_contact_sensors(prim_paths[0], cfg.activate_contact_sensors)
         # clone asset using cloner API
+        low, high = getattr(cfg, "scale_range", (1., 1.))
+        scales = torch.ones(len(prim_paths), 3)
+        # scales[1:].uniform_(low, high)
+        scales[1:].fill_(low)
+        cfg.scale = scales
         if len(prim_paths) > 1:
-            cloner = MyCloner()
             # clone the prim
-            low, high = getattr(cfg, "scale_range", (1., 1.))
-            scales = torch.ones(len(prim_paths), 1)
-            scales[1:].uniform_(low, high)
-            cfg.scale = scales
+            cloner = MyCloner()
             cloner.clone(
                 prim_paths[0], 
                 prim_paths[1:],
-                scales=scales[1:].expand(-1, 3),
-                replicate_physics=False, 
+                scales=scales[1:],
+                replicate_physics=False,
                 copy_from_source=cfg.copy_from_source
             )
         # return the source prim
         return prim
 
     return wrapper
+

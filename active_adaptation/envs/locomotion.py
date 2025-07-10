@@ -2,6 +2,7 @@ import os
 import json
 import torch
 from isaaclab.utils import configclass
+from isaaclab.utils.dict import update_class_from_dict
 
 import active_adaptation
 import active_adaptation.envs.mdp as mdp
@@ -44,7 +45,7 @@ class SimpleEnv(_Env):
             from active_adaptation.envs.terrain import TERRAINS
             
             env_spacing = self.cfg.viewer.get("env_spacing", 2.0)
-            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=env_spacing)
+            scene_cfg = InteractiveSceneCfg(num_envs=self.cfg.num_envs, env_spacing=env_spacing, replicate_physics=False)
             scene_cfg.sky_light = AssetBaseCfg(
                 prim_path="/World/skyLight",
                 spawn=sim_utils.DomeLightCfg(
@@ -53,6 +54,10 @@ class SimpleEnv(_Env):
                 ),
             )
             scene_cfg.robot: ArticulationCfg = ROBOTS[self.cfg.robot.name]
+            
+            if hasattr(self.cfg.robot, 'override_params'):
+                update_class_from_dict(scene_cfg.robot, self.cfg.robot.override_params, _ns="")
+            
             scene_cfg.robot.prim_path = "{ENV_REGEX_NS}/Robot"
             robot_type = self.cfg.robot.get("robot_type", self.cfg.robot.name)
             scene_cfg.robot.spawn.usd_path = scene_cfg.robot.spawn.usd_path.format(ROBOT_TYPE=robot_type)
@@ -60,6 +65,15 @@ class SimpleEnv(_Env):
             for obj_name in self.cfg.get("object_names", []):
                 setattr(scene_cfg, obj_name, OBJECTS[obj_name])
                 getattr(scene_cfg, obj_name).prim_path = "{ENV_REGEX_NS}/" + obj_name
+
+            body_scale_rand = self.cfg.randomization.get("body_scale", None)
+            if body_scale_rand is not None:
+                from active_adaptation.assets.spawn import clone
+                asset = getattr(scene_cfg, body_scale_rand.name)
+                spawn_func = asset.spawn.func.__wrapped__
+                asset.spawn.func = clone(spawn_func)
+                asset.spawn.scale_range = tuple(body_scale_rand.scale_range)
+                print(f"Randomized {body_scale_rand.name} scale to {asset.spawn.scale_range}")
 
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
             scene_cfg.contact_forces = ContactSensorCfg(
@@ -145,10 +159,10 @@ class SimpleEnv(_Env):
         self.stats[env_ids] = 0.
 
     def render(self, mode: str="human"):
-        look_at_env_id = self.lookat_env_i
-        self.sim.set_camera_view(
-            eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
-            target=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.lookat)
-        )
+        # look_at_env_id = self.lookat_env_i
+        # self.sim.set_camera_view(
+        #     eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
+        #     target=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.lookat)
+        # )
         return super().render(mode)
 
