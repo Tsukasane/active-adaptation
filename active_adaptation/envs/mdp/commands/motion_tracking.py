@@ -64,40 +64,6 @@ class MotionTrackingCommand(Command):
         super().__init__(env)
         self.contact_forces: ContactSensor = self.env.scene["contact_forces"]
 
-        import active_adaptation
-        active_adaptation_path = Path(active_adaptation.__file__).parent.parent
-        if isinstance(data_path, str):
-            data_paths = [data_path]
-        elif isinstance(data_path, ListConfig):
-            data_paths = list(data_path)
-        else:
-            raise ValueError(f"Invalid data_path type: {type(data_path)}")
-        
-        data_paths = [active_adaptation_path / Path(path) for path in data_paths]
-
-        # First read and verify all meta.json files are identical
-        metas = []
-        for path in data_paths:
-            meta_path = path / "meta.json"
-            with open(meta_path, "r") as f:
-                metas.append(json.load(f))
-        
-        # Compare all metas to the first one
-        for i, meta in enumerate(metas[1:], 1):
-            if meta != metas[0]:
-                raise ValueError(f"meta.json in {data_paths[i]} differs from {data_paths[0]}")
-
-        # create a temp folder and move all motions to it
-        temp_folder = Path(tempfile.mkdtemp())
-        for i, path in enumerate(data_paths):
-            shutil.copytree(path, temp_folder / f"motion_{i}")
-
-        meta_path_dst = temp_folder / "meta.json"
-        with open(meta_path_dst, "w") as f:
-            json.dump(metas[0], f)
-
-        data_path = str(temp_folder)
-
         self.dataset = MotionDataset.create_from_path(
             data_path,
             target_fps=int(1/self.env.step_dt)
