@@ -701,6 +701,29 @@ class feet_slip_angvel(Reward):
         slip = (in_contact * feet_angvel).sum(dim=1, keepdim=True)
         return -slip
 
+class feet_upright(Reward):
+    def __init__(
+        self, env: "LocomotionEnv", body_names: str, xy_sigma: float, weight: float, enabled: bool = True
+    ):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+        
+        self.body_ids_asset, _ = self.asset.find_bodies(body_names)
+        self.body_ids_contact, _ = self.contact_sensor.find_bodies(body_names)
+
+        down = torch.tensor([0.0, 0.0, -1.0], device=self.env.device)
+        self.down = down.expand(self.num_envs, len(self.body_ids_asset), -1)
+        self.xy_sigma = xy_sigma
+        
+    def compute(self):
+        feet_quat_w = self.asset.data.body_quat_w[:, self.body_ids_asset]
+        feet_projected_down = quat_rotate_inverse(feet_quat_w, self.down)
+        feet_projected_down_xy = feet_projected_down[:, :, :2].norm(dim=-1)
+        # shape: (num_envs, num_feet)
+        rew = (torch.exp(-feet_projected_down_xy / self.xy_sigma) - 1.0)
+        return rew.float().mean(dim=1, keepdim=True)
+
 class feet_upright_when_contact(Reward):
     def __init__(
         self, env: "LocomotionEnv", body_names: str, xy_sigma: float, weight: float, enabled: bool = True

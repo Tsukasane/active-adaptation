@@ -26,6 +26,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
 import warnings
+import functools
+import torch.utils._pytree as pytree
 
 from torchrl.data import CompositeSpec, TensorSpec
 from torchrl.modules import ProbabilisticActor
@@ -40,7 +42,7 @@ from tensordict.nn import (
 
 from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
-from typing import Union, List
+from typing import Union, Tuple
 from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
@@ -49,21 +51,30 @@ from .common import *
 
 torch.set_float32_matmul_precision('high')
 
+import active_adaptation
+import torch.distributed as distr
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 @dataclass
 class PPOConfig:
     _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
     name: str = "ppo"
     train_every: int = 32
-    ppo_epochs: int = 5
+    ppo_epochs: int = 3
     num_minibatches: int = 8
-    lr: float = 5e-4
+    lr: float = 1e-4
     clip_param: float = 0.2
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.001
+    init_noise_scale: float = 1.5
+    load_noise_scale: float | None = None
+    desired_kl: Union[float, None] = None
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
+    compile: bool = True
 
+    latent_dim: int = 256
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY])
+    in_keys: Tuple[str, ...] = (OBS_KEY, OBS_PRIV_KEY)
 
 cs = ConfigStore.instance()
 cs.store("ppo", node=PPOConfig, group="algo")
@@ -81,11 +92,12 @@ class PPOPolicy(TensorDictModuleBase):
         env=None,
     ):
         super().__init__()
-        self.cfg = cfg
+        self.cfg = PPOConfig(**cfg)
         self.device = device
 
         self.entropy_coef = self.cfg.entropy_coef
         self.max_grad_norm = 1.0
+        self.desired_kl = self.cfg.desired_kl
         self.clip_param = self.cfg.clip_param
         self.critic_loss_fn = nn.MSELoss(reduction="none")
         self.action_dim = action_spec.shape[-1]
@@ -98,10 +110,11 @@ class PPOPolicy(TensorDictModuleBase):
         self.value_norm = value_norm_cls(input_shape=1).to(self.device)
 
         fake_input = observation_spec.zero()
-
+        
+        latent_dim = self.cfg.latent_dim
         actor_module = TensorDictSequential(
-            TensorDictModule(make_mlp([256, 256, 128]), [OBS_KEY], ["_actor_feature"]),
-            TensorDictModule(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"])
+            TensorDictModule(make_mlp([512, 256, 256]), [OBS_KEY], ["_actor_feature"]),
+            TensorDictModule(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
             module=actor_module,
@@ -112,7 +125,8 @@ class PPOPolicy(TensorDictModuleBase):
         ).to(self.device)
         
         self.critic = TensorDictSequential(
-            TensorDictModule(make_mlp([256, 256, 128]), [OBS_KEY], ["_critic_feature"]),
+            CatTensors([OBS_KEY, OBS_PRIV_KEY], "_critic_input"),
+            TensorDictModule(make_mlp([256, 256, 128]), ["_critic_input"], ["_critic_feature"]),
             TensorDictModule(nn.LazyLinear(1), ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
@@ -135,19 +149,33 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor.apply(init_)
         self.critic.apply(init_)
 
+        if active_adaptation.is_distributed():
+            distr.init_process_group(
+                backend="nccl",
+                world_size=active_adaptation.get_world_size(),
+                rank=active_adaptation.get_local_rank()
+            )
+            for param in self.actor.parameters():
+                distr.broadcast(param, src=0)
+            for param in self.critic.parameters():
+                distr.broadcast(param, src=0)
+            self.world_size = active_adaptation.get_world_size()
+            
         self.update = self._update
-        # self.update = torch.compile(self.update)
-        # self.update = CudaGraphModule(self.update)
+        if self.cfg.compile:
+            self.update = torch.compile(self.update)
+            # self.update = CudaGraphModule(self.update)
     
     def get_rollout_policy(self, mode: str="train"):
         policy = TensorDictSequential(self.actor)
-        # policy = torch.compile(policy, mode="reduce-overhead")
-        # policy = CudaGraphModule(policy)
+        if self.cfg.compile:
+            policy = torch.compile(policy)
+            # policy = CudaGraphModule(policy)
         return policy
 
     # @torch.compile
     def train_op(self, tensordict: TensorDict):
-        tensordict = tensordict.copy()
+        tensordict = tensordict.exclude("stats")
         infos = []
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
         tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
@@ -155,15 +183,23 @@ class PPOPolicy(TensorDictModuleBase):
         for epoch in range(self.cfg.ppo_epochs):
             batch = make_batch(tensordict, self.cfg.num_minibatches)
             for minibatch in batch:
-                infos.append(TensorDict(self.update(minibatch), []))
-        
-        out = {}
-        for k, v in sorted(torch.stack(infos).items()):
-            out[k] = v.detach().mean().item()
-        out["critic/value_mean"] = tensordict["ret"].mean().item()
-        out["critic/value_std"] = tensordict["ret"].std().item()
-        out["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
-        return out
+                infos.append(self.update(minibatch))
+
+                if self.desired_kl is not None: # adaptive learning rate
+                    kl = infos[-1]["actor/kl"]
+                    actor_lr = self.opt.param_groups[0]["lr"]
+                    if kl > self.desired_kl * 2.0:
+                        actor_lr = max(1e-5, actor_lr / 1.5)
+                    elif kl < self.desired_kl / 2.0 and kl > 0.0:
+                        actor_lr = min(1e-2, actor_lr * 1.5)
+                    self.opt.param_groups[0]["lr"] = actor_lr
+                
+        infos = pytree.tree_map(lambda *xs: sum(xs).item() / len(xs), *infos)
+        infos["actor/lr"] = self.opt.param_groups[0]["lr"]
+        infos["critic/value_mean"] = tensordict["ret"].mean().item()
+        infos["critic/value_std"] = tensordict["ret"].std().item()
+        infos["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
+        return dict(sorted(infos.items()))
 
     @torch.no_grad()
     def _compute_advantage(
@@ -190,7 +226,7 @@ class PPOPolicy(TensorDictModuleBase):
         values = self.value_norm.denormalize(values)
         next_values = self.value_norm.denormalize(next_values)
 
-        adv, ret = self.gae(rewards, terms, dones, values, next_values)
+        adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
@@ -200,41 +236,73 @@ class PPOPolicy(TensorDictModuleBase):
         return tensordict
 
     def _update(self, tensordict: TensorDict):
-        dist = self.actor.get_dist(tensordict)
+        dist: IndependentNormal = self.actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
         entropy = dist.entropy().mean()
 
+        valid = (~tensordict["is_init"])
         adv = tensordict["adv"]
         log_ratio = (log_probs - tensordict["sample_log_prob"]).unsqueeze(-1)
         ratio = torch.exp(log_ratio)
         surr1 = adv * ratio
         surr2 = adv * ratio.clamp(1.-self.clip_param, 1.+self.clip_param)
-        policy_loss = - torch.mean(torch.min(surr1, surr2) * (~tensordict["is_init"]))
+        policy_loss = - (torch.min(surr1, surr2) * valid).mean()
         entropy_loss = - self.entropy_coef * entropy
 
         b_returns = tensordict["ret"]
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
-        value_loss = (value_loss * (~tensordict["is_init"])).mean()
+        value_loss = (value_loss * valid).mean()
         
         loss = policy_loss + entropy_loss + value_loss
         self.opt.zero_grad()
         loss.backward()
+
+        if active_adaptation.is_distributed():
+            for param in self.actor.parameters():
+                distr.all_reduce(param.grad, op=distr.ReduceOp.SUM)
+                param.grad /= self.world_size
+            for param in self.critic.parameters():
+                distr.all_reduce(param.grad, op=distr.ReduceOp.SUM)
+                param.grad /= self.world_size
+
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.opt.step()
         
         with torch.no_grad():
-            explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
+            explained_var_numerator = F.mse_loss(values, b_returns)
+            explained_var_denominator = b_returns.var()
+            explained_var = 1 - explained_var_numerator / explained_var_denominator
+            
+            explained_var_valid_numerator = F.mse_loss(values[valid], b_returns[valid])
+            explained_var_valid_denominator = b_returns[valid].var()
+            explained_var_valid = 1 - explained_var_valid_numerator / explained_var_valid_denominator
+            
             clipfrac = ((ratio - 1.0).abs() > self.clip_param).float().mean()
+            loc, scale = dist.loc, dist.scale
+            loc_old, scale_old = tensordict["loc"], tensordict["scale"]
+            kl = torch.sum(
+                torch.log(scale) - torch.log(scale_old)
+                + (torch.square(scale_old) + torch.square(loc_old - loc)) / (2.0 * torch.square(scale))
+                - 0.5,
+                axis=-1,
+            ).mean()
         return {
             "actor/policy_loss": policy_loss.detach(),
             "actor/entropy": entropy.detach(),
+            "actor/mean_std": tensordict["scale"].detach().mean(),
             "actor/grad_norm": actor_grad_norm,
             "actor/clamp_ratio": clipfrac,
+            "actor/kl": kl,
             "critic/value_loss": value_loss.detach(),
             "critic/grad_norm": critic_grad_norm,
+            "critic/explained_var_numerator": explained_var_numerator,
+            "critic/explained_var_denominator": explained_var_denominator,
             "critic/explained_var": explained_var,
+            "critic/explained_var_valid_numerator": explained_var_valid_numerator,
+            "critic/explained_var_valid_denominator": explained_var_valid_denominator,
+            "critic/explained_var_valid": explained_var_valid,
         }
 
     def state_dict(self):

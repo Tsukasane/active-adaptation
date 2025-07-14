@@ -291,8 +291,8 @@ def clone(func: Callable) -> Callable:
         # clone asset using cloner API
         low, high = getattr(cfg, "scale_range", (1., 1.))
         scales = torch.ones(len(prim_paths), 3)
-        # scales[1:].uniform_(low, high)
-        scales[1:].fill_(low)
+        scales[1:].uniform_(low, high)
+        # scales[1:].fill_(low)
         cfg.scale = scales
         if len(prim_paths) > 1:
             # clone the prim

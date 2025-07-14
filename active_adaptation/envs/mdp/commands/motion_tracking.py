@@ -22,7 +22,7 @@ from active_adaptation.utils.math import (
     axis_angle_from_quat
 )
 from .base import Command
-from isaaclab.utils.math import yaw_quat, matrix_from_quat, quat_from_angle_axis, wrap_to_pi, quat_apply, euler_xyz_from_quat, matrix_from_euler, sample_uniform, quat_from_euler_xyz
+from isaaclab.utils.math import yaw_quat, matrix_from_quat, wrap_to_pi, quat_apply, euler_xyz_from_quat, matrix_from_euler, sample_uniform, quat_from_euler_xyz
 from isaaclab.utils.string import resolve_matching_names_values, resolve_matching_names
 from active_adaptation.utils.helpers import batchify
 
@@ -219,7 +219,7 @@ class MotionTrackingCommand(Command):
         velocities = torch.cat([init_root_lin_vel, init_root_ang_vel], dim=-1) + rand_samples
 
         self.asset.write_root_link_pose_to_sim(torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
-        self.asset.write_root_link_velocity_to_sim(velocities, env_ids=env_ids)
+        self.asset.write_root_com_velocity_to_sim(velocities, env_ids=env_ids)
 
         init_joint_pos = motion.joint_pos[:, self.asset_joint_idx_motion]
         init_joint_vel = motion.joint_vel[:, self.asset_joint_idx_motion]
@@ -758,7 +758,7 @@ class MotionTrackingCommand(Command):
         
     class keypoint_lin_vel_tracking_product(_tracking_keypoint):
         def compute(self):
-            body_lin_vel_asset = self.command_manager.asset.data.body_link_lin_vel_w[:, self.body_indices_asset]
+            body_lin_vel_asset = self.command_manager.asset.data.body_com_lin_vel_w[:, self.body_indices_asset]
             body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion]
             diff = body_lin_vel_motion - body_lin_vel_asset
             # shape: [num_envs, num_tracking_bodies, 3]
@@ -768,7 +768,7 @@ class MotionTrackingCommand(Command):
 
     class keypoint_lin_vel_tracking_local_product(_tracking_keypoint):
         def compute(self):
-            body_lin_vel_asset = self.command_manager.asset.data.body_link_lin_vel_w[:, self.body_indices_asset].clone()
+            body_lin_vel_asset = self.command_manager.asset.data.body_com_lin_vel_w[:, self.body_indices_asset].clone()
             body_lin_vel_motion = self.command_manager.ref_body_lin_vel_w[:, self.body_indices_motion].clone()
 
             root_pos_asset = self.command_manager.robot_root_pos_w.clone()
@@ -797,7 +797,7 @@ class MotionTrackingCommand(Command):
 
     class keypoint_ang_vel_tracking_product(_tracking_keypoint):
         def compute(self):
-            body_ang_vel_asset = self.command_manager.asset.data.body_link_ang_vel_w[:, self.body_indices_asset]
+            body_ang_vel_asset = self.command_manager.asset.data.body_com_ang_vel_w[:, self.body_indices_asset]
             body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
             diff = body_ang_vel_motion - body_ang_vel_asset
             # shape: [num_envs, num_tracking_bodies, 3]
@@ -807,7 +807,7 @@ class MotionTrackingCommand(Command):
 
     class keypoint_ang_vel_tracking_local_product(_tracking_keypoint):
         def compute(self):
-            body_ang_vel_asset = self.command_manager.asset.data.body_link_ang_vel_w[:, self.body_indices_asset]
+            body_ang_vel_asset = self.command_manager.asset.data.body_com_ang_vel_w[:, self.body_indices_asset]
             body_ang_vel_motion = self.command_manager.ref_body_ang_vel_w[:, self.body_indices_motion]
 
             root_quat_asset = self.command_manager.robot_root_quat_w
@@ -1049,7 +1049,7 @@ class MotionTrackingCommand(Command):
             feet_projected_gravity = quat_rotate_inverse(feet_quat, self.gravity_w)
 
             feet_height = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset][..., 2]
-            feet_lin_vel = self.command_manager.asset.data.body_link_lin_vel_w[:, self.body_indices_asset].norm(dim=-1)
+            feet_lin_vel = self.command_manager.asset.data.body_com_lin_vel_w[:, self.body_indices_asset].norm(dim=-1)
 
             in_contact = (contact_forces.norm(dim=-1) > self.feet_contact_thres) \
                 & (feet_projected_gravity[..., 2] < -self.feet_gravity_thres) \
@@ -1150,7 +1150,7 @@ class MotionTrackingCommand(Command):
                 return
             
             robot_keypoint_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.apply_force_body_indices_asset]
-            robot_keypoint_lin_vel_w = self.command_manager.asset.data.body_link_lin_vel_w[:, self.apply_force_body_indices_asset]
+            robot_keypoint_lin_vel_w = self.command_manager.asset.data.body_com_lin_vel_w[:, self.apply_force_body_indices_asset]
 
             # compute force in world frame
             diff_pos_w = self.ref_keypoint_pos_w - robot_keypoint_pos_w
@@ -1293,9 +1293,9 @@ class MotionTrackingCommand(Command):
 
         # Reward: current robot and ref motion for reward computation
         self.robot_body_pos_w = self.asset.data.body_link_pos_w[:, self.tracking_body_indices_asset]
-        self.robot_body_lin_vel_w = self.asset.data.body_link_lin_vel_w[:, self.tracking_body_indices_asset]
+        self.robot_body_lin_vel_w = self.asset.data.body_com_lin_vel_w[:, self.tracking_body_indices_asset]
         self.robot_body_quat_w = self.asset.data.body_link_quat_w[:, self.tracking_body_indices_asset]
-        self.robot_body_ang_vel_w = self.asset.data.body_link_ang_vel_w[:, self.tracking_body_indices_asset]
+        self.robot_body_ang_vel_w = self.asset.data.body_com_ang_vel_w[:, self.tracking_body_indices_asset]
         self.robot_joint_pos = self.asset.data.joint_pos[:, self.tracking_joint_indices_asset]
         self.robot_joint_vel = self.asset.data.joint_vel[:, self.tracking_joint_indices_asset]
         self.robot_root_pos_w = self.asset.data.root_link_pos_w
@@ -1601,7 +1601,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
             self.eff_in_contact[:] = (contact_force.norm(dim=-1) > 1.0)
 
             # get eef velocity in door frame
-            eef_lin_vel_w = self.command_manager.asset.data.body_link_lin_vel_w[:, self.eef_idx_asset] 
+            eef_lin_vel_w = self.command_manager.asset.data.body_com_lin_vel_w[:, self.eef_idx_asset]
             door_quat_w = self.command_manager.door.data.body_link_quat_w[:, self.door_body_id_asset]
             eef_lin_vel_door = quat_rotate_inverse(door_quat_w, eef_lin_vel_w)
             # shape: [num_envs, 3]
@@ -1633,7 +1633,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
             self.root_vel_door = torch.zeros(self.num_envs, 3, device=self.device)
         
         def update(self):
-            root_vel_w = self.command_manager.asset.data.root_link_lin_vel_w
+            root_vel_w = self.command_manager.asset.data.root_com_lin_vel_w
             door_quat_w = self.command_manager.door.data.root_link_quat_w
             root_vel_door = quat_rotate_inverse(door_quat_w, root_vel_w)
             self.root_vel_door[:] = root_vel_door
@@ -1899,7 +1899,7 @@ class MotionTrackingBox(MotionTrackingCommand):
         self, 
         contact_eef_name: str=".*_wrist_yaw_link",
         reset_range: Tuple[int, int]=(0, 100),
-        box_reset_offset: Tuple[float, float, float]=(0.1, 0.0, 0.0),
+        box_pose_range: Dict[str, Tuple[float, float]]={"x": (-0.05, 0.05), "y": (-0.0, 0.0), "z": (0.0, 0.0), "roll": (-0.0, 0.0), "pitch": (-0.0, 0.0), "yaw": (-0.1, 0.1)},
         **kwargs
     ):
         super().__init__(**kwargs, call_update=False)
@@ -1943,14 +1943,15 @@ class MotionTrackingBox(MotionTrackingCommand):
             self.contact_eef_pos_w = torch.zeros(self.num_envs, len(contact_eef_names), 3)
             self.eef_contact_force = torch.zeros(self.num_envs, len(contact_eef_names), 3)
             # shape: [num_envs, num_contact_eefs, 3]
-
-            self.box_reset_offset = torch.tensor(box_reset_offset).unsqueeze(0)
         
         self.eef_idx_asset = []
         self.eef_idx_sensor = []
         for eef_name in contact_eef_names:
             self.eef_idx_asset.append(self.asset.body_names.index(eef_name))
             self.eef_idx_sensor.append(self.contact_forces.body_names.index(eef_name))
+        
+        pose_range_list = [box_pose_range.get(k, (-0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
+        self.box_pose_range = torch.tensor(pose_range_list, device=self.device)
         
         data_path = kwargs["data_path"]
         from pathlib import Path
@@ -1978,9 +1979,15 @@ class MotionTrackingBox(MotionTrackingCommand):
         super().sample_init(env_ids)
 
         motion: MotionData = self._motion_reset
-        init_box_pos = motion.body_pos_w[:, self.box_body_id_motion] + self.box_reset_offset
+        init_box_pos = motion.body_pos_w[:, self.box_body_id_motion]
         init_box_quat = motion.body_quat_w[:, self.box_body_id_motion]
         init_box_pos[:, 2] = 0.0
+
+        rand_samples = sample_uniform(self.box_pose_range[:, 0], self.box_pose_range[:, 1], (len(env_ids), 6), device=self.device)
+        init_box_pos += rand_samples[:, 0:3]
+
+        orientations_delta = quat_from_euler_xyz(rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5])
+        init_box_quat = quat_mul(init_box_quat, orientations_delta)
 
         init_box_state_w = self.box.data.default_root_state[env_ids]
         init_box_state_w[:, 0:3] = init_box_pos + self.env.scene.env_origins[env_ids]
@@ -1988,7 +1995,7 @@ class MotionTrackingBox(MotionTrackingCommand):
         init_box_state_w[:, 7:] = 0.0
         
         self.box.write_root_link_pose_to_sim(init_box_state_w[:, :7], env_ids=env_ids)
-        self.box.write_root_link_velocity_to_sim(init_box_state_w[:, 7:], env_ids=env_ids)
+        self.box.write_root_com_velocity_to_sim(init_box_state_w[:, 7:], env_ids=env_ids)
 
     TrackBoxObservation = BaseObservation["MotionTrackingBox"]
 
@@ -2025,14 +2032,14 @@ class MotionTrackingBox(MotionTrackingCommand):
         
     class box_lin_vel_b(TrackBoxObservation):
         def compute(self):
-            box_vel_w = self.command_manager.box.data.root_link_lin_vel_w
+            box_vel_w = self.command_manager.box.data.root_com_lin_vel_w
             robot_quat_w = self.command_manager.asset.data.root_link_quat_w
             box_vel_w_b = quat_rotate_inverse(robot_quat_w, box_vel_w)
             return box_vel_w_b
         
     class box_ang_vel_b(TrackBoxObservation):
         def compute(self):
-            box_ang_vel_w = self.command_manager.box.data.root_link_ang_vel_w
+            box_ang_vel_w = self.command_manager.box.data.root_com_ang_vel_w
             robot_quat_w = self.command_manager.asset.data.root_link_quat_w
             box_ang_vel_w_b = quat_rotate_inverse(robot_quat_w, box_ang_vel_w)
             return box_ang_vel_w_b
@@ -2063,6 +2070,10 @@ class MotionTrackingBox(MotionTrackingCommand):
             raise NotImplementedError
         
         
+    class box_contact(TrackBoxObservation):
+        def compute(self):
+            return self.command_manager.future_ref_box_contact[:, 0:1].float()
+    
     class box_contact_future(TrackBoxObservation):
         def compute(self):
             return self.command_manager.future_ref_box_contact.float()
@@ -2076,10 +2087,24 @@ class MotionTrackingBox(MotionTrackingCommand):
             robot_quat_w = self.command_manager.asset.data.root_link_quat_w.unsqueeze(1)
             robot_pos_w = self.command_manager.asset.data.root_link_pos_w.unsqueeze(1)
             eef_contact_pos_w = self.command_manager.contact_eef_pos_w
-            eef_contact_diff_b = quat_rotate_inverse(robot_quat_w, eef_contact_pos_w - robot_pos_w)
+            eef_contact_pos_b = quat_rotate_inverse(yaw_quat(robot_quat_w), eef_contact_pos_w - robot_pos_w)
             if self.noise_std > 0.0:
-                eef_contact_diff_b = eef_contact_diff_b + torch.randn_like(eef_contact_diff_b).clamp(-3., 3.) * self.noise_std
-            return eef_contact_diff_b.view(self.num_envs, -1)
+                eef_contact_pos_b = eef_contact_pos_b + torch.randn_like(eef_contact_pos_b).clamp(-3., 3.) * self.noise_std
+            return eef_contact_pos_b.reshape(self.num_envs, -1)
+    
+    class eef_target_pos_b(TrackBoxObservation):
+        def __init__(self, noise_std: float=0.0, **kwargs):
+            super().__init__(**kwargs)
+            self.noise_std = max(0.0, noise_std)
+
+        def compute(self):
+            robot_quat_w = self.command_manager.asset.data.root_link_quat_w.unsqueeze(1)
+            robot_pos_w = self.command_manager.asset.data.root_link_pos_w.unsqueeze(1)
+            eef_target_pos_w = self.command_manager.contact_target_pos_w
+            eef_target_pos_b = quat_rotate_inverse(yaw_quat(robot_quat_w), eef_target_pos_w - robot_pos_w)
+            if self.noise_std > 0.0:
+                eef_target_pos_b = eef_target_pos_b + torch.randn_like(eef_target_pos_b).clamp(-3., 3.) * self.noise_std
+            return eef_target_pos_b.reshape(self.num_envs, -1)
     
     class eef_contact_diff_pos_b(TrackBoxObservation):
         def compute(self):
@@ -2121,12 +2146,18 @@ class MotionTrackingBox(MotionTrackingCommand):
             error = axis_angle_from_quat(diff_box_quat_w).norm(dim=-1)
             return torch.exp(-error / self.sigma).unsqueeze(-1)
         
+    class eef_contact_in_range(TrackBoxReward):
+        def update(self):
+            self.in_range = self.command_manager.ref_box_contact
+
+        def compute(self):
+            rew = self.in_range.float()
+            return rew.unsqueeze(-1)
+        
     class eef_contact_pos(TrackBoxReward):
         def __init__(self, sigma: float=0.1, **kwargs):
             super().__init__(**kwargs)
             self.sigma = sigma
-            self.box_contact = self.command_manager.box_contact
-            
             self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
         
         def update(self):
@@ -2143,8 +2174,6 @@ class MotionTrackingBox(MotionTrackingCommand):
         def __init__(self, sigma: float=0.1, **kwargs):
             super().__init__(**kwargs)
             self.sigma = sigma
-            self.box_contact = self.command_manager.box_contact
-            
             self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
         
         def update(self):

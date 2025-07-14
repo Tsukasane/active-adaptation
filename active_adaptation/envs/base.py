@@ -159,6 +159,7 @@ class _Env(EnvBase):
         self.reward_funcs = OrderedDict()
         self._startup_callbacks = []
         self._update_callbacks = []
+        self._perf_ema_update = {}
         self._reset_callbacks = []
         self._debug_draw_callbacks = []
         self._pre_step_callbacks = []
@@ -225,6 +226,7 @@ class _Env(EnvBase):
         self.mult_dt = self.cfg.reward.pop("_mult_dt_", True)
 
         self._stats_ema = {}
+        self._perf_ema_reward = {}
         self._stats_ema_decay = 0.99
 
         self.reward_groups: Dict[str, RewardGroup] = OrderedDict()
@@ -232,6 +234,7 @@ class _Env(EnvBase):
             print(f"Reward group: {group_name}")
             funcs = OrderedDict()
             self._stats_ema[group_name] = {}
+            self._perf_ema_reward[group_name] = {}
 
             for rew_spec, params in func_specs.items():
                 rew_name, cls_name = parse_name_and_class(rew_spec)
@@ -246,6 +249,7 @@ class _Env(EnvBase):
                 self._post_step_callbacks.append(reward.post_step)
                 print(f"\t{rew_name}: \t{reward.weight:.2f}, \t{reward.enabled}")
                 self._stats_ema[group_name][rew_name] = (torch.tensor(0., device=self.device), torch.tensor(0., device=self.device))
+                self._perf_ema_reward[group_name][rew_name] = (torch.tensor(0., device=self.device), torch.tensor(0., device=self.device))
 
             self.reward_groups[group_name] = RewardGroup(self, group_name, funcs)
             reward_spec["stats", group_name, "return"] = UnboundedContinuous(1, device=self.device)
@@ -277,7 +281,7 @@ class _Env(EnvBase):
             self._update_callbacks.append(term_func.update)
             self._reset_callbacks.append(term_func.reset)
             self.reward_spec["stats", "termination", key] = UnboundedContinuous((self.num_envs, 1), device=self.device)
-        
+
         self.timestamp = 0
 
         self.stats = self.reward_spec["stats"].zero()
@@ -311,6 +315,15 @@ class _Env(EnvBase):
         for group_key, group in self._stats_ema.items():
             for rew_key, (sum, cnt) in group.items():
                 result[f"reward.{group_key}/{rew_key}"] = (sum / cnt).item()
+        for group_key, group in self._perf_ema_reward.items():
+            group_time = 0.
+            for rew_key, (sum, cnt) in group.items():
+                group_time += (sum / cnt).item()
+                result[f"performance_reward/{group_key}.{rew_key}"] = (sum / cnt).item()
+            result[f"performance_reward/{group_key}/total"] = group_time
+        
+        for key, (sum, cnt) in self._perf_ema_update.items():
+            result[f"performance_update/{key}"] = (sum / cnt).item()
         result["performance/reset_time"] = self.reset_time / self.ema_cnt
         result["performance/observation_time"] = self.observation_time / self.ema_cnt
         result["performance/reward_time"] = self.reward_time / self.ema_cnt
@@ -399,7 +412,22 @@ class _Env(EnvBase):
     def _update(self):
         start = time.perf_counter()
         for callback in self._update_callbacks:
+            # time_start = time.perf_counter()
             callback()
+            # time_end = time.perf_counter()
+            
+            # # Get the class name and category
+            # name = callback.__self__.__class__.__name__
+            # category = classify_callback(callback)
+            
+            # # Create the new key format: category.name
+            # key = f"{category}.{name}"
+            
+            # if key not in self._perf_ema_update:
+            #     self._perf_ema_update[key] = (torch.tensor(0., device=self.device), torch.tensor(0., device=self.device))
+            # sum_, cnt = self._perf_ema_update[key]
+            # sum_.add_(time_end - time_start)
+            # cnt.add_(1.)
         if self.sim.has_gui():
             self.sim.render()
         self.episode_length_buf.add_(1)
@@ -544,11 +572,19 @@ class RewardGroup:
         rewards = []
         # try:
         for key, func in self.funcs.items():
+            time_start = time.perf_counter()
             reward, count = func()
+            time_end = time.perf_counter()
+
             self.env.stats[self.name, key].add_(reward)
+
             sum, cnt = self.env._stats_ema[self.name][key]
             sum.mul_(self.env._stats_ema_decay).add_(reward.sum())
             cnt.mul_(self.env._stats_ema_decay).add_(count)
+
+            sum_perf, cnt_perf = self.env._perf_ema_reward[self.name][key]
+            sum_perf.mul_(self.env._stats_ema_decay).add_(time_end - time_start)
+            cnt_perf.mul_(self.env._stats_ema_decay).add_(1.0)
             if func.enabled:
                 rewards.append(reward)
         # except Exception as e:
@@ -556,6 +592,38 @@ class RewardGroup:
         if len(rewards):
             self.rew_buf[:] = torch.cat(rewards, 1)
         return self.rew_buf.sum(1, True)
+
+
+def classify_callback(callback):
+    """
+    Classify a callback based on its type to determine which category it belongs to.
+    
+    Args:
+        callback: The callback function to classify
+        
+    Returns:
+        str: One of 'reward', 'observation', 'randomization', 'termination', 'addon', 'command'
+    """
+    if not hasattr(callback, '__self__'):
+        return 'unknown'
+    
+    callback_obj = callback.__self__
+    
+    # Check inheritance hierarchy
+    if isinstance(callback_obj, mdp.Reward):
+        return 'reward'
+    elif isinstance(callback_obj, mdp.Observation):
+        return 'observation'
+    elif isinstance(callback_obj, mdp.Randomization):
+        return 'randomization'
+    elif isinstance(callback_obj, mdp.Termination):
+        return 'termination'
+    elif isinstance(callback_obj, mdp.AddOn):
+        return 'addon'
+    elif isinstance(callback_obj, mdp.Command):
+        return 'command'
+    else:
+        return 'unknown'
 
 
 def _initialize_warp_meshes(mesh_prim_path, device):
