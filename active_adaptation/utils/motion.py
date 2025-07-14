@@ -8,6 +8,10 @@ from tensordict import TensorClass, MemoryMappedTensor
 from typing import List, Union
 from scipy.spatial.transform import Rotation as sRot, Slerp
 from isaaclab.utils.string import resolve_matching_names
+from omegaconf import ListConfig
+import tempfile
+import shutil
+import re
 
 unitree_joint_names =  [
   "left_hip_pitch_joint",
@@ -153,8 +157,62 @@ class MotionDataset:
         return self
 
     @classmethod
-    def create_from_path(cls, root_path: str, target_fps: int = 50, memory_mapped: bool = False):
-        root_path = Path(root_path)
+    def create_from_path(cls, root_path: str | List[str] | str, target_fps: int = 50, memory_mapped: bool = False):
+        import active_adaptation
+        base_dir = Path(active_adaptation.__file__).parent.parent
+        if isinstance(root_path, ListConfig) or isinstance(root_path, list):
+            path_patterns = list(root_path)
+        elif isinstance(root_path, str):
+            path_patterns = [root_path]
+            if Path(root_path).is_absolute():
+                # then base dir the parent directory
+                base_dir = Path(root_path)
+                path_patterns = [".*"]
+        else:
+            raise ValueError(f"Invalid root_path type: {type(root_path)}")
+
+        all_npz_paths = list(base_dir.rglob("motion.npz"))
+
+        def match_npz_by_parent_dir(npz_paths: list[Path], patterns: list[str]) -> list[Path]:
+            compiled_patterns = [re.compile(p) for p in patterns]
+            matched_paths = []
+            for path in npz_paths:
+                relative_dir = path.relative_to(base_dir).parent.as_posix()
+                print(f"Checking {relative_dir} against patterns: {patterns}")
+                if any(p.fullmatch(relative_dir) for p in compiled_patterns):
+                    matched_paths.append(path.parent)
+            return matched_paths
+
+        motion_paths = match_npz_by_parent_dir(all_npz_paths, path_patterns)
+
+        print(f"Matched {len(motion_paths)} motion paths from patterns: {path_patterns}")
+
+        if not motion_paths:
+            raise RuntimeError(f"No motions matched the given patterns")
+
+        # First read and verify all meta.json files are identical
+        metas = []
+        for path in motion_paths:
+            meta_path = path / "meta.json"
+            with open(meta_path, "r") as f:
+                metas.append(json.load(f))
+        
+        # Compare all metas to the first one
+        for i, meta in enumerate(metas[1:], 1):
+            if meta != metas[0]:
+                raise ValueError(f"meta.json in {motion_paths[i]} differs from {motion_paths[0]}")
+
+        # create a temp folder and move all motions to it
+        temp_folder = Path(tempfile.mkdtemp())
+        for i, path in enumerate(motion_paths):
+            shutil.copytree(path, temp_folder / f"motion_{i}")
+
+        meta_path_dst = temp_folder / "meta.json"
+        with open(meta_path_dst, "w") as f:
+            json.dump(metas[0], f)
+
+        data_path = str(temp_folder)
+        root_path = Path(data_path)
         meta_path = root_path / "meta.json"
         with open(meta_path, "r") as f:
             meta = json.load(f)
