@@ -137,6 +137,7 @@ class DiagGaussian(nn.Module):
 from torchrl.modules.distributions import TanhNormal
 
 class IndependentNormal(D.Independent):
+    dist_keys = ["loc", "scale"]
     arg_constraints = {"loc": constraints.real, "scale": constraints.positive}
 
     def __init__(self, loc, scale, validate_args=None):
@@ -158,6 +159,7 @@ class IndependentNormal(D.Independent):
 
 
 class IndependentBeta(D.Independent):
+    dist_keys = ["alpha", "beta"]
     def __init__(
         self,
         alpha: torch.Tensor,

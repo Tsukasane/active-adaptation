@@ -74,11 +74,38 @@ class ObsGroup:
     
     # @torch.compile(mode="reduce-overhead")
     def _compute(self) -> torch.Tensor:
+        # if self.name == "amp_obs_" and not hasattr(self, "_exported"):
+        #     obs_metadata = []
+        #     for obs_key, func in self.funcs.items():
+        #         obs = func()
+        #         metadata = {
+        #             "obs_type": obs_key,
+        #             "obs_dim": obs.shape[-1],
+        #         }
+        #         if hasattr(func, "joint_names"):
+        #             metadata["joint_names"] = func.joint_names
+        #         if hasattr(func, "body_names"):
+        #             metadata["body_names"] = func.body_names
+        #         if hasattr(func, 'history_steps'):
+        #             metadata["history_steps"] = list(func.history_steps)
+        #         obs_metadata.append(metadata)
+
+        #     import os
+        #     metadata_folder = "amp_obs/policy"
+        #     metadata_path = f"{metadata_folder}/metadata.json"
+        #     os.makedirs(metadata_folder, exist_ok=True)
+        #     with open(metadata_path, 'w') as f:
+        #         import json
+        #         json.dump(obs_metadata, f, indent=2)
+        #     breakpoint()
+        #     self._exported = True
         # update only if outdated
         tensors = []
+        # print(f"Computing observation group: {self.name}")
         for obs_key, func in self.funcs.items():
             tensor = func()
             tensors.append(tensor)
+            # print(f"\t{obs_key}: {tensor.shape}")
         return torch.cat(tensors, dim=-1)
     
     def symmetry_transforms(self):

@@ -1,17 +1,17 @@
 # MIT License
-# 
+#
 # Copyright (c) 2023 Botian Xu, Tsinghua University
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -27,13 +27,14 @@ import torch.nn.functional as F
 import torch.distributions as D
 import warnings
 import functools
+import torch.utils._pytree as pytree
 import einops
 import copy
+import numpy as np
 
-from torchrl.data import CompositeSpec, TensorSpec, UnboundedContinuous
+from torchrl.data import CompositeSpec, TensorSpec, Unbounded
 from torchrl.modules import ProbabilisticActor
 from torchrl.envs.transforms import TensorDictPrimer
-from torchrl.objectives.utils import hold_out_net
 from tensordict import TensorDict
 from tensordict.nn import (
     TensorDictModuleBase, 
@@ -41,60 +42,105 @@ from tensordict.nn import (
     TensorDictSequential as Seq
 )
 from hydra.core.config_store import ConfigStore
-from dataclasses import dataclass, field, MISSING
+from dataclasses import dataclass, field
 from typing import Union, List
 from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
-from ..modules.distributions import IndependentNormal
-from ..modules.rnn import GRU, set_recurrent_mode, recurrent_mode
+from ..modules.distributions import IndependentNormal, IndependentBeta
+from ..modules.rnn import set_recurrent_mode, recurrent_mode
 from .common import *
 
 torch.set_float32_matmul_precision('high')
 
+AMP_KEY = "amp_obs_"
+
+@dataclass
+class AMPConfig:
+    motion_data_path: List[str] = (
+            # r"data/motion/AMASS/KIT/348/.*bend_left.*_poses",
+            # r"data/motion/AMASS/KIT/348/.*bend_right.*_poses",
+            # r"data/motion/AMASS/KIT/348/.*walking_slow.*_poses",
+            # r"data/motion/AMASS/KIT/348/.*walking_medium.*_poses",
+            r"data/motion/AMASS/ACCAD/Female1Walking_c3d-z=-0.1/.*",
+    )
+    lr: float = 1e-5
+    weight_decay: float = 1e-3
+    reward_scale: float = 0.01
+    gan_type: str = "gan" # "gan", "wgan", "lsgan"
+
+    amp_normalizer_source: List[str] = ("expert",) # ("expert", "policy", "policy_replay")
+
+    grad_pen_weight: float = 10.0
+    grad_pen_target_norm: float = 0.0
+    grad_pen_source: List[str] = ("interpolated",) # "expert", "policy", "policy_replay", "interpolated"
+
+    replay_buffer_iters: int = 16
+    random_replace: bool = False
+
+
 @dataclass
 class PPOConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo_amp.PPOPolicy"
+    _target_: str = "active_adaptation.learning.ppo.ppo_amp.PPOAMP"
     name: str = "ppo_amp"
-    train_every: int = 32
+    train_every: int = 24
     ppo_epochs: int = 5
     num_minibatches: int = 8
-    opt: str = "Adam"
-    lr: float = 5e-4
     clip_param: float = 0.2
-    
-    entropy_coef_start: float = 0.002
-    entropy_coef_end: float = 0.000
-    gradient_penalty: float = 0.002
 
-    reg_lambda: float = 0.0
+    distribution_class: str = "IndependentNormal" # IndependentNormal | IndependentBeta
+    # distribution_class: str = "IndependentBeta" # IndependentNormal | IndependentBeta
+
+    # lr linear schedule or adaptive lr
+    lr_start: float = 3e-4
+    lr_end: float = 1e-4
+    lr_decay_iters: int = 500
+
+    desired_kl: float | None = 0.01 # None
+
+    # entropy coef schedule
+    entropy_coef_start: float = 0.001
+    entropy_coef_end: float = 0.001
+    entropy_decay_iters: int = 1500
+
+    init_noise_scale: float = 1.5
+    load_noise_scale: float | None = None
+
+    clip_neg_reward: bool = True
+
+    normalize_before_sum: bool = False
+
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
 
-    # data_path: str = "/home/btx0424/lab/legged-deploy/go2/logs/12-05_16-43-21.h5py"
-    data_path: str = "/home/btx0424/lab/legged-deploy/go2/logs/12-07_22-24-40.h5py"
+    adapt_module: str = "mlp" # "gru", "mlp"
+    latent_dim: int = 256
+
+    max_grad_norm: float = 1.0
+
+    clip_adv: float | None = None
     phase: str = "train"
     vecnorm: Union[str, None] = None
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [CMD_KEY, OBS_KEY, OBS_PRIV_KEY])
+    in_keys: List[str] = (CMD_KEY, OBS_KEY, OBS_PRIV_KEY, AMP_KEY)
+
+    amp: AMPConfig = field(default_factory=AMPConfig)
 
 cs = ConfigStore.instance()
-cs.store("ppo_amp_train", node=PPOConfig(phase="train", vecnorm="train"), group="algo")
-# cs.store("ppo_orca_adapt", node=PPOConfig(phase="adapt", vecnorm="eval"), group="algo")
-cs.store("ppo_amp_finetune", node=PPOConfig(phase="finetune", vecnorm="eval"), group="algo")
+cs.store("ppo_amp_train", node=PPOConfig(phase="train", vecnorm="train", entropy_coef_start=0.004, entropy_coef_end=0.004), group="algo")
+cs.store("ppo_amp_adapt", node=PPOConfig(phase="adapt", vecnorm="eval", entropy_coef_start=0.00, entropy_coef_end=0.00), group="algo")
+cs.store("ppo_amp_finetune", node=PPOConfig(phase="finetune", vecnorm="eval", entropy_coef_start=0.00, entropy_coef_end=0.00), group="algo")
 
 class GRU(nn.Module):
     def __init__(
         self, 
         input_size, 
         hidden_size, 
-        allow_none: bool = False,
         burn_in: bool = False
     ) -> None:
         super().__init__()
         self.gru = nn.GRUCell(input_size, hidden_size)
         self.ln = nn.LayerNorm(hidden_size)
-        self.allow_none = allow_none
         self.burn_in = burn_in
 
     def forward(self, x: torch.Tensor, is_init: torch.Tensor, hx: torch.Tensor):
@@ -119,70 +165,31 @@ class GRU(nn.Module):
 
 
 class GRUModule(nn.Module):
-    def __init__(self, dim: int, split):
+    def __init__(self, dim: int):
         super().__init__()
-        self.split = split
-        self.mlp = make_mlp([128, 128])
-        self.gru = GRU(128, hidden_size=128)
+        self.mlp = make_mlp([dim, dim])
+        self.gru = GRU(dim, hidden_size=dim)
         self.out = nn.LazyLinear(dim)
-    
+
     def forward(self, x, is_init, hx):
         out1 = self.mlp(x)
         out2, hx = self.gru(out1, is_init, hx)
         out3 = self.out(out2 + out1)
-        if self.split is None:
-            out = (out3,)
-        else:
-            out = torch.split(out3, self.split, dim=-1)
-        return out + (hx.contiguous(),)
+        return (out3, hx.contiguous())
 
 
-class PolicyUpdateInferenceMod:
-    def __init__(
-        self, 
-        actor: ProbabilisticActor, 
-        encoder: Mod=None,
-    ) -> None:
-        self.actor = actor
-        self.encoder = encoder
+class PPOAMP(TensorDictModuleBase):
+    train_in_keys = [CMD_KEY, OBS_KEY, OBS_PRIV_KEY, ACTION_KEY,
+                     "adv", "ret", "is_init", "sample_log_prob", "step_count"]
     
-    def __call__(self, tensordict: TensorDictBase):
-        # TODO@botian: write to tensordict?
-        if self.encoder is not None:
-            self.encoder(tensordict)
-        dist = self.actor.get_dist(tensordict)
-        log_probs = dist.log_prob(tensordict[ACTION_KEY])
-        entropy = dist.entropy().mean()
-        return log_probs, entropy
-
-
-class PPOPolicy(TensorDictModuleBase):
-    """
-    
-    version: 0.1.0, 2024.9.22 @botian
-    * cleanup imitation stuff
-    * add finetune phase
-    * report ext_rec_error instead of ext_rec_loss
-    * fix explicit force est
-
-    version: 0.1.1, 2024.10.29 @botian
-    * fix loss func reduction following torch update
-    * default reg_lambda = 0.0
-    * increase rec_lambda to 0.1
-
-    version: 0.1.2, 2024.11.4 @botian
-    * reorganized structure
-    * fix bug in checkpoint loading
-    * tried ActorCov
-
-    """
     def __init__(
         self, 
         cfg: PPOConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
-        device
+        device,
+        env
     ):
         super().__init__()
         self.cfg = cfg
@@ -190,194 +197,210 @@ class PPOPolicy(TensorDictModuleBase):
         self.observation_spec = observation_spec
         assert self.cfg.phase in ["train", "adapt", "finetune"]
 
-        self.entropy_coef = self.cfg.get("entropy_coef_start", 0.001)
-        self.max_grad_norm = 1.0
+        self.entropy_coef = self.cfg.entropy_coef_start
+        self.desired_kl = cfg.desired_kl
         self.clip_param = self.cfg.clip_param
-        self.action_dim = action_spec.shape[-1]
-        self.gae = GAE(0.99, 0.95)
-        self.reg_lambda = 0.0
-        self.adapt_loss_fn = nn.MSELoss(reduction="none")
+
         self.critic_loss_fn = nn.MSELoss(reduction="none")
-        
+        self.adapt_loss_fn = nn.MSELoss(reduction="none")
+        self.rec_loss = nn.MSELoss(reduction="none")
+        self.gae = GAE(0.99, 0.95)
         self.value_norm = ValueNormFake(input_shape=1).to(self.device)
 
+
+        self.action_dim = action_spec.shape[-1]
+        self.joint_names = env.action_manager.joint_names
+        joint_ids = env.action_manager.joint_ids
+        self.joint_pos_limits = env.action_manager.asset.data.joint_pos_limits[:, joint_ids]
+        
         fake_input = observation_spec.zero()
-        obs_keys = list(observation_spec.keys(True, True))
         
+        latent_dim = self.cfg.latent_dim
         self.encoder_priv = Seq(
-            Mod(nn.Sequential(make_mlp([128]), nn.LazyLinear(128)), [OBS_PRIV_KEY], ["priv_feature"]),
+            Mod(nn.Sequential(make_mlp([latent_dim]), nn.LazyLinear(latent_dim)), [OBS_PRIV_KEY], ["priv_feature"]),
         ).to(self.device)
 
-        self.adapt_module =  Mod(
-            GRUModule(128, split=None), 
-            [OBS_KEY, "is_init", "adapt_hx"], 
-            ["priv_pred", ("next", "adapt_hx")]
-        ).to(self.device)
+        if observation_spec.get("command_", None) is not None:
+            global CMD_KEY
+            CMD_KEY = "command_"
         
+        self.env = env
+
+        if self.cfg.adapt_module == "gru":
+            self.adapt_module =  Mod(
+                GRUModule(latent_dim),
+                [OBS_KEY, "is_init", "adapt_hx"], 
+                ["priv_pred", ("next", "adapt_hx")]
+            ).to(self.device)
+        elif self.cfg.adapt_module == "mlp":
+            self.adapt_module =  Mod(
+                nn.Sequential(make_mlp([512, 256]), nn.LazyLinear(latent_dim)), 
+                [OBS_KEY], 
+                ["priv_pred"]
+            ).to(self.device)
+        else:
+            raise ValueError(f"Invalid adapt module: {self.cfg.adapt_module}")
+        
+        def build_actor(in_keys: List[str], dist_cls, dist_keys) -> ProbabilisticActor:
+            actor_module = Seq(
+                    CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
+                    Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
+                    Mod(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], dist_keys)
+            )
+            actor = ProbabilisticActor(
+                module=actor_module,
+                in_keys=dist_keys,
+                out_keys=[ACTION_KEY],
+                distribution_class=dist_cls,
+                return_log_prob=True
+            ).to(self.device)
+            return actor
+
+        if self.cfg.distribution_class == "IndependentNormal":
+            self.dist_cls = IndependentNormal
+            self.dist_keys = IndependentNormal.dist_keys
+        elif self.cfg.distribution_class == "IndependentBeta":
+            self.dist_cls = functools.partial(IndependentBeta, min=self.joint_pos_limits[:, 0], max=self.joint_pos_limits[:, 1])
+            self.dist_keys = IndependentBeta.dist_keys
+
         in_keys = [CMD_KEY, OBS_KEY, "priv_feature"]
-        self.actor: ProbabilisticActor = ProbabilisticActor(
-            module=Seq(
-                CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
-                Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
-                Mod(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"])
-            ),
-            in_keys=["loc", "scale"],
-            out_keys=[ACTION_KEY],
-            distribution_class=IndependentNormal,
-            return_log_prob=True
-        ).to(self.device)
-
+        self.actor = build_actor(in_keys, self.dist_cls, self.dist_keys)
         in_keys = [CMD_KEY, OBS_KEY, "priv_pred"]
-        self.actor_adapt: ProbabilisticActor = ProbabilisticActor(
-            module=Seq(
-                CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
-                Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
-                Mod(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"])
-            ),
-            in_keys=["loc", "scale"],
-            out_keys=[ACTION_KEY],
-            distribution_class=IndependentNormal,
-            return_log_prob=True
-        ).to(self.device)
-        
-        _critic = nn.Sequential(make_mlp([512, 256, 128]), nn.LazyLinear(1))
+        self.actor_adapt = build_actor(in_keys, self.dist_cls, self.dist_keys)
+
+        self.reward_groups = list(self.env.cfg.reward.keys()) + ["amp"]
+        num_reward_groups = len(self.reward_groups)
+        self.reward_scales = torch.ones(num_reward_groups, device=self.device)
+        self.reward_scales[-1] = self.cfg.amp.reward_scale
+        _critic = nn.Sequential(make_mlp([512, 256, 128]), nn.LazyLinear(num_reward_groups))
         self.critic = Seq(
-            CatTensors([CMD_KEY, OBS_KEY, OBS_PRIV_KEY], "_critic_input", del_keys=False),
+            CatTensors([CMD_KEY, OBS_KEY, OBS_PRIV_KEY, AMP_KEY], "_critic_input", del_keys=False),
             Mod(_critic, ["_critic_input"], ["state_value"])
         ).to(self.device)
 
-        self.aux = Seq(
-            Mod(nn.LazyLinear(25), ["_actor_feature"], ["_implicit_pred"]),
-        ).to(self.device)
+        _discriminator = nn.Sequential(
+            make_mlp([512, 512, 512]),
+            nn.LazyLinear(1)
+        )
+        self.amp_discriminator = _discriminator.to(self.device)
 
         with torch.device(self.device):
             fake_input["is_init"] = torch.ones(fake_input.shape[0], 1, dtype=torch.bool)
-            fake_input["adapt_hx"] = torch.zeros(fake_input.shape[0], 128)
-            fake_input["prev_action"] = torch.zeros(fake_input.shape[0], self.action_dim)
-            fake_input["prev_loc"] = torch.zeros(fake_input.shape[0], self.action_dim)
+            fake_input["adapt_hx"] = torch.zeros(fake_input.shape[0], latent_dim)
 
         self.encoder_priv(fake_input)
         self.actor(fake_input)
         self.critic(fake_input)
         self.adapt_module(fake_input)
         self.actor_adapt(fake_input)
-        self.aux(fake_input)
-
-        self.policy_train_inference = PolicyUpdateInferenceMod(self.actor, self.encoder_priv)
-        self.policy_adapt_inference = PolicyUpdateInferenceMod(self.actor_adapt, None)
-        
-        self.adapt_ema = copy.deepcopy(self.adapt_module)
-        self.adapt_ema.requires_grad_(False)
-
-        self.opt = torch.optim.Adam(
-            [
-                {"params": self.actor.parameters()},
-                {"params": self.critic.parameters()},
-                {"params": self.encoder_priv.parameters()},
-            ],
-            lr=cfg.lr
-        )
-
-        self.opt_adapt = torch.optim.Adam(
-            [
-                {"params": self.adapt_module.parameters()},
-            ],
-            lr=cfg.lr
-        )
-
-        self.opt_finetune = torch.optim.Adam(
-            [
-                {"params": self.actor_adapt.parameters()},
-                {"params": self.critic.parameters()},
-            ],
-            lr=cfg.lr
-        )
+        self.amp_discriminator(fake_input[AMP_KEY])
 
         def init_(module):
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, 0.01)
                 nn.init.constant_(module.bias, 0.)
         
-        self.actor.apply(init_)
-        self.critic.apply(init_)
-        self.encoder_priv.apply(init_)
-        self.adapt_module.apply(init_)
-        self.aux.apply(init_)
+        self.apply(init_)
+        self.adapt_ema = copy.deepcopy(self.adapt_module).requires_grad_(False)
+
+        self.lr = cfg.lr_start
+        if self.cfg.phase == "train":
+            policy_params = [
+                    {"params": self.actor.parameters()},
+                    {"params": self.encoder_priv.parameters()},
+                ]
+        else:
+            policy_params = [
+                    {"params": self.actor_adapt.parameters()},
+                ]
+            
+        self.opt_policy = torch.optim.Adam(
+            policy_params,
+            lr=self.lr,
+        )
+        self.opt_critic = torch.optim.Adam(
+            [
+                {"params": self.critic.parameters()},
+            ],
+            lr=self.lr,
+        )
+
+        self.opt_adapt = torch.optim.Adam(
+            [
+                {"params": self.adapt_module.parameters()},
+            ],
+            lr=self.lr,
+        )
+
+        self.opt_discriminator = torch.optim.Adam(
+            [
+                {"params": self.amp_discriminator.parameters()},
+            ],
+            lr=cfg.amp.lr,
+            weight_decay=cfg.amp.weight_decay
+        )
+
+        # setup AMP observation buffer
+        from active_adaptation.utils.motion import MotionDataset
+        from active_adaptation.learning.utils.amp_obs_buf import AMPObsBuffer
+        motion_data_path = cfg.amp.motion_data_path
+        motion_dataset = MotionDataset.create_from_path(motion_data_path).to(self.device)
+        obs_cfg = self.env.cfg.observation[AMP_KEY]
+        self.amp_obs_buf = AMPObsBuffer(motion_dataset, obs_cfg)
+        # self.amp_obs_buf.export("amp_obs/expert")
+        # breakpoint()
+
+        # setup AMP normalizer
+        from active_adaptation.learning.utils.vecnorm import VecNorm
+        self.amp_normalizer = VecNorm([AMP_KEY], device=self.device)
+        self.amp_normalizer.init_stats(fake_input)
+        
+        def amp_logits(amp_obs: torch.Tensor):
+            amp_obs = self.amp_normalizer.normalize({AMP_KEY: amp_obs})[AMP_KEY]
+            return self.amp_discriminator(amp_obs)
+        self.amp_logits = amp_logits
+        
+        # setup AMP replay buffer
+        if cfg.amp.replay_buffer_iters > 0:
+            from active_adaptation.learning.utils.replay_buffer import ReplayBuffer
+            replay_buffer_capacity = cfg.amp.replay_buffer_iters * env.num_envs * cfg.train_every
+            self.amp_replay_buffer = ReplayBuffer(
+                capacity=replay_buffer_capacity,
+                device=self.device
+            )
+        else:
+            self.amp_replay_buffer = None
         self.num_updates = 0
-
-        self.load_data()
-        self.noise_dim = 12
-        self.gen_s2r = nn.Sequential(make_mlp([128, 128]), nn.LazyLinear(36)).to(self.device)
-        self.gen_r2s = nn.Sequential(make_mlp([128, 128]), nn.LazyLinear(36)).to(self.device)
-        noise = torch.randn(fake_input.shape[0], self.noise_dim, device=self.device)
-        self.gen_s2r(torch.cat([fake_input["amp2_"], noise], dim=-1))
-        self.gen_s2r.apply(init_)
-        self.gen_r2s(torch.cat([fake_input["amp2_"], noise], dim=-1))
-        self.gen_r2s.apply(init_)
-        
-        jpos_real, imu_real = self.get_amp_batch()
-        self.disc_amp = nn.Sequential(make_mlp([512, 256]), nn.LazyLinear(1)).to(self.device)
-        self.disc_amp(jpos_real)
-        self.disc_amp.apply(init_)
-        
-        self.disc2 = nn.Sequential(make_mlp([512, 256]), nn.LazyLinear(1)).to(self.device)
-        self.disc2(torch.cat([jpos_real, imu_real], dim=-1))
-        self.disc2.apply(init_)
-
-        self.opt_disc = torch.optim.Adam(list(self.disc_amp.parameters()) + list(self.disc2.parameters()), lr=1e-4)
-        self.opt_gen = torch.optim.Adam(list(self.gen_s2r.parameters()) + list(self.gen_r2s.parameters()), lr=3e-4)
     
-    def load_data(self):
-        import h5py
-        data = h5py.File(self.cfg.data_path, "r")
-        cursor = data.attrs["cursor"]
-        print(f"Loading data from {self.cfg.data_path} with cursor {cursor}")
-        data = TensorDict({
-            k: torch.as_tensor(v[100: cursor], device=self.device) 
-            for k, v in data.items()
-        }, [cursor - 100])
-        print(data)
-        self.data = data
-
     def make_tensordict_primer(self):
         num_envs = self.observation_spec.shape[0]
-        return TensorDictPrimer({
-            "adapt_hx": UnboundedContinuous((num_envs, 128), device=self.device),
-            "prev_action": UnboundedContinuous((num_envs, self.action_dim), device=self.device),
-            "prev_loc": UnboundedContinuous((num_envs, self.action_dim), device=self.device),
-        }, reset_key="done")
+        spec = Unbounded((num_envs, self.cfg.latent_dim), device=self.device)
+        return TensorDictPrimer({"adapt_hx": spec}, reset_key="done")
 
     def get_rollout_policy(self, mode: str="train"):
         modules = []
-        
-        def foo(tensordict: TensorDict):
-            imu_sim = tensordict["amp2_"]
-            noise = torch.randn(imu_sim.shape[0], self.noise_dim, device=self.device)
-            imu_est = self.gen_s2r(torch.cat([imu_sim, noise], dim=-1))
-            tensordict["imu_est"] = imu_est
-            return tensordict
         
         if self.cfg.phase == "train":
             modules.append(self.encoder_priv)
             modules.append(self.actor)
             modules.append(self.adapt_module)
-            if mode == "eval":
-                modules.append(foo)
         elif self.cfg.phase == "adapt":
             modules.append(self.adapt_module)
             modules.append(self.actor_adapt)
         elif self.cfg.phase == "finetune":
             modules.append(self.adapt_ema)
             modules.append(self.actor_adapt)
-        
-        policy = Seq(*modules)
+
+        out_keys = ["sample_log_prob", "action"] + self.dist_keys
+        if self.cfg.adapt_module == "gru":
+            out_keys.append(("next", "adapt_hx"))
+        if self.cfg.phase == "finetune":
+            out_keys.append("priv_pred")
+        policy = Seq(*modules, selected_out_keys=out_keys)
         return policy
     
-    def step_schedule(self, progress: float):
-        self.reg_lambda = progress * self.cfg.reg_lambda
-        self.entropy_coef = self.cfg.entropy_coef_start + (self.cfg.entropy_coef_end - self.cfg.entropy_coef_start) * progress
-
     def train_op(self, tensordict: TensorDict):
+        tensordict = tensordict.exclude("stats")
         info = {}
         if self.cfg.phase == "train":
             info.update(self.train_policy(tensordict.copy()))
@@ -388,44 +411,59 @@ class PPOPolicy(TensorDictModuleBase):
             info.update(self.train_policy(tensordict.copy()))
             info.update(self.train_adapt(tensordict.copy()))
         self.num_updates += 1
+
+        actor = self.actor if self.cfg.phase == "train" else self.actor_adapt
+        action_std = actor.module[0][2].module.actor_std.detach()
+        for joint_name, std in zip(self.joint_names, action_std):
+            info[f"actor_std/{joint_name}"] = std
+        info["actor_std/mean"] = action_std.mean()
         return info
     
-    # @torch.compile
     def train_policy(self, tensordict: TensorDict):    
         infos = []
-        
-        with torch.no_grad():
-            amp1_obs = tensordict["amp1_"] # [jpos]
-            score_current1 = self.disc_amp(amp1_obs)
-            amp_rew = (1 - (score_current1 - 1).square())
-            tensordict[REWARD_KEY] += 0.02 * amp_rew
-
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
-        tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
 
-        policy_inference = self.policy_train_inference if self.cfg.phase == "train" else self.policy_adapt_inference
-        opt = self.opt if self.cfg.phase == "train" else self.opt_finetune
+        if self.amp_replay_buffer is not None:
+            self.amp_replay_buffer.insert(**tensordict.select(AMP_KEY).flatten(), random_replace=self.cfg.amp.random_replace)
+
+        # entropy coef schedule
+        current_iter = self.env.current_iter
+        entropy_progress = np.clip(current_iter / self.cfg.entropy_decay_iters, 0., 1.)
+        self.entropy_coef = self.cfg.entropy_coef_start + (self.cfg.entropy_coef_end - self.cfg.entropy_coef_start) * entropy_progress
 
         for epoch in range(self.cfg.ppo_epochs):
             batch = make_batch(tensordict, self.cfg.num_minibatches)
             for minibatch in batch:
-                info = self._update(minibatch, policy_inference, opt)
-                infos.append(TensorDict(info, []))
+                info = {}
+                info.update(self._update_ppo(minibatch))
+                info.update(self._update_amp(minibatch))
+                infos.append(info)
 
-        infos_symmetry = []
-        for i, batch in enumerate(make_batch(tensordict, 4)):
-            infos_symmetry.append(TensorDict(self._update_disc(batch), []))
+                if self.desired_kl is not None: # adaptive learning rate
+                    kl = infos[-1]["actor/kl"]
+                    if kl > self.desired_kl * 2.0:
+                        self.lr = max(1e-5, self.lr / 1.5)
+                    elif kl < self.desired_kl / 2.0 and kl > 0.0:
+                        self.lr = min(1e-2, self.lr * 1.5)
+                else: # use manual linear schedule
+                    lr_progress = float(np.clip(current_iter / self.cfg.lr_decay_iters, 0., 1.))
+                    self.lr = self.cfg.lr_start + (self.cfg.lr_end - self.cfg.lr_start) * lr_progress
         
-        infos = collect_info(infos)
-        infos.update(collect_info(infos_symmetry))
-        if self.cfg.phase == "train":
-            infos["actor/feature_std"] = tensordict["priv_feature"].std(-1).mean().item()
-        else:
-            infos["actor/feature_std"] = tensordict["priv_pred"].std(-1).mean().item()
-        infos["critic/value_mean"] = tensordict["ret"].mean().item()
-        infos["amp/reward"] = amp_rew.mean().item()
-        infos["amp/score"] = score_current1.mean().item()
-        return {k: v for k, v in sorted(infos.items())}
+                for param_group in self.opt_policy.param_groups:
+                    param_group["lr"] = self.lr
+                    
+                
+        infos = pytree.tree_map(lambda *xs: sum(xs).item() / len(xs), *infos)
+        infos["actor/lr"] = self.lr
+        infos["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
+
+        ret = tensordict["ret"]
+        ret_mean = ret.mean(dim=(0, 1))
+        ret_std = ret.std(dim=(0, 1))
+        for i, group_name in enumerate(self.reward_groups):
+            infos[f"critic/{group_name}.ret_mean"] = ret_mean[i].item()
+            infos[f"critic/{group_name}.ret_std"] = ret_std[i].item()
+        return dict(sorted(infos.items()))
     
     @set_recurrent_mode(True)
     def train_adapt(self, tensordict: TensorDict):
@@ -439,15 +477,14 @@ class PPOPolicy(TensorDictModuleBase):
                 self.adapt_module(minibatch)
                 priv_loss = self.adapt_loss_fn(minibatch["priv_pred"], minibatch["priv_feature"])
                 priv_loss = (priv_loss * (~minibatch["is_init"])).mean()
-                
                 self.opt_adapt.zero_grad()
-                (priv_loss).backward()
+                priv_loss.backward()
                 self.opt_adapt.step()
                 infos.append(TensorDict({
                     "adapt/priv_loss": priv_loss,
                 }, []))
         
-        soft_copy_(self.adapt_module, self.adapt_ema, 0.05)
+        soft_copy_(self.adapt_module, self.adapt_ema, 0.04)
         
         infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
         return infos
@@ -461,199 +498,236 @@ class PPOPolicy(TensorDictModuleBase):
         ret_key: str="ret",
         update_value_norm: bool=True,
     ):
-        with tensordict.view(-1) as tensordict_flat:
-            critic(tensordict_flat)
-            critic(tensordict_flat["next"])
+        # with tensordict.view(-1) as tensordict_flat:
+        #     critic(tensordict_flat)
+        #     critic(tensordict_flat["next"])
+        keys = tensordict.keys(True, True)
+        if not ("state_value" in keys and ("next", "state_value") in keys):
+            with tensordict.view(-1) as tensordict_flat:
+                critic(tensordict_flat)
+                critic(tensordict_flat["next"])
 
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)
-        # dones = tensordict["next", "done"]
-        # rewards = torch.where(dones, rewards + values * self.gae.gamma, rewards)
+        amp_logits = self.amp_logits(tensordict[AMP_KEY])
+        if self.cfg.amp.gan_type == "gan":
+            s = torch.sigmoid(amp_logits).clamp(1e-5, 1 - 1e-5)
+            amp_reward = s.log() - (1 - s).log()
+        elif self.cfg.amp.gan_type == "wgan":
+            amp_reward = amp_logits
+        elif self.cfg.amp.gan_type == "lsgan":
+            amp_reward = torch.clamp(
+                1 - 0.25 * (1 - amp_logits).square(),
+                min=0.0, max=1.0
+            )
+
+        rewards = tensordict[REWARD_KEY]
+        rewards = torch.concat([rewards, amp_reward], dim=-1)
+        if self.cfg.clip_neg_reward:
+            rewards = rewards.clamp_min(0.)
+        discount = tensordict["next", "discount"]
         terms = tensordict[TERM_KEY]
         dones = tensordict[DONE_KEY]
         values = self.value_norm.denormalize(values)
         next_values = self.value_norm.denormalize(next_values)
 
-        adv, ret = self.gae(rewards, terms, dones, values, next_values)
+        adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
+
+        # Compute and normalize the advantages
+        adv_unnormalized = adv
+        # [num_steps, num_envs, num_reward_groups]
+        if self.cfg.normalize_before_sum:
+            advantages_normalized = (adv_unnormalized - adv_unnormalized.mean(dim=(0, 1))) / (adv_unnormalized.std(dim=(0, 1)) + 1e-8)
+            adv_unnormalized *= self.reward_scales
+            # [num_steps, num_envs, num_reward_groups]
+            adv = advantages_normalized.sum(dim=2, keepdim=True)
+            # [num_steps, num_envs, 1]
+        else:
+            adv_unnormalized *= self.reward_scales
+            advantages_unnormalized_sumed = adv_unnormalized.sum(dim=2, keepdim=True)
+            # [num_steps, num_envs, 1]
+            adv = (advantages_unnormalized_sumed - advantages_unnormalized_sumed.mean(dim=(0, 1))) / (advantages_unnormalized_sumed.std(dim=(0, 1)) + 1e-8)
+            # [num_steps, num_envs, 1]
+
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
 
         tensordict.set(adv_key, adv)
+        # shape: (N, T, 1)
         tensordict.set(ret_key, ret)
+        tensordict["adv_before_norm"] = adv_unnormalized
+        # shape: (N, T, num_reward_groups)
         return tensordict
 
     # @torch.compile
-    def _update(self, tensordict: TensorDict, policy_inference: PolicyUpdateInferenceMod, opt: torch.optim.Optimizer):
+    def _update_ppo(self, tensordict: TensorDict):
+        dist_kwargs_old = tensordict.select(*self.dist_keys)
+
         if self.cfg.phase == "train":
-            for key in (CMD_KEY, OBS_KEY):
-                tensordict[key].requires_grad_(True)
+            self.encoder_priv(tensordict)
+            actor = self.actor
         else:
-            for key in (CMD_KEY, OBS_KEY, "priv_pred"):
-                tensordict[key].requires_grad_(True)
-        log_probs, entropy = policy_inference(tensordict)
+            actor = self.actor_adapt
+
+        dist: D.Independent = actor.get_dist(tensordict)
+        log_probs = dist.log_prob(tensordict[ACTION_KEY])
+        entropy = dist.entropy().mean()
 
         if self.cfg.phase == "train":
             valid = (tensordict["step_count"] > 1)
         else:
             valid = (tensordict["step_count"] > 5)
+        valid = valid.squeeze(-1)
+
         adv = tensordict["adv"]
         log_ratio = (log_probs - tensordict["sample_log_prob"]).unsqueeze(-1)
         ratio = torch.exp(log_ratio)
         surr1 = adv * ratio
         surr2 = adv * ratio.clamp(1.-self.clip_param, 1.+self.clip_param)
-        policy_loss = - torch.mean(torch.min(surr1, surr2) * valid)
+        policy_loss = - (torch.min(surr1, surr2)[valid]).mean()
         entropy_loss = - self.entropy_coef * entropy
-        
-        # grad = torch.autograd.grad(
-        #     log_probs,
-        #     [tensordict[key] for key in (CMD_KEY, OBS_KEY, "priv_feature" if self.cfg.phase == "train" else "priv_pred")],
-        #     grad_outputs=torch.ones_like(log_probs),
-        #     create_graph=True,
-        #     retain_graph=True,
-        # )
-        # gradient_penalty = torch.cat(grad, dim=-1).square().sum(-1).mean()
 
         b_returns = tensordict["ret"]
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
-        value_loss = (value_loss * (~tensordict["is_init"])).mean()
 
-        if self.cfg.phase == "train" and self.reg_lambda > 0:
-            reg_loss = self.adapt_loss_fn(tensordict["priv_feature"], tensordict["priv_pred"])
-            reg_loss = self.reg_lambda * (reg_loss * (~tensordict["is_init"])).mean()
-        else:
-            reg_loss = 0.
-            
-        loss = policy_loss + entropy_loss + value_loss + reg_loss # + self.cfg.gradient_penalty * gradient_penalty
-        
-        opt.zero_grad()
+        loss = policy_loss + entropy_loss + value_loss[valid].mean()
+
+        self.opt_policy.zero_grad()
+        self.opt_critic.zero_grad()
         loss.backward()
-        actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-        critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-        opt.step()
+        actor_grad_norm = nn.utils.clip_grad_norm_(actor.parameters(), self.cfg.max_grad_norm)
+        critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.cfg.max_grad_norm)
+        if self.cfg.phase == "train":
+            priv_grad_norm = nn.utils.clip_grad_norm_(self.encoder_priv.parameters(), self.cfg.max_grad_norm)
+        else:
+            priv_grad_norm = 0.
+        self.opt_policy.step()
+        self.opt_critic.step()
         
-        explained_var = 1 - value_loss / b_returns[~tensordict["is_init"]].var()
+        with torch.no_grad():
+            explained_var = 1 - value_loss[valid].mean(dim=0) / b_returns[valid].var(dim=0)
+            clipfrac = ((ratio - 1.0).abs() > self.clip_param).float().mean()
+            # loc, scale = dist.loc, dist.scale
+            # kl = torch.sum(
+            #     torch.log(scale) - torch.log(scale_old)
+            #     + (torch.square(scale_old) + torch.square(loc_old - loc)) / (2.0 * torch.square(scale))
+            #     - 0.5,
+            #     dim=-1,
+            # ).mean()
+            dist_old = self.dist_cls(**dist_kwargs_old)
+            kl = D.kl_divergence(dist_old, dist).mean()
+
         info = {
-            "actor/policy_loss": policy_loss,
-            "actor/entropy": entropy,
-            "actor/noise_std": tensordict["scale"].mean(),
+            "actor/policy_loss": policy_loss.detach(),
+            "actor/entropy": entropy.detach(),
+            "actor/mean_std": tensordict["scale"].detach().mean(),
             "actor/grad_norm": actor_grad_norm,
-            'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
-            # "actor/gradient_penalty": gradient_penalty,
-            "adapt/reg_loss": reg_loss,
-            "critic/value_loss": value_loss,
+            "actor/clamp_ratio": clipfrac,
+            "actor/kl": kl,
+            "critic/value_loss": value_loss[valid].mean().detach(),
             "critic/grad_norm": critic_grad_norm,
-            "critic/explained_var": explained_var,
+            # "critic/explained_var": explained_var,
+            "actor/priv_grad_norm": priv_grad_norm,
+            'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+        }
+        for i, group_name in enumerate(self.reward_groups):
+            info[f"critic/{group_name}.explained_var"] = explained_var[i]
+        return info
+    
+    def _update_amp(self, tensordict: TensorDict):
+        minibatch_size = tensordict.shape[0]
+
+        policy_amp_obs = tensordict[AMP_KEY]
+        expert_amp_obs = self.amp_obs_buf.sample(minibatch_size)
+        if self.amp_replay_buffer is not None:
+            policy_amp_obs_replay = self.amp_replay_buffer.sample(minibatch_size)[AMP_KEY]
+
+        if "policy" in self.cfg.amp.amp_normalizer_source:
+            self.amp_normalizer.update({AMP_KEY: policy_amp_obs})
+        if "expert" in self.cfg.amp.amp_normalizer_source:
+            self.amp_normalizer.update({AMP_KEY: expert_amp_obs})
+        if "policy_replay" in self.cfg.amp.amp_normalizer_source:
+            self.amp_normalizer.update({AMP_KEY: policy_amp_obs_replay})
+
+        # compute discriminator loss
+        expert_logits = self.amp_logits(expert_amp_obs)
+        policy_logits = self.amp_logits(policy_amp_obs)
+        if self.amp_replay_buffer is not None:
+            policy_logits_replay = self.amp_logits(policy_amp_obs_replay)
+
+        if self.cfg.amp.gan_type == "gan":
+            expert_loss = -torch.nn.functional.logsigmoid(expert_logits)
+            policy_loss = torch.nn.functional.softplus(-policy_logits)
+            discriminator_loss = expert_loss + policy_loss
+        elif self.cfg.amp.gan_type == "wgan":
+            expert_loss = -expert_logits
+            policy_loss = policy_logits
+            discriminator_loss = expert_loss + policy_loss
+        elif self.cfg.amp.gan_type == "lsgan":
+            expert_loss = (expert_logits - 1) ** 2
+            policy_loss = (policy_logits + 1) ** 2
+            discriminator_loss = expert_loss + policy_loss
+
+        if self.amp_replay_buffer is not None:
+            if self.cfg.amp.gan_type == "gan":
+                policy_loss_replay = torch.nn.functional.softplus(-policy_logits_replay)
+                discriminator_loss += policy_loss_replay
+            if self.cfg.amp.gan_type == "wgan":
+                policy_loss_replay = policy_logits_replay
+                discriminator_loss += policy_loss_replay
+            if self.cfg.amp.gan_type == "lsgan":
+                policy_loss_replay = (policy_logits_replay + 1) ** 2
+                discriminator_loss += policy_loss_replay
+        discriminator_loss = discriminator_loss.mean()
+
+        amp_grad_pen_inputs = []
+        if "expert" in self.cfg.amp.grad_pen_source:
+            amp_grad_pen_inputs.append(expert_amp_obs)
+        if "policy" in self.cfg.amp.grad_pen_source:
+            amp_grad_pen_inputs.append(policy_amp_obs)
+        if "policy_replay" in self.cfg.amp.grad_pen_source:
+            amp_grad_pen_inputs.append(policy_amp_obs_replay)
+        if "interpolated" in self.cfg.amp.grad_pen_source:
+            alpha = torch.rand(minibatch_size, 1, device=self.device)
+            amp_grad_pen_inputs.append(alpha * expert_amp_obs + (1 - alpha) * policy_amp_obs)
+        amp_grad_pen_input = torch.cat(amp_grad_pen_inputs, dim=0).requires_grad_(True)
+
+        # compute gradient penalty
+        grad_pen_score = self.amp_logits(amp_grad_pen_input)
+        ones = torch.ones_like(grad_pen_score)
+        grad = torch.autograd.grad(
+            outputs=grad_pen_score, inputs=amp_grad_pen_input,
+            grad_outputs=ones, create_graph=True,
+            retain_graph=True, only_inputs=True)[0]
+
+        # enforce grad norm approaches 0/1
+        disc_grad_norm = grad.norm(p=2, dim=1)
+        gradient_penalty = (disc_grad_norm - self.cfg.amp.grad_pen_target_norm).pow(2).mean()
+
+        loss = discriminator_loss + self.cfg.amp.grad_pen_weight * gradient_penalty 
+        self.opt_discriminator.zero_grad()
+        loss.backward()
+        self.opt_discriminator.step()
+        
+        # TODO: compute classification acc
+        info = {
+            "amp/discriminator_loss": discriminator_loss.detach(),
+            "amp/grad_norm": disc_grad_norm.mean().detach(),
+            "amp/gradient_penalty": gradient_penalty.detach(),
+            "amp/expert_logit_mean": expert_logits.mean().detach(),
+            "amp/policy_logit_mean": policy_logits.mean().detach(),
         }
         return info
 
-    def fliplr(self, tensor: torch.Tensor):
-        tensor = tensor.reshape(*tensor.shape[:2], 3, 4)[..., [1, 0, 3, 2]]
-        tensor[..., 0, :] *= -1 # flip hip joint states
-        return tensor.reshape(*tensor.shape[:2], -1)
-
-    def get_amp_batch(self):
-        steps = 8
-        idx = torch.randint(0, len(self.data) - steps, (1024,), device=self.device)
-        target_batch = self.data[idx.unsqueeze(1) + torch.arange(steps, device=self.device)]
-        
-        jpos = target_batch["jpos"]
-        jpos_ = self.fliplr(jpos)
-        jpos = torch.cat([jpos.reshape(1024, -1), jpos_.reshape(1024, -1)], dim=0)
-
-        history_step = 1
-        gravity = target_batch["gravity_substep"][:, -history_step:]
-        gravity_ = gravity * torch.tensor([1., -1., 1.], device=self.device)
-        lin_acc = - target_batch["lin_acc_substep"][:, -history_step:] - gravity * 9.81
-        lin_acc_ = lin_acc * torch.tensor([1., -1., 1.], device=self.device)
-        gyro = target_batch["ang_vel_substep"][:, -history_step:]
-        gyro_ = gyro * torch.tensor([-1., 1., -1.], device=self.device)
-
-        imu = torch.cat([
-            torch.cat([lin_acc.flatten(1), gravity.flatten(1), gyro.flatten(1)], dim=-1),
-            torch.cat([lin_acc_.flatten(1), gravity_.flatten(1), gyro_.flatten(1)], dim=-1),
-        ], dim=0)
-        return jpos, imu
-
-    def _update_disc(self, tensordict: TensorDict):
-        jpos_real, imu_real = self.get_amp_batch()
-        jpos_imu_real = torch.cat([jpos_real, imu_real], dim=-1)
-        jpos_real.requires_grad_(True)
-        jpos_imu_real.requires_grad_(True)
-        jpos_sim = tensordict["amp1_"] # [jpos]
-        imu_sim = tensordict["amp2_"]
-
-        with hold_out_net(self.gen_s2r), hold_out_net(self.gen_r2s):
-            noise = torch.randn(imu_sim.shape[0], self.noise_dim, device=self.device)
-            imu_s2r = self.gen_s2r(torch.cat([imu_sim, noise], dim=-1))
-            jpos_imu_s2r = torch.cat([jpos_sim, imu_s2r], dim=-1) # [jpos, imu]
-
-        score_real_amp = self.disc_amp(jpos_real)
-        score_sim_amp = self.disc_amp(jpos_sim)
-
-        score_real = self.disc2(jpos_imu_real)
-        score_sim = self.disc2(jpos_imu_s2r)
-
-        valid = (~tensordict["is_init"]).float()
-        
-        loss_disc_amp = (score_real_amp - 1).square().mean() + ((score_sim_amp + 1).square() * valid).mean()
-        loss_disc_s2r = (score_real - 1).square().mean() + ((score_sim + 1).square() * valid).mean()
-        
-        grad1 = torch.autograd.grad(
-            score_real_amp,
-            jpos_real, 
-            torch.ones_like(score_real_amp),
-            retain_graph=True,
-            create_graph=True
-        )[0]
-        grad2 = torch.autograd.grad(
-            score_real,
-            jpos_imu_real, 
-            torch.ones_like(score_real),
-            retain_graph=True,
-            create_graph=True
-        )[0]
-        gradient_penalty1 = torch.mean(grad1.square().sum(dim=-1))
-        gradient_penalty2 = torch.mean(grad2.square().sum(dim=-1))
-        
-        self.opt_disc.zero_grad()
-        (loss_disc_amp + loss_disc_s2r + 10 * gradient_penalty1 + 10. * gradient_penalty2).backward()
-        self.opt_disc.step()
-
-        with hold_out_net(self.disc2):
-            noise = torch.randn(imu_sim.shape[0], self.noise_dim, device=self.device)
-            imu_s2r = self.gen_s2r(torch.cat([imu_sim, noise], dim=-1))
-            jpos_imu_s2r = torch.cat([jpos_sim, imu_s2r], dim=-1) # [jpos, imu]
-
-            score_sim = self.disc2(jpos_imu_s2r)
-            gen_loss = ((score_sim - 1).square() * valid).mean()
-
-            noise = torch.randn(imu_sim.shape[0], self.noise_dim, device=self.device)
-            cycle_loss = F.mse_loss(self.gen_r2s(torch.cat([imu_s2r, noise], -1)), imu_sim)
-        
-        self.opt_gen.zero_grad()
-        (gen_loss + cycle_loss).backward()
-        grad_norm = nn.utils.clip_grad_norm_(self.gen_s2r.parameters(), 5.0)
-        self.opt_gen.step()
-
-        return {
-            "amp/loss_gen": gen_loss,
-            "amp/gen_grad_norm": grad_norm,
-            "amp/loss_disc1": loss_disc_amp,
-            "amp/loss_disc12": loss_disc_s2r,
-            "amp/gradient_penalty1": gradient_penalty1,
-            "amp/gradient_penalty2": gradient_penalty2,
-            "amp/cycle_loss": cycle_loss
-        }
-    
     def state_dict(self):
         state_dict = OrderedDict()
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
         state_dict["last_phase"] = self.cfg.phase
+        state_dict["last_iter"] = self.env.current_iter
         return state_dict
     
     def load_state_dict(self, state_dict, strict=True):
@@ -671,6 +745,9 @@ class PPOPolicy(TensorDictModuleBase):
         if state_dict.get("last_phase", "train") == "train":
             # only copy to initialize the actor once
             hard_copy_(self.actor, self.actor_adapt)
+
+        self.env.set_progress(state_dict.get("last_iter", 0))
+
         return failed_keys
 
 

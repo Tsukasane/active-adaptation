@@ -236,12 +236,12 @@ class body_upright(Reward):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
         self.body_id, body_name = self.asset.find_bodies(body_name)
+        self.down = torch.tensor([[0., 0., -1.]], device=self.device).expand(self.num_envs, len(self.body_id), 3)
     
     def compute(self) -> torch.Tensor:
-        down = torch.tensor([[0., 0., -1.]], device=self.device)
         g = quat_rotate_inverse(
             self.asset.data.body_quat_w[:, self.body_id],
-            down.expand(self.num_envs, len(self.body_id), 3)
+            self.down
         )
         rew = 1. - g[:, :, :2].square().sum(-1)
         return rew.mean(1, True)
