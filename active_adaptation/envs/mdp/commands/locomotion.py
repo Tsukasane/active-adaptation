@@ -8,7 +8,7 @@ from active_adaptation.utils.math import (
 )
 
 from .base import Command
-from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation
+from active_adaptation.envs.mdp import Reward as BaseReward, Observation as BaseObservation, Termination as BaseTermination
 from isaaclab.utils.math import sample_uniform, quat_apply_inverse
 
 
@@ -145,7 +145,7 @@ class LocomotionCommand(Command):
         )
         
         # Check if we should resample commands
-        interval_reached = (self.env.episode_length_buf - 20) % self.resample_interval == 0
+        interval_reached = (self.env.episode_length_buf + 1) % self.resample_interval == 0
         resample_mask = interval_reached & (
             (torch.rand(self.num_envs, device=self.device) < self.resample_prob)
             | self.is_standing_env.squeeze(1)
@@ -216,7 +216,7 @@ LocomotionObservation = BaseObservation[LocomotionCommand]
 class command_lin_vel_b(LocomotionObservation):
     """Linear velocity command in robot body frame"""
     def compute(self):
-        return self.command_manager.command_linvel
+        return self.command_manager.command_linvel[:, :2]
 
 class command_ang_vel_b(LocomotionObservation):
     """Angular velocity command in robot body frame"""
@@ -254,4 +254,101 @@ class track_ang_vel(LocomotionReward):
         
         # Compute tracking error
         angvel_error = (robot_angvel_w - command_angvel).abs()
+        return torch.exp(-angvel_error / self.sigma)
+
+LocomotionTermination = BaseTermination[LocomotionCommand]
+class cum_lin_vel_error(LocomotionTermination):
+    """Termination based on cumulative linear velocity error"""
+    def __init__(self, threshold: float = 0.2, decay=0.99, **kwargs):
+        super().__init__(**kwargs)
+        self.threshold = threshold
+        self.decay = decay
+        self.cum_error = torch.zeros(self.num_envs, 3, device=self.device)
+    
+    def reset(self, env_ids):
+        self.cum_error[env_ids] = 0.0
+    
+    def update(self):
+        # Compute current error
+        robot_linvel_w = self.command_manager.asset.data.root_lin_vel_w
+        command_linvel_w = quat_rotate(
+            yaw_quat(self.command_manager.asset.data.root_quat_w), 
+            self.command_manager.command_linvel
+        )
+        
+        linvel_error = (robot_linvel_w - command_linvel_w)
+        self.cum_error.mul_(self.decay).add_(linvel_error * self.env.step_dt)
+        # print(f"cum_lin_vel_error: {self.cum_error.norm(dim=-1).mean().item()}")  # Debug print
+        
+    def __call__(self):
+        exceeded = self.cum_error.norm(dim=1) > self.threshold
+        return exceeded.unsqueeze(-1)
+
+class cum_ang_vel_error(LocomotionTermination):
+    """Termination based on cumulative angular velocity error"""
+    def __init__(self, threshold: float = 0.4, decay=0.99, **kwargs):
+        super().__init__(**kwargs)
+        self.threshold = threshold
+        self.decay = decay
+        self.cum_error = torch.zeros(self.num_envs, device=self.device)
+    
+    def reset(self, env_ids):
+        self.cum_error[env_ids] = 0.0
+    
+    def update(self):
+        # Compute current error
+        robot_angvel_w = self.command_manager.asset.data.root_ang_vel_w[:, 2:3]  # z component
+        command_angvel = self.command_manager.command_angvel
+        
+        angvel_error = (robot_angvel_w - command_angvel).squeeze(-1)
+        self.cum_error.mul_(self.decay).add_(angvel_error * self.env.step_dt)
+        # print(f"cum_ang_vel_error: {self.cum_error.abs().mean().item()}")  # Debug print
+        
+    def __call__(self):
+        exceeded = self.cum_error.abs() > self.threshold
+        return exceeded.unsqueeze(-1)
+        
+
+from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
+
+class command_lin_vel_b_motion(MotionTrackingCommand.TrackObservation):
+    """Linear velocity in robot body frame for motion tracking"""
+    def compute(self):
+        ref_lin_vel_w = self.command_manager.ref_root_lin_vel_w
+        robot_quat_w = self.command_manager.robot_root_quat_w
+        ref_lin_vel_b = quat_apply_inverse(yaw_quat(robot_quat_w), ref_lin_vel_w)
+        return ref_lin_vel_b[:, :2]
+
+class command_ang_vel_b_motion(MotionTrackingCommand.TrackObservation):
+    """Angular velocity in robot body frame for motion tracking"""
+    def compute(self):
+        ref_ang_vel = self.command_manager.ref_root_ang_vel_w[:, 2:3]  # z component
+        return ref_ang_vel
+
+class track_lin_vel_motion(MotionTrackingCommand.TrackReward):
+    """Reward for tracking linear velocity in motion tracking"""
+    def __init__(self, sigma: float = 0.25, **kwargs):
+        super().__init__(**kwargs)
+        self.sigma = sigma
+
+    def compute(self):
+        robot_linvel_w = self.command_manager.asset.data.root_lin_vel_w
+        ref_lin_vel_w = self.command_manager.ref_root_lin_vel_w
+        
+        # Compute tracking error
+        linvel_error = (robot_linvel_w - ref_lin_vel_w).norm(dim=-1)
+        return torch.exp(-linvel_error / self.sigma).unsqueeze(-1)
+
+class track_ang_vel_motion(MotionTrackingCommand.TrackReward):
+    """Reward for tracking angular velocity in motion tracking"""
+    def __init__(self, sigma: float = 0.25, **kwargs):
+        super().__init__(**kwargs)
+        self.sigma = sigma
+
+    def compute(self):
+        robot_angvel_w = self.command_manager.asset.data.root_ang_vel_w[:, 2:3]  # z component
+        ref_ang_vel_w = self.command_manager.ref_root_ang_vel_w[:, 2:3]
+        
+        # Compute tracking error
+        angvel_error = (robot_angvel_w - ref_ang_vel_w).abs()
         return torch.exp(-angvel_error / self.sigma)

@@ -183,15 +183,15 @@ def main(cfg: DictConfig):
             save(policy, f"checkpoint_{i}")
 
         if aa.is_main_process():
-            print(OmegaConf.to_yaml({k: v for k, v in info.items() if isinstance(v, (float, int))}))
+            print(OmegaConf.to_yaml({k: v for k, v in info.items() if (isinstance(v, (float, int)) and not k.startswith("performance_reward"))}))
             run.log(info)
     
     if aa.is_main_process():
         save(policy, "checkpoint_final")
 
-    policy_eval = policy.get_rollout_policy("eval")
-    info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
-    run.log(info)
+    # policy_eval = policy.get_rollout_policy("eval")
+    # info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
+    # run.log(info)
 
     wandb.finish()
     os._exit(0)

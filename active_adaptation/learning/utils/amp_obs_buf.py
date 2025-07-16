@@ -9,18 +9,18 @@ import inspect
 
 from active_adaptation.utils.motion import MotionDataset
 from isaaclab.utils.math import (
-    quat_rotate_inverse,
     quat_mul,
     quat_conjugate,
     matrix_from_quat,
     yaw_quat,
+    quat_apply_inverse
 )
 from active_adaptation.utils.math import batchify
 from isaaclab.utils.string import resolve_matching_names
 from typing import Dict
 
 yaw_quat = batchify(yaw_quat)
-quat_rotate_inverse = batchify(quat_rotate_inverse)
+quat_apply_inverse = batchify(quat_apply_inverse)
 
 
 def log_tensor_members(obj, prefix=""):
@@ -163,6 +163,7 @@ class AMPObsBuffer:
         self.body_names = motion_lib.body_names
         self.joint_names = motion_lib.joint_names
         self.motion_num_frames = motion_lib.lengths
+        self.total_num_frames = motion_lib.data.shape[0]
 
         amp_obs_list = []
         self.obs_metadata = []  # Store metadata for each observation type
@@ -193,7 +194,6 @@ class AMPObsBuffer:
         
         self.amp_obs_buf = torch.concat(amp_obs_list, dim=-1)
         # shape: (total_num_frames, obs_dim)
-        self.total_num_frames = self.amp_obs_buf.shape[0]
 
     def sample(self, num_samples):
         sample_indices = torch.randint(0, self.total_num_frames, (num_samples,))
@@ -301,7 +301,7 @@ class body_pos_b_history(AMPObservation):
         body_pos_w = self.buffer.body_pos_w[:, self.body_indices]  # (num_frames, num_bodies, 3)
         
         # Transform to body frame
-        body_pos_b = quat_rotate_inverse(
+        body_pos_b = quat_apply_inverse(
             root_quat_w_yaw.unsqueeze(1),
             body_pos_w - root_pos_w_flat.unsqueeze(1)
         )
@@ -328,7 +328,7 @@ class body_lin_vel_b_history(AMPObservation):
         body_lin_vel_w = self.buffer.body_lin_vel_w[:, self.body_indices]  # (num_frames, num_bodies, 3)
         
         # Transform to body frame
-        body_lin_vel_b = quat_rotate_inverse(
+        body_lin_vel_b = quat_apply_inverse(
             root_quat_w_yaw.unsqueeze(1),
             body_lin_vel_w
         )
@@ -378,7 +378,7 @@ class body_ang_vel_b_history(AMPObservation):
         body_ang_vel_w = self.buffer.body_ang_vel_w[:, self.body_indices]  # (num_frames, num_bodies, 3)
         
         # Transform to body frame
-        body_ang_vel_b = quat_rotate_inverse(
+        body_ang_vel_b = quat_apply_inverse(
             root_quat_w_yaw.unsqueeze(1),
             body_ang_vel_w
         )

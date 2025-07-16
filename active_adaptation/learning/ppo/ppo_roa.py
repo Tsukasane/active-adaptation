@@ -47,7 +47,7 @@ from typing import Union, List
 from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
-from ..modules.distributions import IndependentNormal
+from ..modules.distributions import IndependentNormal, IndependentBeta
 from ..modules.rnn import set_recurrent_mode, recurrent_mode
 from .common import *
 
@@ -67,7 +67,7 @@ class PPOConfig:
     lr_end: float = 1e-4
     lr_decay_iters: int = 500
 
-    desired_kl: float | None = 0.01
+    desired_kl: float | None = 0.01 # None
 
     # entropy coef schedule
     entropy_coef_start: float = 0.001
@@ -79,7 +79,8 @@ class PPOConfig:
 
     clip_neg_reward: bool = True
 
-    rec_weight: float = 0.0
+    normalize_before_sum: bool = False
+
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
 
@@ -92,7 +93,7 @@ class PPOConfig:
     phase: str = "train"
     vecnorm: Union[str, None] = None
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = ("command", OBS_KEY, OBS_PRIV_KEY, "ext", "ext_")
+    in_keys: List[str] = (CMD_KEY, OBS_KEY, OBS_PRIV_KEY)
 
 cs = ConfigStore.instance()
 cs.store("ppo_roa_train", node=PPOConfig(phase="train", vecnorm="train", entropy_coef_start=0.001, entropy_coef_end=0.000), group="algo")
@@ -173,7 +174,15 @@ class PPOROA(TensorDictModuleBase):
         self.adapt_loss_fn = nn.MSELoss(reduction="none")
         self.rec_loss = nn.MSELoss(reduction="none")
         self.gae = GAE(0.99, 0.95)
-        self.value_norm = ValueNormFake(input_shape=1).to(self.device)
+        self.reward_groups = list(env.cfg.reward.keys())
+        num_reward_groups = len(self.reward_groups)
+        self.reward_scales = torch.ones(num_reward_groups, device=self.device)
+        self.reward_scales /= self.reward_scales.sum()
+        if cfg.value_norm:
+            value_norm_cls = ValueNorm1
+        else:
+            value_norm_cls = ValueNormFake
+        self.value_norm = value_norm_cls(input_shape=num_reward_groups).to(self.device)
 
 
         self.action_dim = action_spec.shape[-1]
@@ -207,27 +216,30 @@ class PPOROA(TensorDictModuleBase):
         else:
             raise ValueError(f"Invalid adapt module: {self.cfg.adapt_module}")
         
-        def build_actor(in_keys: List[str]) -> ProbabilisticActor:
+        def build_actor(in_keys: List[str], dist_cls, dist_keys) -> ProbabilisticActor:
             actor_module = Seq(
                     CatTensors(in_keys, "_actor_inp", del_keys=False, sort=False),
                     Mod(make_mlp([512, 256, 256]), ["_actor_inp"], ["_actor_feature"]),
-                    Mod(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], ["loc", "scale"])
+                    Mod(Actor(self.action_dim, init_noise_scale=self.cfg.init_noise_scale, load_noise_scale=self.cfg.load_noise_scale), ["_actor_feature"], dist_keys)
             )
             actor = ProbabilisticActor(
                 module=actor_module,
-                in_keys=["loc", "scale"],
+                in_keys=dist_keys,
                 out_keys=[ACTION_KEY],
-                distribution_class=IndependentNormal,
+                distribution_class=dist_cls,
                 return_log_prob=True
             ).to(self.device)
             return actor
 
+        self.dist_cls = IndependentNormal
+        self.dist_keys = IndependentNormal.dist_keys
+
         in_keys = [CMD_KEY, OBS_KEY, "priv_feature"]
-        self.actor = build_actor(in_keys)
+        self.actor = build_actor(in_keys, self.dist_cls, self.dist_keys)
         in_keys = [CMD_KEY, OBS_KEY, "priv_pred"]
-        self.actor_adapt = build_actor(in_keys)
-        
-        _critic = nn.Sequential(make_mlp([512, 256, 128]), nn.LazyLinear(1))
+        self.actor_adapt = build_actor(in_keys, self.dist_cls, self.dist_keys)
+
+        _critic = nn.Sequential(make_mlp([512, 256, 128]), nn.LazyLinear(num_reward_groups))
         self.critic = Seq(
             CatTensors([CMD_KEY, OBS_KEY, OBS_PRIV_KEY], "_critic_input", del_keys=False),
             Mod(_critic, ["_critic_input"], ["state_value"])
@@ -279,7 +291,6 @@ class PPOROA(TensorDictModuleBase):
             ],
             lr=self.lr,
         )
-        
         self.num_updates = 0
     
     def make_tensordict_primer(self):
@@ -301,7 +312,7 @@ class PPOROA(TensorDictModuleBase):
             modules.append(self.adapt_ema)
             modules.append(self.actor_adapt)
 
-        out_keys = ["sample_log_prob", "action", "loc", "scale"]
+        out_keys = ["sample_log_prob", "action"] + self.dist_keys
         if self.cfg.adapt_module == "gru":
             out_keys.append(("next", "adapt_hx"))
         if self.cfg.phase == "finetune":
@@ -332,7 +343,6 @@ class PPOROA(TensorDictModuleBase):
     def train_policy(self, tensordict: TensorDict):    
         infos = []
         self._compute_advantage(tensordict, self.critic, "adv", "ret", update_value_norm=True)
-        tensordict["adv"] = normalize(tensordict["adv"], subtract_mean=True)
 
         # entropy coef schedule
         current_iter = self.env.current_iter
@@ -342,7 +352,9 @@ class PPOROA(TensorDictModuleBase):
         for epoch in range(self.cfg.ppo_epochs):
             batch = make_batch(tensordict, self.cfg.num_minibatches)
             for minibatch in batch:
-                infos.append(self._update(minibatch))
+                info = {}
+                info.update(self._update_ppo(minibatch))
+                infos.append(info)
 
                 if self.desired_kl is not None: # adaptive learning rate
                     kl = infos[-1]["actor/kl"]
@@ -360,9 +372,15 @@ class PPOROA(TensorDictModuleBase):
                 
         infos = pytree.tree_map(lambda *xs: sum(xs).item() / len(xs), *infos)
         infos["actor/lr"] = self.lr
-        infos["critic/value_mean"] = tensordict["ret"].mean().item()
-        infos["critic/value_std"] = tensordict["ret"].std().item()
+        infos["actor/entropy_coef"] = self.entropy_coef
         infos["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
+
+        ret = tensordict["ret"]
+        ret_mean = ret.mean(dim=(0, 1))
+        ret_std = ret.std(dim=(0, 1))
+        for i, group_name in enumerate(self.reward_groups):
+            infos[f"critic/{group_name}.ret_mean"] = ret_mean[i].item()
+            infos[f"critic/{group_name}.ret_std"] = ret_std[i].item()
         return dict(sorted(infos.items()))
     
     @set_recurrent_mode(True)
@@ -410,7 +428,7 @@ class PPOROA(TensorDictModuleBase):
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)  
+        rewards = tensordict[REWARD_KEY]
         if self.cfg.clip_neg_reward:
             rewards = rewards.clamp_min(0.)
         discount = tensordict["next", "discount"]
@@ -420,17 +438,38 @@ class PPOROA(TensorDictModuleBase):
         next_values = self.value_norm.denormalize(next_values)
 
         adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
+
+        # Compute and normalize the advantages
+        # [num_steps, num_envs, num_reward_groups]
+        if self.cfg.normalize_before_sum: # normalize, scale, sum
+            adv_norm = (adv - adv.mean(dim=(0, 1))) / (adv.std(dim=(0, 1)) + 1e-8)
+            adv_norm *= self.reward_scales
+            # [num_steps, num_envs, num_reward_groups]
+            adv_norm_sum = adv_norm.sum(dim=2, keepdim=True)
+            # [num_steps, num_envs, 1]
+            adv_final = adv_norm_sum
+        else: # scale, sum, normalize
+            adv *= self.reward_scales
+            adv_sum = adv.sum(dim=2, keepdim=True)
+            # [num_steps, num_envs, 1]
+            adv_sum_norm = (adv_sum - adv_sum.mean(dim=(0, 1))) / (adv_sum.std(dim=(0, 1)) + 1e-8)
+            # [num_steps, num_envs, 1]
+            adv_final = adv_sum_norm
+
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
 
-        tensordict.set(adv_key, adv)
+        tensordict.set(adv_key, adv_final)
+        # shape: (N, T, 1)
         tensordict.set(ret_key, ret)
+        tensordict["adv_before_norm"] = adv
+        # shape: (N, T, num_reward_groups)
         return tensordict
 
     # @torch.compile
-    def _update(self, tensordict: TensorDict):
-        loc_old, scale_old = tensordict["loc"], tensordict["scale"]
+    def _update_ppo(self, tensordict: TensorDict):
+        dist_kwargs_old = tensordict.select(*self.dist_keys)
 
         if self.cfg.phase == "train":
             self.encoder_priv(tensordict)
@@ -438,7 +477,7 @@ class PPOROA(TensorDictModuleBase):
         else:
             actor = self.actor_adapt
 
-        dist: IndependentNormal = actor.get_dist(tensordict)
+        dist: D.Independent = actor.get_dist(tensordict)
         log_probs = dist.log_prob(tensordict[ACTION_KEY])
         entropy = dist.entropy().mean()
 
@@ -446,6 +485,7 @@ class PPOROA(TensorDictModuleBase):
             valid = (tensordict["step_count"] > 1)
         else:
             valid = (tensordict["step_count"] > 5)
+        valid = valid.squeeze(-1)
 
         adv = tensordict["adv"]
         log_ratio = (log_probs - tensordict["sample_log_prob"]).unsqueeze(-1)
@@ -458,9 +498,9 @@ class PPOROA(TensorDictModuleBase):
         b_returns = tensordict["ret"]
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
-        value_loss = (value_loss[valid]).mean()
+        value_loss = value_loss[valid].mean(dim=0)
 
-        loss = policy_loss + entropy_loss + value_loss
+        loss = policy_loss + entropy_loss + value_loss.mean()
 
         self.opt_policy.zero_grad()
         self.opt_critic.zero_grad()
@@ -475,28 +515,33 @@ class PPOROA(TensorDictModuleBase):
         self.opt_critic.step()
         
         with torch.no_grad():
-            explained_var = 1 - value_loss / b_returns[valid].var()
+            explained_var = 1 - value_loss / b_returns[valid].var(dim=0)
             clipfrac = ((ratio - 1.0).abs() > self.clip_param).float().mean()
-            loc, scale = dist.loc, dist.scale
-            kl = torch.sum(
-                torch.log(scale) - torch.log(scale_old)
-                + (torch.square(scale_old) + torch.square(loc_old - loc)) / (2.0 * torch.square(scale))
-                - 0.5,
-                dim=-1,
-            ).mean()
-        return {
+            # loc, scale = dist.loc, dist.scale
+            # kl = torch.sum(
+            #     torch.log(scale) - torch.log(scale_old)
+            #     + (torch.square(scale_old) + torch.square(loc_old - loc)) / (2.0 * torch.square(scale))
+            #     - 0.5,
+            #     dim=-1,
+            # ).mean()
+            dist_old = self.dist_cls(**dist_kwargs_old)
+            kl = D.kl_divergence(dist_old, dist).mean()
+
+        info = {
             "actor/policy_loss": policy_loss.detach(),
             "actor/entropy": entropy.detach(),
             "actor/mean_std": tensordict["scale"].detach().mean(),
             "actor/grad_norm": actor_grad_norm,
             "actor/clamp_ratio": clipfrac,
             "actor/kl": kl,
-            "critic/value_loss": value_loss.detach(),
-            "critic/grad_norm": critic_grad_norm,
-            "critic/explained_var": explained_var,
             "actor/priv_grad_norm": priv_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+            "critic/grad_norm": critic_grad_norm,
         }
+        for i, group_name in enumerate(self.reward_groups):
+            info[f"critic/{group_name}.explained_var"] = explained_var[i]
+            info[f"critic/{group_name}.value_loss"] = value_loss[i].detach()
+        return info
 
     def state_dict(self):
         state_dict = OrderedDict()

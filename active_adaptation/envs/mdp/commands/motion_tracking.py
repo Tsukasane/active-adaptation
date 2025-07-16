@@ -1256,6 +1256,8 @@ class MotionTrackingCommand(Command):
         self.ref_joint_vel_future_ = self.future_ref_motion.joint_vel[..., self.tracking_joint_indices_motion]
         self.ref_root_pos_future_w = self.future_ref_motion.body_pos_w[..., self.root_body_idx_motion, :] + self.env.scene.env_origins[:, None, :]
         self.ref_root_quat_future_w = self.future_ref_motion.body_quat_w[..., self.root_body_idx_motion, :]
+        self.ref_root_lin_vel_future_w = self.future_ref_motion.body_lin_vel_w[..., self.root_body_idx_motion, :]
+        self.ref_root_ang_vel_future_w = self.future_ref_motion.body_ang_vel_w[..., self.root_body_idx_motion, :]
 
         # Reward: current robot and ref motion for reward computation
         self.robot_body_pos_w = self.asset.data.body_link_pos_w[:, self.tracking_body_indices_asset]
@@ -1276,6 +1278,8 @@ class MotionTrackingCommand(Command):
         self.ref_joint_vel = self.ref_joint_vel_future_[:, 0]
         self.ref_root_pos_w = self.ref_root_pos_future_w[:, 0]
         self.ref_root_quat_w = self.ref_root_quat_future_w[:, 0]
+        self.ref_root_lin_vel_w = self.ref_root_lin_vel_future_w[:, 0]
+        self.ref_root_ang_vel_w = self.ref_root_ang_vel_future_w[:, 0]
         # shape: [num_envs, num_future_steps, num_tracking_bodies, xxx]
 
 

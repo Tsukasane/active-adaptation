@@ -47,7 +47,7 @@ from typing import Union, List
 from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
-from ..modules.distributions import IndependentNormal, IndependentBeta
+from ..modules.distributions import IndependentNormal
 from ..modules.rnn import set_recurrent_mode, recurrent_mode
 from .common import *
 
@@ -62,12 +62,13 @@ class AMPConfig:
             # r"data/motion/AMASS/KIT/348/.*bend_right.*_poses",
             # r"data/motion/AMASS/KIT/348/.*walking_slow.*_poses",
             # r"data/motion/AMASS/KIT/348/.*walking_medium.*_poses",
-            r"data/motion/AMASS/ACCAD/Female1Walking_c3d-z=-0.1/.*",
+            # r"data/motion/AMASS/ACCAD/Female1Walking_c3d-z=-0.1/.*",
+            r"data/motion/default_controller/low_speed/segment-.*",
     )
     lr: float = 1e-5
     weight_decay: float = 1e-3
-    reward_scale: float = 0.01
-    gan_type: str = "gan" # "gan", "wgan", "lsgan"
+    reward_scale: float = 1.0
+    gan_type: str = "lsgan" # "gan", "wgan", "lsgan"
 
     amp_normalizer_source: List[str] = ("expert",) # ("expert", "policy", "policy_replay")
 
@@ -83,13 +84,10 @@ class AMPConfig:
 class PPOConfig:
     _target_: str = "active_adaptation.learning.ppo.ppo_amp.PPOAMP"
     name: str = "ppo_amp"
-    train_every: int = 24
-    ppo_epochs: int = 5
+    train_every: int = 32
+    ppo_epochs: int = 3
     num_minibatches: int = 8
     clip_param: float = 0.2
-
-    distribution_class: str = "IndependentNormal" # IndependentNormal | IndependentBeta
-    # distribution_class: str = "IndependentBeta" # IndependentNormal | IndependentBeta
 
     # lr linear schedule or adaptive lr
     lr_start: float = 3e-4
@@ -104,14 +102,14 @@ class PPOConfig:
     entropy_decay_iters: int = 1500
 
     init_noise_scale: float = 1.5
-    load_noise_scale: float | None = None
+    load_noise_scale: float | None = 0.5
 
     clip_neg_reward: bool = True
 
-    normalize_before_sum: bool = False
+    normalize_before_sum: bool = True
 
     layer_norm: Union[str, None] = "before"
-    value_norm: bool = False
+    value_norm: bool = True
 
     adapt_module: str = "mlp" # "gru", "mlp"
     latent_dim: int = 256
@@ -127,9 +125,9 @@ class PPOConfig:
     amp: AMPConfig = field(default_factory=AMPConfig)
 
 cs = ConfigStore.instance()
-cs.store("ppo_amp_train", node=PPOConfig(phase="train", vecnorm="train", entropy_coef_start=0.004, entropy_coef_end=0.004), group="algo")
+cs.store("ppo_amp_train", node=PPOConfig(phase="train", vecnorm="train", entropy_coef_start=0.001, entropy_coef_end=0.001), group="algo")
 cs.store("ppo_amp_adapt", node=PPOConfig(phase="adapt", vecnorm="eval", entropy_coef_start=0.00, entropy_coef_end=0.00), group="algo")
-cs.store("ppo_amp_finetune", node=PPOConfig(phase="finetune", vecnorm="eval", entropy_coef_start=0.00, entropy_coef_end=0.00), group="algo")
+cs.store("ppo_amp_finetune", node=PPOConfig(phase="finetune", vecnorm="eval", entropy_coef_start=0.001, entropy_coef_end=0.001), group="algo")
 
 class GRU(nn.Module):
     def __init__(
@@ -183,10 +181,10 @@ class PPOAMP(TensorDictModuleBase):
                      "adv", "ret", "is_init", "sample_log_prob", "step_count"]
     
     def __init__(
-        self, 
-        cfg: PPOConfig, 
-        observation_spec: CompositeSpec, 
-        action_spec: CompositeSpec, 
+        self,
+        cfg: PPOConfig,
+        observation_spec: CompositeSpec,
+        action_spec: CompositeSpec,
         reward_spec: TensorSpec,
         device,
         env
@@ -205,13 +203,22 @@ class PPOAMP(TensorDictModuleBase):
         self.adapt_loss_fn = nn.MSELoss(reduction="none")
         self.rec_loss = nn.MSELoss(reduction="none")
         self.gae = GAE(0.99, 0.95)
-        self.value_norm = ValueNormFake(input_shape=1).to(self.device)
+
+        self.reward_groups = list(env.cfg.reward.keys()) + ["amp"]
+        num_reward_groups = len(self.reward_groups)
+        self.reward_scales = torch.ones(num_reward_groups, device=self.device)
+        self.reward_scales[-1] = self.cfg.amp.reward_scale
+        self.reward_scales /= self.reward_scales.sum()
+
+        if cfg.value_norm:
+            value_norm_cls = ValueNorm1
+        else:
+            value_norm_cls = ValueNormFake
+        self.value_norm = value_norm_cls(input_shape=num_reward_groups).to(self.device)
 
 
         self.action_dim = action_spec.shape[-1]
         self.joint_names = env.action_manager.joint_names
-        joint_ids = env.action_manager.joint_ids
-        self.joint_pos_limits = env.action_manager.asset.data.joint_pos_limits[:, joint_ids]
         
         fake_input = observation_spec.zero()
         
@@ -256,22 +263,14 @@ class PPOAMP(TensorDictModuleBase):
             ).to(self.device)
             return actor
 
-        if self.cfg.distribution_class == "IndependentNormal":
-            self.dist_cls = IndependentNormal
-            self.dist_keys = IndependentNormal.dist_keys
-        elif self.cfg.distribution_class == "IndependentBeta":
-            self.dist_cls = functools.partial(IndependentBeta, min=self.joint_pos_limits[:, 0], max=self.joint_pos_limits[:, 1])
-            self.dist_keys = IndependentBeta.dist_keys
+        self.dist_cls = IndependentNormal
+        self.dist_keys = IndependentNormal.dist_keys
 
         in_keys = [CMD_KEY, OBS_KEY, "priv_feature"]
         self.actor = build_actor(in_keys, self.dist_cls, self.dist_keys)
         in_keys = [CMD_KEY, OBS_KEY, "priv_pred"]
         self.actor_adapt = build_actor(in_keys, self.dist_cls, self.dist_keys)
 
-        self.reward_groups = list(self.env.cfg.reward.keys()) + ["amp"]
-        num_reward_groups = len(self.reward_groups)
-        self.reward_scales = torch.ones(num_reward_groups, device=self.device)
-        self.reward_scales[-1] = self.cfg.amp.reward_scale
         _critic = nn.Sequential(make_mlp([512, 256, 128]), nn.LazyLinear(num_reward_groups))
         self.critic = Seq(
             CatTensors([CMD_KEY, OBS_KEY, OBS_PRIV_KEY, AMP_KEY], "_critic_input", del_keys=False),
@@ -455,6 +454,7 @@ class PPOAMP(TensorDictModuleBase):
                 
         infos = pytree.tree_map(lambda *xs: sum(xs).item() / len(xs), *infos)
         infos["actor/lr"] = self.lr
+        infos["actor/entropy_coef"] = self.entropy_coef
         infos["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
 
         ret = tensordict["ret"]
@@ -510,6 +510,9 @@ class PPOAMP(TensorDictModuleBase):
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
+        rewards = tensordict[REWARD_KEY]
+
+        # compute AMP reward
         amp_logits = self.amp_logits(tensordict[AMP_KEY])
         if self.cfg.amp.gan_type == "gan":
             s = torch.sigmoid(amp_logits).clamp(1e-5, 1 - 1e-5)
@@ -522,7 +525,6 @@ class PPOAMP(TensorDictModuleBase):
                 min=0.0, max=1.0
             )
 
-        rewards = tensordict[REWARD_KEY]
         rewards = torch.concat([rewards, amp_reward], dim=-1)
         if self.cfg.clip_neg_reward:
             rewards = rewards.clamp_min(0.)
@@ -535,29 +537,30 @@ class PPOAMP(TensorDictModuleBase):
         adv, ret = self.gae(rewards, terms, dones, values, next_values, discount)
 
         # Compute and normalize the advantages
-        adv_unnormalized = adv
         # [num_steps, num_envs, num_reward_groups]
-        if self.cfg.normalize_before_sum:
-            advantages_normalized = (adv_unnormalized - adv_unnormalized.mean(dim=(0, 1))) / (adv_unnormalized.std(dim=(0, 1)) + 1e-8)
-            adv_unnormalized *= self.reward_scales
+        if self.cfg.normalize_before_sum: # normalize, scale, sum
+            adv_norm = (adv - adv.mean(dim=(0, 1))) / (adv.std(dim=(0, 1)) + 1e-8)
+            adv_norm *= self.reward_scales
             # [num_steps, num_envs, num_reward_groups]
-            adv = advantages_normalized.sum(dim=2, keepdim=True)
+            adv_norm_sum = adv_norm.sum(dim=2, keepdim=True)
             # [num_steps, num_envs, 1]
-        else:
-            adv_unnormalized *= self.reward_scales
-            advantages_unnormalized_sumed = adv_unnormalized.sum(dim=2, keepdim=True)
+            adv_final = adv_norm_sum
+        else: # scale, sum, normalize
+            adv *= self.reward_scales
+            adv_sum = adv.sum(dim=2, keepdim=True)
             # [num_steps, num_envs, 1]
-            adv = (advantages_unnormalized_sumed - advantages_unnormalized_sumed.mean(dim=(0, 1))) / (advantages_unnormalized_sumed.std(dim=(0, 1)) + 1e-8)
+            adv_sum_norm = (adv_sum - adv_sum.mean(dim=(0, 1))) / (adv_sum.std(dim=(0, 1)) + 1e-8)
             # [num_steps, num_envs, 1]
+            adv_final = adv_sum_norm
 
         if update_value_norm:
             self.value_norm.update(ret)
         ret = self.value_norm.normalize(ret)
 
-        tensordict.set(adv_key, adv)
+        tensordict.set(adv_key, adv_final)
         # shape: (N, T, 1)
         tensordict.set(ret_key, ret)
-        tensordict["adv_before_norm"] = adv_unnormalized
+        tensordict["adv_before_norm"] = adv
         # shape: (N, T, num_reward_groups)
         return tensordict
 
@@ -592,8 +595,9 @@ class PPOAMP(TensorDictModuleBase):
         b_returns = tensordict["ret"]
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
+        value_loss = value_loss[valid].mean(dim=0)
 
-        loss = policy_loss + entropy_loss + value_loss[valid].mean()
+        loss = policy_loss + entropy_loss + value_loss.mean()
 
         self.opt_policy.zero_grad()
         self.opt_critic.zero_grad()
@@ -603,12 +607,12 @@ class PPOAMP(TensorDictModuleBase):
         if self.cfg.phase == "train":
             priv_grad_norm = nn.utils.clip_grad_norm_(self.encoder_priv.parameters(), self.cfg.max_grad_norm)
         else:
-            priv_grad_norm = 0.
+            priv_grad_norm = torch.zeros(1)
         self.opt_policy.step()
         self.opt_critic.step()
         
         with torch.no_grad():
-            explained_var = 1 - value_loss[valid].mean(dim=0) / b_returns[valid].var(dim=0)
+            explained_var = 1 - value_loss / b_returns[valid].var(dim=0)
             clipfrac = ((ratio - 1.0).abs() > self.clip_param).float().mean()
             # loc, scale = dist.loc, dist.scale
             # kl = torch.sum(
@@ -627,14 +631,13 @@ class PPOAMP(TensorDictModuleBase):
             "actor/grad_norm": actor_grad_norm,
             "actor/clamp_ratio": clipfrac,
             "actor/kl": kl,
-            "critic/value_loss": value_loss[valid].mean().detach(),
-            "critic/grad_norm": critic_grad_norm,
-            # "critic/explained_var": explained_var,
             "actor/priv_grad_norm": priv_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+            "critic/grad_norm": critic_grad_norm,
         }
         for i, group_name in enumerate(self.reward_groups):
             info[f"critic/{group_name}.explained_var"] = explained_var[i]
+            info[f"critic/{group_name}.value_loss"] = value_loss[i].detach()
         return info
     
     def _update_amp(self, tensordict: TensorDict):
@@ -655,8 +658,6 @@ class PPOAMP(TensorDictModuleBase):
         # compute discriminator loss
         expert_logits = self.amp_logits(expert_amp_obs)
         policy_logits = self.amp_logits(policy_amp_obs)
-        if self.amp_replay_buffer is not None:
-            policy_logits_replay = self.amp_logits(policy_amp_obs_replay)
 
         if self.cfg.amp.gan_type == "gan":
             expert_loss = -torch.nn.functional.logsigmoid(expert_logits)
@@ -672,6 +673,7 @@ class PPOAMP(TensorDictModuleBase):
             discriminator_loss = expert_loss + policy_loss
 
         if self.amp_replay_buffer is not None:
+            policy_logits_replay = self.amp_logits(policy_amp_obs_replay)
             if self.cfg.amp.gan_type == "gan":
                 policy_loss_replay = torch.nn.functional.softplus(-policy_logits_replay)
                 discriminator_loss += policy_loss_replay
@@ -749,10 +751,3 @@ class PPOAMP(TensorDictModuleBase):
         self.env.set_progress(state_dict.get("last_iter", 0))
 
         return failed_keys
-
-
-def normalize(x: torch.Tensor, subtract_mean: bool=False):
-    if subtract_mean:
-        return (x - x.mean()) / x.std().clamp(1e-7)
-    else:
-        return x  / x.std().clamp(1e-7)

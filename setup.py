@@ -22,5 +22,7 @@ setup(
         "torch==2.7.1",
         "torchrl==0.7.0",
         "tensordict==0.7.0",
+        "torchvision==0.22.1",
+        "setproctitle",
     ],
 )

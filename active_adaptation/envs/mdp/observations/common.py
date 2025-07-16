@@ -3,7 +3,7 @@ import numpy as np
 import einops
 from typing import Tuple, TYPE_CHECKING
 
-from isaaclab.utils.math import quat_apply_yaw, quat_mul, quat_conjugate, matrix_from_quat
+from isaaclab.utils.math import quat_apply_yaw, quat_mul, quat_conjugate, matrix_from_quat, quat_apply_inverse
 from isaaclab.utils.string import resolve_matching_names
 import active_adaptation
 from active_adaptation.envs.mdp.base import Observation
@@ -1703,6 +1703,16 @@ class body_height(Observation):
 
     def symmetry_transforms(self):
         return sym_utils.cartesian_space_symmetry(self.asset, self.body_names, sign=(1,))
+
+
+class random_noise_placeholder(Observation):
+    def __init__(self, env, dim: int, noise_std: float=1.0):
+        self.noise_std = noise_std
+        super().__init__(env)
+        self.dim = dim
+    
+    def compute(self) -> torch.Tensor:
+        return torch.randn(self.num_envs, self.dim, device=self.device).clamp(-3, 3) * self.noise_std
 
 # obs for amp
 

@@ -29,6 +29,12 @@ class SimpleEnv(_Env):
                 ViewerCfg(self.cfg.viewer.eye, self.cfg.viewer.lookat, origin_type="env")
             )
 
+            look_at_env_id = self.lookat_env_i
+            self.sim.set_camera_view(
+                eye=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.eye),
+                target=self.robot.data.root_pos_w[look_at_env_id].cpu() + torch.as_tensor(self.cfg.viewer.lookat)
+            )
+
         self.action_buf: torch.Tensor = self.action_manager.action_buf
         self.last_action: torch.Tensor = self.action_manager.applied_action
 
