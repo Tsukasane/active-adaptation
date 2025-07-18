@@ -63,7 +63,8 @@ class AMPConfig:
             # r"data/motion/AMASS/KIT/348/.*walking_slow.*_poses",
             # r"data/motion/AMASS/KIT/348/.*walking_medium.*_poses",
             # r"data/motion/AMASS/ACCAD/Female1Walking_c3d-z=-0.1/.*",
-            r"data/motion/default_controller/low_speed/segment-.*",
+            # r"data/motion/default_controller/low_speed/segment-.*",
+            r"data/motion/0531pap_val/.*",
     )
     lr: float = 1e-5
     weight_decay: float = 1e-3
@@ -427,7 +428,7 @@ class PPOAMP(TensorDictModuleBase):
 
         # entropy coef schedule
         current_iter = self.env.current_iter
-        entropy_progress = np.clip(current_iter / self.cfg.entropy_decay_iters, 0., 1.)
+        entropy_progress = float(np.clip(current_iter / self.cfg.entropy_decay_iters, 0., 1.))
         self.entropy_coef = self.cfg.entropy_coef_start + (self.cfg.entropy_coef_end - self.cfg.entropy_coef_start) * entropy_progress
 
         for epoch in range(self.cfg.ppo_epochs):

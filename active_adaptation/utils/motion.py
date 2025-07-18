@@ -217,7 +217,7 @@ class MotionDataset:
         with open(meta_path, "r") as f:
             meta = json.load(f)
         
-        motion_paths = list(sorted(Path(root_path).rglob("*.npz")))
+        motion_paths = list(sorted(Path(root_path).rglob("motion.npz")))
         if not motion_paths:
             raise RuntimeError(f"No motions found in {root_path}")
         print(f"Found {len(motion_paths)} motion files under {root_path}")
@@ -225,7 +225,7 @@ class MotionDataset:
         motions = []
         total_length = 0
         for i, motion_path in enumerate(tqdm(motion_paths)):
-            motion = dict(np.load(motion_path))
+            motion = dict(np.load(motion_path, allow_pickle=True))
             motion = interpolate(motion, source_fps=meta["fps"], target_fps=target_fps)
             total_length += motion["body_pos_w"].shape[0]
             motions.append(motion)

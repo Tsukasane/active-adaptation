@@ -69,8 +69,30 @@ class SimpleEnv(_Env):
             scene_cfg.robot.spawn.usd_path = scene_cfg.robot.spawn.usd_path.format(ROBOT_TYPE=robot_type)
 
             for obj_name in self.cfg.get("object_names", []):
-                setattr(scene_cfg, obj_name, OBJECTS[obj_name])
-                getattr(scene_cfg, obj_name).prim_path = "{ENV_REGEX_NS}/" + obj_name
+                obj_cfg = OBJECTS[obj_name]
+                obj_cfg.prim_path = "{ENV_REGEX_NS}/" + obj_name
+                setattr(scene_cfg, obj_name, obj_cfg)
+                if obj_name == "box_small":
+                    # add contact sensor to the box
+                    scene_cfg.left_hand_box = ContactSensorCfg(
+                        prim_path="{ENV_REGEX_NS}/Robot/left_wrist_yaw_link",
+                        history_length=0,
+                        track_air_time=False,
+                        filter_prim_paths_expr=["{ENV_REGEX_NS}/box_small"],
+                    )
+                    scene_cfg.right_hand_box = ContactSensorCfg(
+                        prim_path="{ENV_REGEX_NS}/Robot/right_wrist_yaw_link",
+                        history_length=0,
+                        track_air_time=False,
+                        filter_prim_paths_expr=["{ENV_REGEX_NS}/box_small"],
+                    )
+                    
+                    # scene_cfg.contact_forces_box = ContactSensorCfg(
+                    #     prim_path="{ENV_REGEX_NS}/box_small/.*",
+                    #     history_length=3,
+                    #     track_air_time=True,
+                    #     filter_prim_paths_expr=["{ENV_REGEX_NS}/Robot/.*"],
+                    # )
 
             body_scale_rand = self.cfg.randomization.get("body_scale", None)
             if body_scale_rand is not None:

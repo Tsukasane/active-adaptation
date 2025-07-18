@@ -346,7 +346,7 @@ class PPOROA(TensorDictModuleBase):
 
         # entropy coef schedule
         current_iter = self.env.current_iter
-        entropy_progress = np.clip(current_iter / self.cfg.entropy_decay_iters, 0., 1.)
+        entropy_progress = float(np.clip(current_iter / self.cfg.entropy_decay_iters, 0., 1.))
         self.entropy_coef = self.cfg.entropy_coef_start + (self.cfg.entropy_coef_end - self.cfg.entropy_coef_start) * entropy_progress
 
         for epoch in range(self.cfg.ppo_epochs):

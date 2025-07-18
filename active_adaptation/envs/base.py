@@ -28,8 +28,6 @@ if active_adaptation.get_backend() == "isaac":
     from isaaclab.utils.warp import convert_to_warp_mesh, raycast_mesh
     from pxr import UsdGeom, UsdPhysics
 
-from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
-
 
 def parse_name_and_class(s: str):
     pattern = r'^(\w+)\((\w+)\)$'
@@ -415,7 +413,7 @@ class _Env(EnvBase):
 
         self.stats["episode_len"][:] = self.episode_length_buf.unsqueeze(1)
         self.stats["success"][:] = (self.episode_length_buf >= self.max_episode_length * 0.9).unsqueeze(1).float()
-        if isinstance(self.command_manager, MotionTrackingCommand):
+        if hasattr(self.command_manager, "success"):
             self.stats["success"][:] = self.command_manager.success.float()
         end = time.perf_counter()
         self.reward_time = self.reward_time * self._stats_ema_decay + (end - start)
@@ -496,7 +494,7 @@ class _Env(EnvBase):
         self._compute_observation(tensordict)
         terminated = self._compute_termination()
         truncated = (self.episode_length_buf >= self.max_episode_length).unsqueeze(1)
-        if isinstance(self.command_manager, MotionTrackingCommand):
+        if hasattr(self.command_manager, "finished"):
             truncated = truncated | self.command_manager.finished
         tensordict.set("terminated", terminated)
         tensordict.set("truncated", truncated)

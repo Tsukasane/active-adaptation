@@ -26,6 +26,7 @@ ROBOTS = {
 OBJECTS = {
     "door": DOOR_CFG,
     "box": BOX_CFG,
+    "box_small": BOX_SMALL_CFG,
 }
 
 

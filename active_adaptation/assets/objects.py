@@ -93,6 +93,35 @@ BOX_CFG = RigidObjectCfg(
         ),
     ),
 )
+BOX_SMALL_CFG = RigidObjectCfg(
+    spawn=sim_utils.CuboidCfg(
+        size=(0.2, 0.2, 0.2),
+        visual_material=sim_utils.PreviewSurfaceCfg(
+            diffuse_color=(0.5, 0.5, 0.5),
+            metallic=0.2,
+            roughness=0.2,
+        ),
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.2,
+        ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            collision_enabled=True,
+        ),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=0.0,
+            max_linear_velocity=1000.0,
+            max_angular_velocity=1000.0,
+            max_depenetration_velocity=1.0,
+        ),
+    ),
+    init_state=RigidObjectCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.2),
+    ),
+)
 
 # from active_adaptation.assets.spawn import clone
 # spawn_func = BOX_CFG.spawn.func.__wrapped__
