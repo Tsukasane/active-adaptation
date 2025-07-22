@@ -33,7 +33,7 @@ wandb:
 
 
 defaults:
-  - task: Velocity
+  - task: G1/G1Track-walk
   - algo: ppo
   - _self_
 

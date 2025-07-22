@@ -73,8 +73,8 @@ def slerp(ts_target, ts_source, quat):
 
 def interpolate(motion, source_fps: int, target_fps: int):
     if source_fps != target_fps:
-        in_keys = ["body_pos_w", "body_lin_vel_w", "body_quat_w", "body_ang_vel_w", "joint_pos", "joint_vel"]
-        if not all(key in motion for key in in_keys):
+        in_keys = ["body_pos_w", "body_lin_vel_w", "body_quat_w", "body_ang_vel_w", "joint_pos", "joint_vel", "box_contact"]
+        if not all(key in in_keys for key in motion.keys()):
             raise NotImplementedError(f"interpolation is not fully implemented for some keys")
         T = motion["joint_pos"].shape[0]
         end_t = T / source_fps
@@ -88,6 +88,8 @@ def interpolate(motion, source_fps: int, target_fps: int):
         motion["body_ang_vel_w"] = lerp(ts_target, ts_source, motion["body_ang_vel_w"].reshape(T, -1)).reshape(len(ts_target), -1, 3)
         motion["joint_pos"] = lerp(ts_target, ts_source, motion["joint_pos"])
         motion["joint_vel"] = lerp(ts_target, ts_source, motion["joint_vel"])
+        if "box_contact" in motion:
+            motion["box_contact"] = lerp(ts_target, ts_source, motion["box_contact"].reshape(T, -1)).reshape(len(ts_target), -1) > 0.5
     return motion
 
 def quat_to_angular_velocity(quat: torch.Tensor, fps: float) -> torch.Tensor:
@@ -136,12 +138,14 @@ class MotionDataset:
         self,
         body_names: List[str],
         joint_names: List[str],
+        motion_paths: List[Path],
         starts: List[int],
         ends: List[int],
         data: MotionData,
     ):
         self.body_names = body_names
         self.joint_names = joint_names
+        self.motion_paths = motion_paths
         self.starts = torch.as_tensor(starts)
         self.ends = torch.as_tensor(ends)
         self.lengths = self.ends - self.starts
@@ -157,7 +161,7 @@ class MotionDataset:
         return self
 
     @classmethod
-    def create_from_path(cls, root_path: str | List[str] | str, target_fps: int = 50, memory_mapped: bool = False):
+    def create_from_path(cls, root_path: str | List[str], target_fps: int = 50, memory_mapped: bool = False):
         import active_adaptation
         base_dir = Path(active_adaptation.__file__).parent.parent
         if isinstance(root_path, ListConfig) or isinstance(root_path, list):
@@ -201,26 +205,9 @@ class MotionDataset:
         for i, meta in enumerate(metas[1:], 1):
             if meta != metas[0]:
                 raise ValueError(f"meta.json in {motion_paths[i]} differs from {motion_paths[0]}")
+        meta = metas[0]
 
-        # create a temp folder and move all motions to it
-        temp_folder = Path(tempfile.mkdtemp())
-        for i, path in enumerate(motion_paths):
-            shutil.copytree(path, temp_folder / f"motion_{i}")
-
-        meta_path_dst = temp_folder / "meta.json"
-        with open(meta_path_dst, "w") as f:
-            json.dump(metas[0], f)
-
-        data_path = str(temp_folder)
-        root_path = Path(data_path)
-        meta_path = root_path / "meta.json"
-        with open(meta_path, "r") as f:
-            meta = json.load(f)
-        
-        motion_paths = list(sorted(Path(root_path).rglob("motion.npz")))
-        if not motion_paths:
-            raise RuntimeError(f"No motions found in {root_path}")
-        print(f"Found {len(motion_paths)} motion files under {root_path}")
+        motion_paths = [path / "motion.npz" for path in motion_paths]
 
         motions = []
         total_length = 0
@@ -300,6 +287,7 @@ class MotionDataset:
         return cls(
             body_names=meta["body_names"],
             joint_names=joint_names,
+            motion_paths=motion_paths,
             starts=starts,
             ends=ends,
             data=data,

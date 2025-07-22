@@ -309,9 +309,10 @@ class cum_ang_vel_error(LocomotionTermination):
         return exceeded.unsqueeze(-1)
         
 
-from active_adaptation.envs.mdp.commands.motion_tracking import MotionTrackingCommand
+from active_adaptation.envs.mdp.commands.motion_tracking.observations import TrackObservation
+from active_adaptation.envs.mdp.commands.motion_tracking.rewards import TrackReward
 
-class command_lin_vel_b_motion(MotionTrackingCommand.TrackObservation):
+class command_lin_vel_b_motion(TrackObservation):
     """Linear velocity in robot body frame for motion tracking"""
     def compute(self):
         ref_lin_vel_w = self.command_manager.ref_root_lin_vel_w
@@ -319,13 +320,13 @@ class command_lin_vel_b_motion(MotionTrackingCommand.TrackObservation):
         ref_lin_vel_b = quat_apply_inverse(yaw_quat(robot_quat_w), ref_lin_vel_w)
         return ref_lin_vel_b[:, :2]
 
-class command_ang_vel_b_motion(MotionTrackingCommand.TrackObservation):
+class command_ang_vel_b_motion(TrackObservation):
     """Angular velocity in robot body frame for motion tracking"""
     def compute(self):
         ref_ang_vel = self.command_manager.ref_root_ang_vel_w[:, 2:3]  # z component
         return ref_ang_vel
 
-class track_lin_vel_motion(MotionTrackingCommand.TrackReward):
+class track_lin_vel_motion(TrackReward):
     """Reward for tracking linear velocity in motion tracking"""
     def __init__(self, sigma: float = 0.25, **kwargs):
         super().__init__(**kwargs)
@@ -339,7 +340,7 @@ class track_lin_vel_motion(MotionTrackingCommand.TrackReward):
         linvel_error = (robot_linvel_w - ref_lin_vel_w).norm(dim=-1)
         return torch.exp(-linvel_error / self.sigma).unsqueeze(-1)
 
-class track_ang_vel_motion(MotionTrackingCommand.TrackReward):
+class track_ang_vel_motion(TrackReward):
     """Reward for tracking angular velocity in motion tracking"""
     def __init__(self, sigma: float = 0.25, **kwargs):
         super().__init__(**kwargs)

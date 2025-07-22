@@ -30,7 +30,7 @@ if active_adaptation.get_backend() == "isaac":
 
 
 def parse_name_and_class(s: str):
-    pattern = r'^(\w+)\((\w+)\)$'
+    pattern = r'^(.+)\((.+)\)$'
     match = re.match(pattern, s)
     if match:
         name, cls = match.groups()

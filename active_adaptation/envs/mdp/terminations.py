@@ -1,52 +1,11 @@
 import torch
-import abc
-
-from typing import TYPE_CHECKING, Generic
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
     from isaaclab.sensors import ContactSensor
-    from active_adaptation.envs.base import _Env
 
-from active_adaptation.envs.mdp.base import _RegistryMixin, CT
-
-class Termination(Generic[CT], _RegistryMixin):
-    def __init__(self, env):
-        self.env: _Env = env
-        self.command_manager: CT = env.command_manager
-    
-    def update(self):
-        pass
-
-    def reset(self, env_ids):
-        pass
-    
-    @abc.abstractmethod
-    def __call__(self) -> torch.Tensor:
-        raise NotImplementedError
-    
-    @property
-    def num_envs(self) -> int:
-        return self.env.num_envs
-
-    @property
-    def device(self):
-        return self.env.device
-
-
-def termination_func(func):
-    class TermFunc(Termination):
-        def __call__(self):
-            return func(self.env)
-    return TermFunc
-
-
-def termination_wrapper(func):
-    class TerminationWrapper(Termination):
-        def __call__(self):
-            return func()
-    return TerminationWrapper
-
+from active_adaptation.envs.mdp.base import Termination
 
 class crash(Termination):
     def __init__(

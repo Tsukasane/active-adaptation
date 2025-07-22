@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import logging
-from typing import Union, TYPE_CHECKING, Dict, Tuple, Generic
+from typing import Union, TYPE_CHECKING, Dict, Tuple
 
 import active_adaptation
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
@@ -11,44 +11,13 @@ import isaaclab.utils.string as string_utils
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
-    from isaaclab.sensors import RayCaster
-    from active_adaptation.envs.base import _Env
 
 
 if active_adaptation.get_backend() == "isaac":
     from isaaclab.actuators import DCMotor, ImplicitActuator
     from active_adaptation.envs.actuator import HybridActuator
 
-from active_adaptation.envs.mdp.base import _RegistryMixin, CT
-
-class Randomization(Generic[CT], _RegistryMixin):
-    def __init__(self, env):
-        self.env: _Env = env
-        self.command_manager: CT = env.command_manager
-
-    @property
-    def num_envs(self):
-        return self.env.num_envs
-    
-    @property
-    def device(self):
-        return self.env.device
-    
-    def startup(self):
-        pass
-    
-    def reset(self, env_ids: torch.Tensor):
-        pass
-    
-    def step(self, substep):
-        pass
-
-    def update(self):
-        pass
-
-    def debug_draw(self):
-        pass
-
+from active_adaptation.envs.mdp.base import Randomization
 
 RangeType = Tuple[float, float]
 NestedRangeType = Union[RangeType, Dict[str, RangeType]]

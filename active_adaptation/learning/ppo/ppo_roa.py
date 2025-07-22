@@ -47,7 +47,7 @@ from typing import Union, List
 from collections import OrderedDict
 
 from ..utils.valuenorm import ValueNorm1, ValueNormFake
-from ..modules.distributions import IndependentNormal, IndependentBeta
+from ..modules.distributions import IndependentNormal
 from ..modules.rnn import set_recurrent_mode, recurrent_mode
 from .common import *
 
@@ -373,7 +373,6 @@ class PPOROA(TensorDictModuleBase):
         infos = pytree.tree_map(lambda *xs: sum(xs).item() / len(xs), *infos)
         infos["actor/lr"] = self.lr
         infos["actor/entropy_coef"] = self.entropy_coef
-        infos["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
 
         ret = tensordict["ret"]
         ret_mean = ret.mean(dim=(0, 1))
@@ -381,6 +380,7 @@ class PPOROA(TensorDictModuleBase):
         for i, group_name in enumerate(self.reward_groups):
             infos[f"critic/{group_name}.ret_mean"] = ret_mean[i].item()
             infos[f"critic/{group_name}.ret_std"] = ret_std[i].item()
+            infos[f"critic/{group_name}.neg_rew_ratio"] = (tensordict[REWARD_KEY][:, :, i] <= 0.).float().mean().item()
         return dict(sorted(infos.items()))
     
     @set_recurrent_mode(True)

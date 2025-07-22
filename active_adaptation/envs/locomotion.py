@@ -105,7 +105,7 @@ class SimpleEnv(_Env):
 
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
             scene_cfg.contact_forces = ContactSensorCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/.*", 
+                prim_path="{ENV_REGEX_NS}/Robot/.*(ankle_roll|wrist_yaw)_link", 
                 history_length=3,
                 track_air_time=True
             )
