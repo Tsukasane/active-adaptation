@@ -5,6 +5,11 @@ the poses over ZMQ topics. It publishes:
   • pelvis pose — pelvis position and rotation from the robot trajectory file.
   • joint positions — joint positions
   
+Keyboard controls:
+  • Space: Pause/Resume playback
+  • Left Arrow: Previous frame (when paused)
+  • Right Arrow: Next frame (when paused)
+  • Esc: Exit
 """
 
 import argparse
@@ -13,9 +18,12 @@ import time
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
+from typing import List
 
-from active_adaptation.utils.motion import MotionDataset, MotionData, unitree_joint_names
+from sshkeyboard import listen_keyboard, stop_listening
+from active_adaptation.utils.motion import MotionDataset, MotionData, unitree_joint_names, unitree_body_names
 from common import ZMQPublisher, PORTS
 
 class SMPLPublisher:
@@ -37,12 +45,12 @@ class SMPLPublisher:
         dataset = MotionDataset.create_from_path(str(self.tmp_dir), target_fps=rate).to("cpu")
         motion_data: MotionData = dataset.data
         
-        root_body_indices, root_body_names = dataset.find_bodies("pelvis")
-        assert len(root_body_indices) == 1
-        root_body_index = root_body_indices[0]
+        # root_body_indices, root_body_names = dataset.find_bodies("pelvis")
+        # assert len(root_body_indices) == 1
+        # root_body_index = root_body_indices[0]
 
-        self.root_pos_w = motion_data.body_pos_w[:, root_body_index].numpy()
-        self.root_quat_w = motion_data.body_quat_w[:, root_body_index].numpy()
+        # self.root_pos_w = motion_data.body_pos_w[:, root_body_index].numpy()
+        # self.root_quat_w = motion_data.body_quat_w[:, root_body_index].numpy()
 
         matched_joint_names = list(sorted(set(unitree_joint_names) & set(dataset.joint_names)))
         joint_indices_dataset = [dataset.joint_names.index(name) for name in matched_joint_names]
@@ -50,43 +58,104 @@ class SMPLPublisher:
         self.joint_pos = np.zeros((motion_data.joint_pos.shape[0], len(unitree_joint_names)))
         self.joint_pos[:, joint_indices_unitree] = motion_data.joint_pos[:, joint_indices_dataset]
 
+        self.body_names = list(set(dataset.body_names) - set(unitree_body_names)) + ["pelvis"]
+        body_indices_dataset = [dataset.body_names.index(name) for name in self.body_names]
+        self.body_pos_w = motion_data.body_pos_w[:, body_indices_dataset].numpy()
+        self.body_quat_w = motion_data.body_quat_w[:, body_indices_dataset].numpy()
+
         # Create ZMQ publishers
-        self.pelvis_publisher = ZMQPublisher(PORTS['pelvis_pose'])
         self.joint_publisher = ZMQPublisher(PORTS['joint_pos'])
+        self.body_publishers: List[ZMQPublisher] = []
+        for body_name in self.body_names:
+            publisher = ZMQPublisher(PORTS[f"{body_name}_pose"])
+            self.body_publishers.append(publisher)
 
         self.publish_rate = rate
         self.index = 0
         self.n_steps = dataset.num_steps
+        
+        # Playback control
+        self.paused = False
+        self.running = True
+        self.lock = threading.Lock()
+        
+        print(f"Loaded {self.n_steps} frames at {rate} Hz")
+        print("Controls: Space=Pause/Resume, Left/Right=Navigate (when paused), Esc=Exit")
 
     def publish_once(self):
-        print(f"Publishing at index {self.index}")
-        if self.index >= self.n_steps:
-            self.index = 0
-
-        pelvis_pos = self.root_pos_w[self.index]
-        pelvis_quat = self.root_quat_w[self.index]  # Expected order: [w, x, y, z]
-
-        # Publish the poses
-        self.pelvis_publisher.publish_pose(pelvis_pos, pelvis_quat)
-
         # Publish joint state
         joint_qpos = self.joint_pos[self.index]
         self.joint_publisher.publish_joint_state(joint_qpos)
+        
+        # Publish body poses
+        for i, body_publisher in enumerate(self.body_publishers):
+            body_pos = self.body_pos_w[self.index, i]
+            body_quat = self.body_quat_w[self.index, i]
+            body_publisher.publish_pose(body_pos, body_quat)
 
-        self.index += 1
+    def on_key_press(self, key):
+        """Handle keyboard input"""
+        with self.lock:
+            if key == "space":
+                self.paused = not self.paused
+                status = "PAUSED" if self.paused else "PLAYING"
+                print(f"Playback {status} (frame {self.index}/{self.n_steps-1})")
+                
+            elif key == "left" and self.paused:
+                self.index = (self.index - 1) % self.n_steps
+                print(f"Frame {self.index}/{self.n_steps-1}")
+                # Publish the current frame immediately
+                # self.publish_once()
+                
+            elif key == "right" and self.paused:
+                self.index = (self.index + 1) % self.n_steps
+                print(f"Frame {self.index}/{self.n_steps-1}")
+                # Publish the current frame immediately
+                # self.publish_once()
+                
+            elif key == "esc":
+                print("Stopping...")
+                self.running = False
+                stop_listening()
+
+    def start_keyboard_listener(self):
+        """Start keyboard listener in a separate thread"""
+        def keyboard_thread():
+            try:
+                listen_keyboard(
+                    on_press=self.on_key_press,
+                    until=None,  # Don't stop on any key, we handle it manually
+                    sequential=True
+                )
+            except Exception as e:
+                print(f"Keyboard listener error: {e}")
+        
+        thread = threading.Thread(target=keyboard_thread, daemon=True)
+        thread.start()
 
     def run(self):
         """Run the publisher in a loop"""
+        # Start keyboard listener
+        self.start_keyboard_listener()
+        
         try:
-            while True:
+            while self.running:
                 start_time = time.time()
-                self.publish_once()
+                
+                with self.lock:
+                    # Always publish current frame
+                    self.publish_once()
+                    
+                    # Only advance if not paused
+                    if not self.paused:
+                        self.index = (self.index + 1) % self.n_steps
                 
                 # Sleep to maintain the desired rate
                 elapsed = time.time() - start_time
                 sleep_time = max(0, 1.0 / self.publish_rate - elapsed)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                    
         except KeyboardInterrupt:
             print("Shutting down publisher...")
         finally:
@@ -94,7 +163,11 @@ class SMPLPublisher:
 
     def cleanup(self):
         """Clean up resources"""
-        self.pelvis_publisher.close()
+        self.running = False
+        stop_listening()
+        
+        for publisher in self.body_publishers:
+            publisher.close()
         self.joint_publisher.close()
         
         # Cleanup temporary directory
@@ -107,7 +180,7 @@ class SMPLPublisher:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Publish pelvis and joint poses using ZMQ."
+        description="Publish pelvis and joint poses using ZMQ with keyboard controls."
     )
     parser.add_argument(
         "data",

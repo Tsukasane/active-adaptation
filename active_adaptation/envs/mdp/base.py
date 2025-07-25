@@ -256,7 +256,11 @@ class Randomization(Generic[CT], _RegistryMixin):
 
 
 class Termination(Generic[CT], _RegistryMixin):
-    def __init__(self, env):
+    def __init__(self, env, **kwargs):
+        if kwargs:
+            print("Warning: Unused kwargs in Termination:", kwargs)
+            breakpoint()
+        super().__init__(**kwargs)
         self.env: _Env = env
         self.command_manager: CT = env.command_manager
     

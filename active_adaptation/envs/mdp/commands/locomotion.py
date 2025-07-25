@@ -309,8 +309,10 @@ class cum_ang_vel_error(LocomotionTermination):
         return exceeded.unsqueeze(-1)
         
 
-from active_adaptation.envs.mdp.commands.motion_tracking.observations import TrackObservation
-from active_adaptation.envs.mdp.commands.motion_tracking.rewards import TrackReward
+from active_adaptation.envs.mdp.commands.motion_tracking.command import MotionTrackingCommand
+
+TrackObservation = BaseObservation[MotionTrackingCommand]
+TrackReward = BaseReward[MotionTrackingCommand]
 
 class command_lin_vel_b_motion(TrackObservation):
     """Linear velocity in robot body frame for motion tracking"""

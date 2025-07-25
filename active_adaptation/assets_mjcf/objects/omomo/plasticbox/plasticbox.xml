@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<mujoco model="plasticbox">
+  <!-- Assets -->
+  <asset>
+    <mesh name="plasticbox_mesh" file="/home/elijah/Documents/projects/hdmi/active-adaptation/active_adaptation/assets_mjcf/objects/omomo/plasticbox/plasticbox.obj"/>
+    <!-- <mesh name="plasticbox_mesh" file="plasticbox.obj"/> -->
+  </asset>
+  
+  <!-- World body -->
+  <worldbody>
+    <body name="plasticbox_body">
+      <freejoint name="plasticbox_root"/>
+      <inertial mass="2.0" pos="0 0 0" diaginertia="0.1 0.1 0.1"/>
+
+      <site name="plasticbox_root" pos="0 0 0" size="0.02" rgba="1 0 0 1"/>
+      <site name="left_hand_contact" pos="0.2 0.1 0.0" size="0.02" rgba="1 0 0 1"/>
+      <site name="right_hand_contact" pos="-0.2 0.1 0.0" size="0.02" rgba="1 0 0 1"/>
+      <!-- Collision geometry -->
+      <geom name="plasticbox_collision" 
+            type="mesh" 
+            mesh="plasticbox_mesh" 
+            rgba="0.4 0.3 0.2 0.5"/>
+    </body>
+
+  </worldbody>
+  
+</mujoco>

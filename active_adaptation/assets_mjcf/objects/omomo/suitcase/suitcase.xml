@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<mujoco model="suitcase">
+  <!-- Assets -->
+  <asset>
+    <mesh name="suitcase_mesh" file="/home/elijah/Documents/projects/hdmi/active-adaptation/active_adaptation/assets_mjcf/objects/suitcase/suitcase.obj"/>
+  </asset>
+  
+  <!-- World body -->
+  <worldbody>
+    <body name="suitcase_body">
+      <freejoint name="suitcase_root"/>
+      <inertial mass="2.0" pos="0 0 0" diaginertia="0.1 0.1 0.1"/>
+
+      <site name="suitcase_root" pos="0 0 0" size="0.02" rgba="1 0 0 1"/>
+      <site name="left_hand_contact" pos="0.1 0.3 -0.1" size="0.02" rgba="1 0 0 1"/>
+      <site name="right_hand_contact" pos="-0.1 0.3 0.1" size="0.02" rgba="1 0 0 1"/>
+      <!-- Visual geometry -->
+      <geom name="suitcase_visual" 
+            type="mesh" 
+            mesh="suitcase_mesh" 
+            contype="0" 
+            conaffinity="0"/>
+      
+      <!-- Collision geometry -->
+      <geom name="suitcase_collision" 
+            type="mesh" 
+            mesh="suitcase_mesh" 
+            rgba="0.4 0.3 0.2 0.5"/>
+    </body>
+  </worldbody>
+  
+</mujoco>

@@ -16,6 +16,8 @@ OBJECTS = {
     "door": DOOR_CFG,
     "box": BOX_CFG,
     "box_small": BOX_SMALL_CFG,
+    "suitcase": SUITCASE_CFG,
+    "plasticbox": PLASTICBOX_CFG,
 }
 
 

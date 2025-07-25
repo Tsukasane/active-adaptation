@@ -18,6 +18,8 @@ PORTS = {
     'door_wall_left_pose': 5558,
     'joint_pos': 5559,
     'joint_vel': 5560,  # Reserved for future use
+    "suitcase_pose": 5561,
+    "plasticbox_pose": 5562,
 }
 
 # ZMQ addresses

@@ -72,28 +72,19 @@ class SimpleEnv(_Env):
                 obj_cfg = OBJECTS[obj_name]
                 obj_cfg.prim_path = "{ENV_REGEX_NS}/" + obj_name
                 setattr(scene_cfg, obj_name, obj_cfg)
-                if obj_name == "box_small":
-                    # add contact sensor to the box
-                    scene_cfg.left_hand_box = ContactSensorCfg(
-                        prim_path="{ENV_REGEX_NS}/Robot/left_wrist_yaw_link",
-                        history_length=0,
-                        track_air_time=False,
-                        filter_prim_paths_expr=["{ENV_REGEX_NS}/box_small"],
-                    )
-                    scene_cfg.right_hand_box = ContactSensorCfg(
-                        prim_path="{ENV_REGEX_NS}/Robot/right_wrist_yaw_link",
-                        history_length=0,
-                        track_air_time=False,
-                        filter_prim_paths_expr=["{ENV_REGEX_NS}/box_small"],
-                    )
-                    
-                    # scene_cfg.contact_forces_box = ContactSensorCfg(
-                    #     prim_path="{ENV_REGEX_NS}/box_small/.*",
-                    #     history_length=3,
-                    #     track_air_time=True,
-                    #     filter_prim_paths_expr=["{ENV_REGEX_NS}/Robot/.*"],
-                    # )
 
+                # add contact sensor to the box
+                eef_names = ["left_wrist_yaw_link", "right_wrist_yaw_link"]
+                for eef_name in eef_names:
+                    contact_sensor_name = f"{eef_name}_{obj_name}_contact_forces"
+                    eef_prim_path = "{ENV_REGEX_NS}/Robot/" + eef_name
+                    setattr(scene_cfg, contact_sensor_name, ContactSensorCfg(
+                        prim_path=eef_prim_path,
+                        history_length=0,
+                        track_air_time=False,
+                        filter_prim_paths_expr=[obj_cfg.prim_path],
+                    ))
+                    
             body_scale_rand = self.cfg.randomization.get("body_scale", None)
             if body_scale_rand is not None:
                 from active_adaptation.assets.spawn import clone

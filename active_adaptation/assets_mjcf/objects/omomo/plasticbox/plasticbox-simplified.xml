@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<mujoco model="plasticbox">
+  <!-- World body -->
+  <worldbody>
+    <body name="plasticbox_simplified_body">
+      <freejoint name="plasticbox_root"/>
+      <inertial mass="2.0" pos="0 0 0" diaginertia="0.1 0.1 0.1"/>
+
+      <site name="plasticbox_root" pos="0 0 0" size="0.02" rgba="1 0 0 1"/>
+      <site name="left_hand_contact" pos="0.18 0.15 0.0" size="0.02" rgba="1 0 0 1"/>
+      <site name="right_hand_contact" pos="-0.18 0.15 0.0" size="0.02" rgba="1 0 0 1"/>
+
+      <geom type="box" size="0.18 0.15 0.12" pos="0 0.15 0" quat="1 0 0 0"/>
+    </body>
+  </worldbody>
+  
+</mujoco>

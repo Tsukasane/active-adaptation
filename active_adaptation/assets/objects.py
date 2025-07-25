@@ -43,7 +43,7 @@ DOOR_CFG = ArticulationCfg(
     class_type=DoorArticulation,
     prim_path="{ENV_REGEX_NS}/Door",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/door/door.usd",
+        usd_path=f"{ASSET_PATH}/objects/door/door.usd",
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=0,
@@ -72,7 +72,7 @@ BOX_CFG = RigidObjectCfg(
     #     asset_path=f"{ASSET_PATH}/box/box.urdf",
     spawn=sim_utils.UsdFileCfg(
         scale=(1.0, 1.0, 1.0),
-        usd_path=f"{ASSET_PATH}/box/box.usd",
+        usd_path=f"{ASSET_PATH}/objects/box/box.usd",
         visual_material=sim_utils.PreviewSurfaceCfg(
             diffuse_color=(0.5, 0.5, 0.5),
             metallic=0.2,
@@ -131,3 +131,24 @@ BOX_SMALL_CFG = RigidObjectCfg(
 # size: [1.0 0.8 0.8] z: 0.6 - 0.8
 # friction 0.5-1.0
 # mass 4-8
+
+SUITCASE_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/suitcase",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/omomo/suitcase/suitcase-simplified.usd",
+        activate_contact_sensors=True,
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            articulation_enabled=False,
+        )
+    ),
+)
+PLASTICBOX_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/plasticbox",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/omomo/plasticbox/plasticbox-simplified.usd",
+        activate_contact_sensors=True,
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            articulation_enabled=False,
+        )
+    ),
+)

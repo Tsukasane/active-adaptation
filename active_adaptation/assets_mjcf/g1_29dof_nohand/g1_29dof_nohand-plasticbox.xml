@@ -1,10 +1,7 @@
 <mujoco model="g1_29dof_rev_1_0">
   <compiler angle="radian" meshdir="meshes"/>
-  <include file="../objects/box/box.xml"/>
-
-  <default>
-    <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
-  </default>
+  <!-- <include file="../objects/omomo/plasticbox/plasticbox-simplified.xml"/> -->
+  <include file="../objects/omomo/plasticbox/plasticbox.xml"/>
 
   <asset>
     <mesh name="pelvis" file="pelvis.STL"/>
@@ -118,6 +115,7 @@
                 <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="right_ankle_pitch_link"/>
                 <body name="right_ankle_roll_link" pos="0 0 -0.017558">
                   <inertial pos="0.026505 0 -0.016425" quat="0.000481092 0.728482 0.000618967 0.685065" mass="0.608" diaginertia="0.00167218 0.0016161 0.000217621"/>
+                  <site name="right_ankle_roll_link_site" pos="0 0 0.017558" size="0.01"/>
                   <joint name="right_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.2618 0.2618" actuatorfrcrange="-50 50"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.2 0.2 0.2 1" mesh="right_ankle_roll_link"/>
                   <geom size="0.005" pos="-0.05 0.025 -0.03" rgba="0.2 0.2 0.2 1"/>
@@ -183,11 +181,6 @@
                           <joint name="left_wrist_yaw_joint" pos="0 0 0" axis="0 0 1" range="-1.61443 1.61443" actuatorfrcrange="-5 5"/>
                           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1" mesh="left_wrist_yaw_link"/>
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_wrist_yaw_link"/>
-                          <!-- Add L-shaped end effector -->
-                          <geom type="box" size="0.03 0.04 0.002" pos="0.13 0 0" rgba="0.7 0.7 0.7 1"/>
-                          <geom type="box" size="0.002 0.04 0.03" pos="0.10 0 -0.03" rgba="0.7 0.7 0.7 1"/>
-                          <!-- <geom type="box" size="0.06 0.04 0.002" pos="0.12 0 0" rgba="0.7 0.7 0.7 1"/> -->
-                          <!-- <geom type="box" size="0.002 0.04 0.06" pos="0.06 0 -0.06" rgba="0.7 0.7 0.7 1"/> -->
                         </body>
                       </body>
                     </body>
@@ -230,11 +223,6 @@
                           <joint name="right_wrist_yaw_joint" pos="0 0 0" axis="0 0 1" range="-1.61443 1.61443" actuatorfrcrange="-5 5"/>
                           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link"/>
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link"/>
-                          <!-- Add L-shaped end effector -->
-                          <geom type="box" size="0.03 0.04 0.002" pos="0.13 0 0" rgba="0.7 0.7 0.7 1"/>
-                          <geom type="box" size="0.002 0.04 0.03" pos="0.10 0 -0.03" rgba="0.7 0.7 0.7 1"/>
-                          <!-- <geom type="box" size="0.06 0.04 0.002" pos="0.12 0 0" rgba="0.7 0.7 0.7 1"/> -->
-                          <!-- <geom type="box" size="0.002 0.04 0.06" pos="0.06 0 -0.06" rgba="0.7 0.7 0.7 1"/> -->
                         </body>
                       </body>
                     </body>
@@ -302,31 +290,6 @@
   </asset>
   <worldbody>
     <light pos="1 0 3.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" friction="1.0"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
   </worldbody>
-
-  <sensor>
-    <framepos name="pelvis_pos" objtype="xbody" objname="pelvis" />
-    <framequat name="pelvis_quat" objtype="xbody" objname="pelvis" />
-  </sensor>
-
-  <!-- home qpos -->
-  <keyframe>
-    <key name="home" qpos="
-    0.3 0 0
-    0 0 0 1
-
-    0 0 0.8
-    1 0 0 0
-
-    0 0 -0.15 0.30 -0.15 0.0
-    0 0 -0.15 0.30 -0.15 0.0
-
-    0 0 0
-
-    0 0 0 1 0 0 0
-    0 0 0 1 0 0 0
-    " />
-  </keyframe>
-
 </mujoco>

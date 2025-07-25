@@ -7,8 +7,11 @@ import mujoco.viewer
 
 from active_adaptation.utils.motion import unitree_joint_names
 from common import ZMQSubscriber, PORTS
+from typing import List
 
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-plasticbox.xml"
 
 class MuJoCoMocapViewer:
     def __init__(
@@ -25,9 +28,6 @@ class MuJoCoMocapViewer:
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data, show_left_ui=False, show_right_ui=False)
 
-        # Initialize ZMQ subscribers
-        self.pelvis_subscriber = ZMQSubscriber(PORTS['pelvis_pose'])
-        self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'])
         
         # Get joint IDs and addresses
         mujoco_joint_names = [self.model.joint(i).name for i in range(self.model.njnt)]
@@ -38,8 +38,16 @@ class MuJoCoMocapViewer:
         self.joint_ids_unitree = np.array(unitree_joint_indices)
         self.joint_qpos_adrs = np.array(mujoco_qpos_adrs)
 
-        pelvis_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, 'floating_base_joint')
-        self.pelvis_joint_qpos_id = self.model.jnt_qposadr[pelvis_joint_id]
+        free_joint_ids = [i for i in range(self.model.njnt) if self.model.joint(i).type == mujoco.mjtJoint.mjJNT_FREE]
+        self.free_joint_names = [self.model.joint(i).name.replace('_root', '_pose') for i in free_joint_ids]
+        self.free_joint_qpos_adrs = self.model.jnt_qposadr[free_joint_ids]
+        self.free_joint_subscribers: List[ZMQSubscriber] = []
+
+        # Initialize ZMQ subscribers
+        self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'])
+        for joint_name in self.free_joint_names:
+            subscriber = ZMQSubscriber(PORTS[joint_name])
+            self.free_joint_subscribers.append(subscriber)
 
         self.running = True
         self.comm_thread = threading.Thread(target=self.zmq_communication_loop)
@@ -51,10 +59,11 @@ class MuJoCoMocapViewer:
     def zmq_communication_loop(self):
         """Handle ZMQ communication in a separate thread"""
         while self.running:
-            pelvis_msg = self.pelvis_subscriber.receive_pose()
-            if pelvis_msg:
-                pelvis_qpos = np.concatenate([pelvis_msg.position, pelvis_msg.quaternion])
-                self.data.qpos[self.pelvis_joint_qpos_id: self.pelvis_joint_qpos_id + 7] = pelvis_qpos
+            for qpos_adr, subscriber in zip(self.free_joint_qpos_adrs, self.free_joint_subscribers):
+                pose_msg = subscriber.receive_pose()
+                if pose_msg:
+                    pose = np.concatenate([pose_msg.position, pose_msg.quaternion])
+                    self.data.qpos[qpos_adr:qpos_adr + 7] = pose
             
             joint_msg = self.joint_subscriber.receive_joint_state()
             if joint_msg:
