@@ -123,6 +123,10 @@ def frames_from_webcam():
         # x1, y1, x2, y2 = bbox
         detec_threshold = 0.6
         
+        # h, w = frame_orig.shape[:2]
+        # # only for zed2 camera
+        # frame_orig = frame_orig[:, int(w/2):, :]
+
         frame = cv2.cvtColor(frame_orig, cv2.COLOR_BGR2RGB) # send to the detector & model 
         yolo_output = det_model.predict(source=frame, show=False, classes=[0], verbose=False)
         

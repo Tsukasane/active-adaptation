@@ -288,13 +288,8 @@ class JointPosition(ActionManager):
     def __init__(
         self, 
         env,
-        joint_names: str = ".*",
         action_scaling: Dict[str, float] = 0.5,
-        left_joints = None,
-        right_joints = None,
-        asym_joints = None,
         max_delay: int = 4,
-        fixed_delay: bool = False,
         alpha: Union[float, Tuple[float, float], Dict[str, float], Dict[str, Tuple[float, float]]] = (0.5, 1.0),
         custom_command: Dict[str, float] = None,
         clip_joint_targets: float = None
@@ -302,22 +297,9 @@ class JointPosition(ActionManager):
         super().__init__(env)
         self.joint_ids, self.joint_names, self.action_scaling = string_utils.resolve_matching_names_values(
             dict(action_scaling), self.asset.joint_names, preserve_order=True)
-        if left_joints is not None:
-            self.left_joint_ids = string_utils.resolve_matching_names(left_joints, self.joint_names)[0]
-            self.right_joint_ids = string_utils.resolve_matching_names(right_joints, self.joint_names)[0]
-            assert len(self.left_joint_ids) == len(self.right_joint_ids), "Left and right joints must have the same length."
-        else:
-            self.left_joint_ids = None
-            self.right_joint_ids = None
-        
-        self.signs = torch.ones(len(self.joint_ids), device=self.device)
-        if asym_joints is not None:
-            self.asym_joint_ids = string_utils.resolve_matching_names(asym_joints, self.joint_names)[0]
-            self.signs[self.asym_joint_ids] = -1
-        
+
         self.action_scaling = torch.tensor(self.action_scaling, device=self.device)
         self.max_delay = max_delay
-        self.fixed_delay = fixed_delay
         
         self.action_dim = len(self.joint_ids)
         
@@ -353,25 +335,8 @@ class JointPosition(ActionManager):
             self.alpha = torch.ones(self.num_envs, self.action_dim)
             self.delay = torch.zeros(self.num_envs, 1, dtype=int)
 
-    
-    def fliplr(self, action: torch.Tensor):
-        """
-        Used for flipping the `action` and `prev_action`.
-        """
-        if self.left_joint_ids is None:
-            raise ValueError("Left and right joint names must be provided to flip the action.")
-        action_flipped = action.reshape(self.num_envs, self.action_dim, -1).clone()
-        left = action_flipped[:, self.left_joint_ids]
-        right = action_flipped[:, self.right_joint_ids]
-        action_flipped[:, self.left_joint_ids] = right
-        action_flipped[:, self.right_joint_ids] = left
-        return (action_flipped * self.signs.unsqueeze(-1)).reshape(action.shape)
-
     def reset(self, env_ids: torch.Tensor):
-        if self.fixed_delay:
-            self.delay[env_ids] = torch.full((len(env_ids), 1), self.max_delay, device=self.device)
-        else:
-            self.delay[env_ids] = torch.randint(0, self.max_delay + 1, (len(env_ids), 1), device=self.device)
+        self.delay[env_ids] = torch.randint(0, self.max_delay + 1, (len(env_ids), 1), device=self.device)
         self.action_buf[env_ids] = 0
         self.applied_action[env_ids] = 0
 

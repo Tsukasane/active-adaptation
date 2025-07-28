@@ -68,6 +68,11 @@ reward:
   loco:
     tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
     tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
+    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.16,
+                              joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                            .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                            .*knee.*, .*shoulder_yaw.*,
+                                            .*ankle_pitch.*, .*elbow_pitch.*]}
     tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
@@ -79,7 +84,7 @@ reward:
 
     feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
     feet_slip:          {weight: 2., enabled: true, body_names: .*ankle_roll_link, sigma: 0.16}
-    max_feet_height:    {weight: 1.5, enabled: true, body_names: .*ankle_roll_link, target_height: 0.15}
+    # max_feet_height:    {weight: 1.5, enabled: true, body_names: .*ankle_roll_link, target_height: 0.15}
 
     joint_acc_l2:       {weight: 1.0e-8, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
