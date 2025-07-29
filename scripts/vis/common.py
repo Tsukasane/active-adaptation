@@ -6,9 +6,7 @@ Defines ports and message formats for body poses and joint states.
 
 import zmq
 import numpy as np
-import json
 import struct
-from typing import Dict, List, Tuple, Optional
 
 # ZMQ Port Configuration
 PORTS = {
@@ -20,6 +18,10 @@ PORTS = {
     'joint_vel': 5560,  # Reserved for future use
     "suitcase_pose": 5561,
     "plasticbox_pose": 5562,
+    "stool_pose": 5563,
+    "ball_pose": 5564,
+    "foldchair_pose": 5565,
+    "foldchair_joint_pos": 5566,
 }
 
 # ZMQ addresses
@@ -59,7 +61,7 @@ class PoseMessage:
 
 class JointStateMessage:
     """Message format for joint state (positions and optionally velocities)"""
-    def __init__(self, positions: np.ndarray, velocities: Optional[np.ndarray] = None):
+    def __init__(self, positions: np.ndarray, velocities: np.ndarray | None = None):
         """
         Args:
             positions: Joint positions array
@@ -111,8 +113,8 @@ class ZMQPublisher:
         """Publish a pose message"""
         msg = PoseMessage(position, quaternion)
         self.socket.send(msg.to_bytes())
-    
-    def publish_joint_state(self, positions: np.ndarray, velocities: Optional[np.ndarray] = None):
+
+    def publish_joint_state(self, positions: np.ndarray, velocities: np.ndarray | None = None):
         """Publish joint state message"""
         msg = JointStateMessage(positions, velocities)
         self.socket.send(msg.to_bytes())
@@ -131,7 +133,7 @@ class ZMQSubscriber:
         self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all messages
         self.socket.setsockopt(zmq.RCVTIMEO, 10)  # 10ms timeout
         
-    def receive_pose(self) -> Optional[PoseMessage]:
+    def receive_pose(self) -> PoseMessage | None:
         """Receive a pose message"""
         try:
             data = self.socket.recv()
@@ -142,7 +144,7 @@ class ZMQSubscriber:
             print(f"Error receiving pose: {e}")
             return None
     
-    def receive_joint_state(self) -> Optional[JointStateMessage]:
+    def receive_joint_state(self) -> JointStateMessage | None:
         """Receive joint state message"""
         try:
             data = self.socket.recv()

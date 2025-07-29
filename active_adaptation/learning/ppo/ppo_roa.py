@@ -77,7 +77,7 @@ class PPOConfig:
     init_noise_scale: float = 1.5
     load_noise_scale: float | None = 0.5
 
-    clip_neg_reward: bool = True
+    clip_neg_reward: bool = False
 
     normalize_before_sum: bool = False
 

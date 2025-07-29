@@ -1,0 +1,32 @@
+<mujoco model="foldchair">
+  <compiler angle="radian" autolimits="true"/>
+  
+  <default>
+    <joint damping="0.1" frictionloss="0.01"/>
+  </default>
+
+  <asset>
+    <material name="metal" rgba="0.5 0.5 0.5 1"/>
+    <material name="wood" rgba="0.8 0.52 0.25 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="foldchair" pos="0 0 0">
+      <freejoint name="foldchair_root"/>
+      <body name="backrest_panel" quat="0.99499 0 -0.1 0">
+        <geom type="box" size="0.02 0.15 0.3" pos="-0.05 0 0.3" material="wood"/>
+      </body>
+
+      <body name="seat" pos="0 0 0" quat="0.85 0 -0.86 0">
+          <joint name="foldchair_joint" type="hinge" axis="0 1 0" pos="0 0 0" damping="50" range="-0.1 1.57"/>
+          <geom name="seat_geom" type="box" size="0.15 0.15 0.02" pos="0.13 0.0 0.0" material="metal"/>
+          <site name="left_hand_contact" pos="0.28 -0.1 0.02  " size="0.02" type="sphere" rgba="1 0 0 1"/>
+          <site name="right_hand_contact" pos="0.28 0.1 0.02" size="0.02" type="sphere" rgba="1 0 0 1"/>
+      </body>
+    </body>
+ </worldbody>
+
+  <actuator>
+    <position name="seat_actuator" joint="foldchair_joint" ctrlrange="-90 90"/>
+  </actuator>
+</mujoco>

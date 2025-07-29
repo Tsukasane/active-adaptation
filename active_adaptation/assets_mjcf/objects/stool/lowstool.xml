@@ -1,0 +1,33 @@
+<mujoco model="stool">
+  <compiler angle="radian" />
+  
+  <default>
+    <default class="stool_leg">
+      <geom type="box" size="0.02 0.02 0.15" pos="0 0 -0.15" />
+    </default>
+  </default>
+  
+  <asset>
+    <material name="white_wood" rgba="1 1 1 1" />
+  </asset>
+  
+  <worldbody>
+   <body name="stool" pos="0 0 0">
+
+      <freejoint name="stool_root" />
+      <site name="stool_root" pos="0 0 0" size="0.05" type="sphere" rgba="0.5 0.5 0.5 1"/>
+      <site name="left_hand_contact" pos="-0.1 0.22 0" size="0.02" type="sphere" rgba="1 0 0 1"/>
+      <site name="right_hand_contact" pos="-0.1 -0.22 0" size="0.02" type="sphere" rgba="1 0 0 1"/>
+
+      <geom name="seat" type="box" size="0.2 0.2 0.02" pos="0 0 0" material="white_wood"/>
+
+      <geom name="leg1" class="stool_leg" pos="0.18 0.18 -0.15" material="white_wood"/>
+
+      <geom name="leg2" class="stool_leg" pos="0.18 -0.18 -0.15" material="white_wood"/>
+
+      <geom name="leg3" class="stool_leg" pos="-0.18 0.18 -0.15" material="white_wood"/>
+
+      <geom name="leg4" class="stool_leg" pos="-0.18 -0.18 -0.15" material="white_wood"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -70,6 +70,15 @@ class SMPLPublisher:
             publisher = ZMQPublisher(PORTS[f"{body_name}_pose"])
             self.body_publishers.append(publisher)
 
+        object_joint_names = list(sorted(set(dataset.joint_names) - set(unitree_joint_names)))
+        self.object_joint_names = [name for name in object_joint_names if f"{name}_pos" in PORTS]
+        self.object_joint_indices = [dataset.joint_names.index(name) for name in self.object_joint_names]
+        self.object_publishers: List[ZMQPublisher] = []
+        for joint_name in self.object_joint_names:
+            publisher = ZMQPublisher(PORTS[f"{joint_name}_pos"])
+            self.object_publishers.append(publisher)
+        self.motion_data = motion_data
+
         self.publish_rate = rate
         self.index = 0
         self.n_steps = dataset.num_steps
@@ -92,6 +101,11 @@ class SMPLPublisher:
             body_pos = self.body_pos_w[self.index, i]
             body_quat = self.body_quat_w[self.index, i]
             body_publisher.publish_pose(body_pos, body_quat)
+        
+        # Publish object joint positions
+        for i, object_publisher in enumerate(self.object_publishers):
+            object_joint_pos = self.motion_data.joint_pos[self.index, self.object_joint_indices[i]:self.object_joint_indices[i]+1]
+            object_publisher.publish_joint_state(object_joint_pos)
 
     def on_key_press(self, key):
         """Handle keyboard input"""

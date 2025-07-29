@@ -17,7 +17,9 @@ OBJECTS = {
     "box": BOX_CFG,
     "box_small": BOX_SMALL_CFG,
     "suitcase": SUITCASE_CFG,
-    "plasticbox": PLASTICBOX_CFG,
+    "stool": STOOL_CFG,
+    "ball": BALL_CFG,
+    "foldchair": FOLDCHAIR_CFG,
 }
 
 

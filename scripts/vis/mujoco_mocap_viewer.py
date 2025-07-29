@@ -11,7 +11,10 @@ from typing import List
 
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand.xml"
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.xml"
-scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-plasticbox.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-stool.xml"
+# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-ball.xml"
+# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-foldchair.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-lowstool.xml"
 
 class MuJoCoMocapViewer:
     def __init__(
@@ -30,7 +33,7 @@ class MuJoCoMocapViewer:
 
         
         # Get joint IDs and addresses
-        mujoco_joint_names = [self.model.joint(i).name for i in range(self.model.njnt)]
+        mujoco_joint_names = [self.model.joint(i).name for i in range(self.model.njnt) if self.model.joint(i).type != mujoco.mjtJoint.mjJNT_FREE]
         shared_joint_names = list(sorted(set(mujoco_joint_names) & set(unitree_joint_names)))
         unitree_joint_indices = [unitree_joint_names.index(name) for name in shared_joint_names]
         mujoco_joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name) for name in shared_joint_names]
@@ -38,16 +41,25 @@ class MuJoCoMocapViewer:
         self.joint_ids_unitree = np.array(unitree_joint_indices)
         self.joint_qpos_adrs = np.array(mujoco_qpos_adrs)
 
-        free_joint_ids = [i for i in range(self.model.njnt) if self.model.joint(i).type == mujoco.mjtJoint.mjJNT_FREE]
-        self.free_joint_names = [self.model.joint(i).name.replace('_root', '_pose') for i in free_joint_ids]
-        self.free_joint_qpos_adrs = self.model.jnt_qposadr[free_joint_ids]
-        self.free_joint_subscribers: List[ZMQSubscriber] = []
+        root_joint_ids = [i for i in range(self.model.njnt) if self.model.joint(i).type == mujoco.mjtJoint.mjJNT_FREE]
+        self.root_joint_names = [self.model.joint(i).name.replace('_root', '') for i in root_joint_ids]
+        self.root_joint_qpos_adrs = self.model.jnt_qposadr[root_joint_ids]
+        self.root_joint_subscribers: List[ZMQSubscriber] = []
+
+        object_joint_names = list(sorted(set(mujoco_joint_names) - set(unitree_joint_names)))
+        self.object_joint_names = [name for name in object_joint_names if f"{name}_pos" in PORTS]
+
+        self.object_joint_qpos_adrs = [self.model.jnt_qposadr[self.model.joint(name).id] for name in self.object_joint_names]
+        self.object_joint_subscribers: List[ZMQSubscriber] = []
 
         # Initialize ZMQ subscribers
         self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'])
-        for joint_name in self.free_joint_names:
-            subscriber = ZMQSubscriber(PORTS[joint_name])
-            self.free_joint_subscribers.append(subscriber)
+        for root_joint_name in self.root_joint_names:
+            subscriber = ZMQSubscriber(PORTS[f"{root_joint_name}_pose"])
+            self.root_joint_subscribers.append(subscriber)
+        for joint_name in self.object_joint_names:
+            subscriber = ZMQSubscriber(PORTS[f"{joint_name}_pos"])
+            self.object_joint_subscribers.append(subscriber)
 
         self.running = True
         self.comm_thread = threading.Thread(target=self.zmq_communication_loop)
@@ -59,16 +71,21 @@ class MuJoCoMocapViewer:
     def zmq_communication_loop(self):
         """Handle ZMQ communication in a separate thread"""
         while self.running:
-            for qpos_adr, subscriber in zip(self.free_joint_qpos_adrs, self.free_joint_subscribers):
+            joint_msg = self.joint_subscriber.receive_joint_state()
+            if joint_msg and len(self.joint_qpos_adrs):
+                self.data.qpos[self.joint_qpos_adrs] = joint_msg.positions[self.joint_ids_unitree]
+            
+            for qpos_adr, subscriber in zip(self.root_joint_qpos_adrs, self.root_joint_subscribers):
                 pose_msg = subscriber.receive_pose()
                 if pose_msg:
                     pose = np.concatenate([pose_msg.position, pose_msg.quaternion])
                     self.data.qpos[qpos_adr:qpos_adr + 7] = pose
             
-            joint_msg = self.joint_subscriber.receive_joint_state()
-            if joint_msg:
-                self.data.qpos[self.joint_qpos_adrs] = joint_msg.positions[self.joint_ids_unitree]
-            
+            for joint_qpos_adr, subscriber in zip(self.object_joint_qpos_adrs, self.object_joint_subscribers):
+                joint_msg = subscriber.receive_joint_state()
+                if joint_msg:
+                    self.data.qpos[joint_qpos_adr:joint_qpos_adr + 1] = joint_msg.positions
+
             time.sleep(0.005)
 
     def mujoco_update(self):

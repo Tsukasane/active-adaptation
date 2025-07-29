@@ -1,8 +1,8 @@
 from active_adaptation.envs.mdp.commands.hdmi.command import RobotTracking, RobotObjectTracking
 from active_adaptation.envs.mdp.base import Reward as BaseReward
 
-from typing import List, Dict
-from omegaconf import DictConfig
+from typing import List, Dict, Tuple
+from omegaconf import DictConfig, ListConfig
 from isaaclab.utils.string import resolve_matching_names, resolve_matching_names_values
 from isaaclab.utils.math import quat_apply_inverse, quat_mul, quat_conjugate, axis_angle_from_quat, yaw_quat
 
@@ -461,7 +461,7 @@ class object_pos_tracking(RobotObjectTrackReward):
     
     def compute(self):
         ref_object_pos_w = self.command_manager.ref_object_pos_w
-        object_pos_w = self.command_manager.rigid_object.data.root_link_pos_w
+        object_pos_w = self.command_manager.object_pos_w
         object_pos_error = (ref_object_pos_w - object_pos_w).norm(dim=-1)
         # shape: [num_envs]
         rew = torch.exp(- object_pos_error / self.sigma).unsqueeze(1)
@@ -474,11 +474,25 @@ class object_ori_tracking(RobotObjectTrackReward):
     
     def compute(self):
         ref_object_quat_w = self.command_manager.ref_object_quat_w
-        object_quat_w = self.command_manager.rigid_object.data.root_link_quat_w
+        object_quat_w = self.command_manager.object_quat_w
         object_diff_quat = quat_mul(quat_conjugate(ref_object_quat_w), object_quat_w)
         object_ori_error = torch.norm(axis_angle_from_quat(object_diff_quat), dim=-1)
         # shape: [num_envs]
         rew = torch.exp(- object_ori_error / self.sigma).unsqueeze(1)
+        return rew
+
+class object_joint_pos_tracking(RobotObjectTrackReward):
+    def __init__(self, sigma: float=0.25, **kwargs):
+        super().__init__(**kwargs)
+        self.sigma = sigma
+    
+    def compute(self):
+        ref_joint_pos = self.command_manager.ref_object_joint_pos
+        object_joint_pos = self.command_manager.object_joint_pos
+        joint_pos_diff = ref_joint_pos - object_joint_pos
+        joint_pos_error = joint_pos_diff.abs()
+        # shape: [num_envs]
+        rew = torch.exp(- joint_pos_error / self.sigma).unsqueeze(1)
         return rew
 
 class eef_contact_in_range(RobotObjectTrackReward):
@@ -524,39 +538,147 @@ class eef_contact_pos(RobotObjectTrackReward):
 #         rew = (rew - 1.0) * self.in_range.float()
 #         return rew.unsqueeze(-1)
     
-class eef_contact_all(RobotObjectTrackReward):
+class eef_contact_exp(RobotObjectTrackReward):
     def __init__(
         self,
-        pos_thres: float=0.1,
-        # ori_thres: float=0.1,
-        frc_thres: float=2.0,
+        pos_sigma: float=0.1,
+        pos_tolerance: float=0.0,
+        frc_sigma: float=10.0,
+        frc_thres: float | Tuple[float, float, float]=2.0,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
         self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
-        self.eef_frc = torch.zeros(self.num_envs, 2, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
 
-        self.pos_thres = pos_thres
-        # self.ori_thres = ori_thres
+        self.pos_sigma = pos_sigma
+        self.pos_tolerance = pos_tolerance
+        self.frc_sigma = frc_sigma
         self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
     
     def update(self):
         self.in_range = self.command_manager.ref_object_contact
 
         eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
         # eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
-        eef_frc = self.command_manager.eef_contact_forces
+        eef_frc = self.command_manager.eef_contact_forces_b
+
+        self.eef_pos_error[:] = (eef_pos_diff.norm(dim=-1) - self.pos_tolerance).clamp_min(0.0)
+        # self.eef_ori_error[:] = eef_ori_diff.abs()
+        self.eef_frc[:] = eef_frc
+
+    def compute(self):
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) - self.frc_thres).clamp_max(0.0)
+        else:
+            contact_frc = (self.eef_frc.abs() - self.frc_thres).clamp_max(0.0).mean(dim=-1)
+
+        rew = torch.exp(-self.eef_pos_error / self.pos_sigma) * torch.exp(contact_frc / self.frc_sigma)
+        # shape: [num_envs]
+        return (rew.mean(dim=-1) * self.in_range.float()).unsqueeze(-1)
+
+class eef_contact_exp_max(RobotObjectTrackReward):
+    def __init__(
+        self,
+        pos_sigma: float=0.1,
+        pos_tolerance: float=0.0,
+        frc_sigma: float=10.0,
+        frc_thres: float | Tuple[float, float, float]=2.0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
+        self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
+
+        self.pos_sigma = pos_sigma
+        self.pos_tolerance = pos_tolerance
+        self.frc_sigma = frc_sigma
+        self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
+    
+    def update(self):
+        self.in_range = self.command_manager.ref_object_contact
+
+        eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
+        # eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
+        eef_frc = self.command_manager.eef_contact_forces_b
+
+        self.eef_pos_error[:] = (eef_pos_diff.norm(dim=-1) - self.pos_tolerance).clamp_min(0.0)
+        # self.eef_ori_error[:] = eef_ori_diff.abs()
+        self.eef_frc[:] = eef_frc
+
+    def compute(self):
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) - self.frc_thres).clamp_max(0.0)
+        else:
+            contact_frc = (self.eef_frc.abs() - self.frc_thres).clamp_max(0.0).mean(dim=-1)
+
+        rew = torch.exp(-self.eef_pos_error / self.pos_sigma) * torch.exp(contact_frc / self.frc_sigma)
+        # shape: [num_envs]
+        return (rew.max(dim=-1).values * self.in_range.float()).unsqueeze(-1)
+
+class eef_contact_all(RobotObjectTrackReward):
+    def __init__(
+        self,
+        pos_thres: float=0.1,
+        # ori_thres: float=0.1,
+        frc_thres: float | Tuple[float, float, float]=2.0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
+        self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
+
+        self.pos_thres = pos_thres
+        # self.ori_thres = ori_thres
+        self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
+    
+    def update(self):
+        self.in_range = self.command_manager.ref_object_contact
+
+        eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
+        # eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
+        eef_frc = self.command_manager.eef_contact_forces_b
 
         self.eef_pos_error[:] = eef_pos_diff.norm(dim=-1)
         # self.eef_ori_error[:] = eef_ori_diff.abs()
-        self.eef_frc[:] = eef_frc.norm(dim=-1)
+        self.eef_frc[:] = eef_frc
 
     def compute(self):
-        contact_all = (
-            (self.eef_pos_error < self.pos_thres)
-            # & (self.eef_ori_error.abs() < self.ori_thres).all(dim=-1)
-            & (self.eef_frc > self.frc_thres)
-        ).float().mean(dim=-1)
+        contact_pos = (self.eef_pos_error < self.pos_thres)
+        # print(f"contact_frc satisfied:")
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) >= self.frc_thres)
+        else:
+            contact_frc = (self.eef_frc.abs() >= self.frc_thres).all(dim=-1)
+        #     print(f"\t 3dim: {contact_frc}")
+        # print(f"\t norm: {self.eef_frc.norm(dim=-1) > 2.0}")
+
+        contact_all = (contact_pos & contact_frc).float().mean(dim=-1)
         # shape: [num_envs]
         return (contact_all * self.in_range.float()).unsqueeze(-1)
+
+    def debug_draw(self):
+        if self.env.backend != "isaac":
+            return
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) >= self.frc_thres)
+        else:
+            contact_frc = (self.eef_frc.abs() >= self.frc_thres).all(dim=-1)
+        # contact_frc = (self.eef_frc.norm(dim=-1) >= 2.0)
+        # print(f"contact_frc: {self.eef_frc.abs()[:, 0]}")
+        contacted_points = self.command_manager.contact_target_pos_w[contact_frc]
+        # print(f"contacted_points: {contacted_points}")
+        self.env.debug_draw.point(
+            contacted_points.reshape(-1, 3),
+            color=(1.0, 1.0, 1.0, 1.0),
+            size=40,
+        )

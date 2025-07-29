@@ -1,5 +1,5 @@
 # @package task
-name: G1TrackSuitcase
+name: G1TrackStool
 
 viewer:
   resolution: [1280, 720]
@@ -39,7 +39,7 @@ action:
 
 command:
   _target_: active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking
-  data_path: data/motion/omomo/sub1_suitcase_011
+  data_path: data/motion/multi_motion_0726/move_stool_and_climb_amass
 
   reset_range: [0, 100]
   pose_range:
@@ -65,15 +65,15 @@ command:
 
   future_steps: [1, 2, 8, 16, 32]
 
-  object_asset_name: "suitcase"
-  object_body_name:  "suitcase"
+  object_asset_name: "stool"
+  object_body_name:  "stool"
 
   contact_eef_body_name: ["left_wrist_yaw_link", "right_wrist_yaw_link"]
   contact_frc_eef_body_name: ["left_wrist_yaw_link", "right_wrist_yaw_link"]
 
   contact_target_pos_offset:
-    - [0.1, 0.3, -0.1]  # left wrist
-    - [-0.1, 0.3, 0.1]  # right wrist
+    - [-0.08, 0.22, -0.05]  # left wrist
+    - [-0.08, -0.22, -0.05]  # right wrist
 
   contact_eef_pos_offset:
     - [0.05, 0.0, 0.0]  # left wrist
@@ -81,7 +81,7 @@ command:
 
   # replay_motion: true
 
-object_names: ["suitcase"]
+object_names: ["stool"]
 
 observation:
   command:
@@ -181,8 +181,9 @@ reward:
 
     # for better contact
     eef_contact_pos:       {weight: 0.5, sigma: 0.5, enabled: false}
-    eef_contact_all:       {weight: 5.0, enabled: true, pos_thres: 0.1, frc_thres: [1.0, 0.0, 1.0]}
-    eef_contact_exp:       {weight: 5.0, enabled: false, pos_sigma: 0.1, frc_sigma: 10, frc_thres: [1.0, 0.0, 1.0]}
+    # eef_contact_ori:       {weight: 0.5, sigma: 0.5, enabled: false}
+    eef_contact_all:       {weight: 5.0, enabled: false, pos_thres: 0.1, frc_thres: [0.0, 1.0, 0.0]}
+    eef_contact_exp:       {weight: 5.0, enabled: true, pos_sigma: 0.1, frc_sigma: 10, frc_thres: [0.0, 1.0, 0.0]}
   loco:
     action_rate_l2:     {weight: 0.03, enabled: true}
     joint_vel_l2:       {weight: 2.0e-3, enabled: true, joint_names: .*}
@@ -212,7 +213,7 @@ reward:
     torque_limits_0.6(joint_torque_limits): {weight: 1.0e-3, enabled: false, soft_factor: 0.6}
     torque_limits_0.9(joint_torque_limits): {weight: 1.0e-3, enabled: false, soft_factor: 0.9}
 
-    eef_contact_all:    {weight: 1.0, enabled: false, pos_thres: 0.1, frc_thres: [1.0, 0.0, 1.0]}
+    eef_contact_all:    {weight: 1.0, enabled: false, pos_thres: 0.1, frc_thres: [0.0, 1.0, 0.0]}
 
 randomization:
   perturb_body_mass:
@@ -253,9 +254,9 @@ randomization:
   #   restitution_range: [0.0, 0.2]
   #   mass_range: [6.0, 10.0]
   
-  # body_scale:
-  #   name: "suitcase"
-  #   scale_range: [0.95, 1.05]
+  body_scale:
+    name: "stool"
+    scale_range: [0.8, 0.8]
 
 termination:
   cum_body_pos_error:       {body_names: ".*", min_steps: 25, threshold: 0.5}
@@ -264,4 +265,4 @@ termination:
 
   cum_object_pos_error:     {min_steps: 25, threshold: 0.5}
   cum_object_ori_error:     {min_steps: 25, threshold: 1.0}
-  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.2, frc_thres: 2.0}
+  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.1, frc_thres: 2.0}

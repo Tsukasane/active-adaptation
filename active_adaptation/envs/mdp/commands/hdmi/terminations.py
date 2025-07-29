@@ -3,6 +3,7 @@ from active_adaptation.envs.mdp.base import Termination as BaseTermination
 
 import torch
 from typing import List
+from omegaconf import ListConfig
 from isaaclab.utils.string import resolve_matching_names
 from isaaclab.utils.math import quat_apply_inverse, yaw_quat, quat_mul, quat_conjugate, axis_angle_from_quat
 from active_adaptation.utils.math import batchify
@@ -95,7 +96,7 @@ RobotObjectTrackTermination = BaseTermination[RobotObjectTracking]
 class cum_object_pos_error(_cum_error_mixin, RobotObjectTrackTermination):
     def update(self):
         ref_object_pos_w = self.command_manager.ref_object_pos_w
-        box_pos_w = self.command_manager.rigid_object.data.root_link_pos_w
+        box_pos_w = self.command_manager.object.data.root_link_pos_w
         box_pos_diff = ref_object_pos_w - box_pos_w
         self.error[:] = box_pos_diff.norm(dim=-1)
         super().update()
@@ -103,7 +104,7 @@ class cum_object_pos_error(_cum_error_mixin, RobotObjectTrackTermination):
 class cum_object_ori_error(_cum_error_mixin, RobotObjectTrackTermination):
     def update(self):
         ref_object_quat_w = self.command_manager.ref_object_quat_w
-        object_quat_w = self.command_manager.rigid_object.data.root_link_quat_w
+        object_quat_w = self.command_manager.object.data.root_link_quat_w
         box_quat_diff = quat_mul(quat_conjugate(object_quat_w), ref_object_quat_w)
         self.error[:] = axis_angle_from_quat(box_quat_diff).norm(dim=-1)
         super().update()
@@ -113,13 +114,20 @@ class cum_lost_contact_steps(_cum_error_mixin, RobotObjectTrackTermination):
         super().__init__(threshold=threshold, **kwargs)
         self.pos_thres = pos_thres
         self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
     
     def update(self):
         eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
-        eef_contact_frc_norm = self.command_manager.eef_contact_forces.norm(dim=-1)
+        eef_frc = self.command_manager.eef_contact_forces_b
 
-        in_contact = (eef_pos_diff.norm(dim=-1) < self.pos_thres) \
-            & (eef_contact_frc_norm > self.frc_thres)
+        contact_pos = eef_pos_diff.norm(dim=-1) < self.pos_thres
+        if isinstance(self.frc_thres, float):
+            contact_frc = (eef_frc.norm(dim=-1) >= self.frc_thres)
+        else:
+            contact_frc = (eef_frc.abs() >= self.frc_thres).all(dim=-1)
+
+        in_contact = contact_pos & contact_frc
         in_range = self.command_manager.ref_object_contact
         lost_contact = in_range & ((~in_contact).any(dim=-1))
         self.error[:] = 2 * lost_contact.float()

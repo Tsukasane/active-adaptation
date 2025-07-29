@@ -110,6 +110,64 @@ class ref_body_ori_future_local(RobotTrackObservation):
     def compute(self):
         return self.ref_body_ori_future_local[:, :, :, :2, :].reshape(self.num_envs, -1)
 
+class diff_body_pos_future_b(RobotTrackObservation):
+    """
+    Reference body position in each robot body frame.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.diff_body_pos_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+
+    def update(self):
+        ref_body_pos_future_w = self.command_manager.ref_body_pos_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+        robot_body_pos_w = self.command_manager.robot_body_pos_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 3]
+        robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
+
+        diff_body_pos_future_b = quat_apply_inverse(robot_body_quat_w, ref_body_pos_future_w - robot_body_pos_w)
+        self.diff_body_pos_future_b = diff_body_pos_future_b
+
+    def compute(self):
+        return self.diff_body_pos_future_b.view(self.num_envs, -1)
+    
+class diff_body_lin_vel_future_b(RobotTrackObservation):
+    """
+    Reference body linear velocity in each robot body frame.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.diff_body_lin_vel_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, device=self.device)
+
+    def update(self):
+        ref_body_lin_vel_future_w = self.command_manager.ref_body_lin_vel_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 3]
+        robot_body_lin_vel_w = self.command_manager.robot_body_lin_vel_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 3]
+        robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
+
+        diff_body_lin_vel_future_b = quat_apply_inverse(robot_body_quat_w, ref_body_lin_vel_future_w - robot_body_lin_vel_w)
+        self.diff_body_lin_vel_future_b = diff_body_lin_vel_future_b
+
+    def compute(self):
+        return self.diff_body_lin_vel_future_b.view(self.num_envs, -1)
+
+class diff_body_ori_future_b(RobotTrackObservation):
+    """
+    Reference body orientation in each robot body frame.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.diff_body_ori_future_b = torch.zeros(self.num_envs, self.command_manager.num_future_steps, self.command_manager.num_tracking_bodies, 3, 3, device=self.device)
+    
+    def update(self):
+        ref_body_quat_future_w = self.command_manager.ref_body_quat_future_w # shape: [num_envs, num_future_steps, num_tracking_bodies, 4]
+        robot_body_quat_w = self.command_manager.robot_body_quat_w[:, None, :, :] # shape: [num_envs, 1, num_tracking_bodies, 4]
+
+        diff_body_quat_future_b = quat_mul(
+            quat_conjugate(robot_body_quat_w).expand_as(ref_body_quat_future_w),
+            ref_body_quat_future_w
+        )
+        self.diff_body_ori_future_b = matrix_from_quat(diff_body_quat_future_b)
+    
+    def compute(self):
+        return self.diff_body_ori_future_b[:, :, :, :2, :].reshape(self.num_envs, -1)
 
 class diff_body_pos_future_local(RobotTrackObservation):
     """
@@ -258,7 +316,7 @@ class object_pos_b(RobotObjectTrackObservation):
         self.object_pos_b = torch.zeros(self.num_envs, 3, device=self.device)
 
     def update(self):
-        object_pos_w = self.command_manager.rigid_object.data.root_link_pos_w # shape: [num_envs, 3]
+        object_pos_w = self.command_manager.object.data.root_link_pos_w # shape: [num_envs, 3]
         robot_root_pos_w = self.command_manager.robot_root_pos_w # shape: [num_envs, 3]
         robot_root_quat_w = self.command_manager.robot_root_quat_w # shape: [num_envs, 4]
 
@@ -276,7 +334,7 @@ class object_ori_b(RobotObjectTrackObservation):
         self.object_ori_b = torch.zeros(self.num_envs, 3, 3, device=self.device)
 
     def update(self):
-        object_quat_w = self.command_manager.rigid_object.data.root_link_quat_w # shape: [num_envs, 4]
+        object_quat_w = self.command_manager.object.data.root_link_quat_w # shape: [num_envs, 4]
         robot_root_quat_w = self.command_manager.robot_root_quat_w # shape: [num_envs, 4]
 
         object_quat_b = quat_mul(
@@ -288,6 +346,13 @@ class object_ori_b(RobotObjectTrackObservation):
     def compute(self):
         return self.object_ori_b.view(self.num_envs, -1)
     
+class object_joint_pos(RobotObjectTrackObservation):
+    """
+    Object joint position
+    """
+    def compute(self):
+        return self.command_manager.object_joint_pos.unsqueeze(1)
+
 class diff_object_pos_future(RobotObjectTrackObservation):
     """
     Object position in robot root frame - Robot end-effector position in robot root frame
@@ -298,10 +363,10 @@ class diff_object_pos_future(RobotObjectTrackObservation):
 
     def update(self):
         ref_object_pos_future_w = self.command_manager.ref_object_pos_future_w # shape: [num_envs, num_future_steps, 3]
-        object_pos_w = self.command_manager.rigid_object.data.root_link_pos_w.unsqueeze(1)
+        object_pos_w = self.command_manager.object.data.root_link_pos_w.unsqueeze(1)
         diff_object_pos_future_w = ref_object_pos_future_w - object_pos_w
 
-        object_quat_w = self.command_manager.rigid_object.data.root_quat_w.unsqueeze(1) # shape: [num_envs, 1, 4]
+        object_quat_w = self.command_manager.object.data.root_quat_w.unsqueeze(1) # shape: [num_envs, 1, 4]
         self.diff_object_pos_future_b = quat_apply_inverse(object_quat_w, diff_object_pos_future_w)
     
     def compute(self):
@@ -317,7 +382,7 @@ class diff_object_ori_future(RobotObjectTrackObservation):
 
     def update(self):
         ref_object_quat_future_w = self.command_manager.ref_object_quat_future_w # shape: [num_envs, num_future_steps, 4]
-        object_quat_w = self.command_manager.rigid_object.data.root_link_quat_w.unsqueeze(1) # shape: [num_envs, 1, 4]
+        object_quat_w = self.command_manager.object.data.root_link_quat_w.unsqueeze(1) # shape: [num_envs, 1, 4]
         
         diff_object_quat_future = quat_mul(
             quat_conjugate(object_quat_w).expand_as(ref_object_quat_future_w),
@@ -327,6 +392,16 @@ class diff_object_ori_future(RobotObjectTrackObservation):
 
     def compute(self):
         return self.diff_object_ori_future_b.view(self.num_envs, -1)
+
+class diff_object_joint_pos_future(RobotObjectTrackObservation):
+    """
+    Object joint position - Robot end-effector joint position
+    """
+    def compute(self):
+        ref_object_joint_pos_future = self.command_manager.ref_object_joint_pos_future
+        object_joint_pos = self.command_manager.object_joint_pos
+        diff_object_joint_pos_future = ref_object_joint_pos_future - object_joint_pos.unsqueeze(1)
+        return diff_object_joint_pos_future
 
 class ref_object_contact_future(RobotObjectTrackObservation):
     def compute(self):

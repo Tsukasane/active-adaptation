@@ -50,9 +50,6 @@ DOOR_CFG = ArticulationCfg(
             enabled_self_collisions=False
         )
     ),
-    init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.0),
-    ),
     actuators={
         "door_joint": IdealPDActuatorCfg(
             joint_names_expr="door_joint",
@@ -135,20 +132,55 @@ BOX_SMALL_CFG = RigidObjectCfg(
 SUITCASE_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/suitcase",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/objects/omomo/suitcase/suitcase-simplified.usd",
+        usd_path=f"{ASSET_PATH}/objects/suitcase/suitcase-simplified.usd",
         activate_contact_sensors=True,
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            articulation_enabled=False,
-        )
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.5,
+        ),
     ),
 )
-PLASTICBOX_CFG = RigidObjectCfg(
-    prim_path="{ENV_REGEX_NS}/plasticbox",
+STOOL_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/stool",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/objects/omomo/plasticbox/plasticbox-simplified.usd",
+        usd_path=f"{ASSET_PATH}/objects/stool/stool.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.5,
+        ),
+    ),
+)
+BALL_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/ball",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/ball/ball.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=3.0,
+        ),
+    ),
+)
+
+FOLDCHAIR_CFG = ArticulationCfg(
+    prim_path="{ENV_REGEX_NS}/foldchair",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/foldchair/foldchair.usd",
         activate_contact_sensors=True,
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            articulation_enabled=False,
-        )
+            solver_position_iteration_count=4,
+            solver_velocity_iteration_count=0,
+            enabled_self_collisions=False,
+            fix_root_link=True
+        ),
     ),
+    actuators={
+        "foldchair_joint": IdealPDActuatorCfg(
+            joint_names_expr="foldchair_joint",
+            # will be randomized
+            stiffness=0.0, 
+            damping=1.0,
+            friction=0.0,
+            effort_limit=100.0,
+            velocity_limit=20.0,
+        )
+    },
 )

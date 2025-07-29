@@ -5,7 +5,6 @@ from isaaclab.utils import configclass
 from isaaclab.utils.dict import update_class_from_dict
 
 import active_adaptation
-import active_adaptation.envs.mdp as mdp
 from active_adaptation.envs.base import _Env
 
 class SimpleEnv(_Env):
@@ -74,7 +73,11 @@ class SimpleEnv(_Env):
                 setattr(scene_cfg, obj_name, obj_cfg)
 
                 # add contact sensor to the box
-                eef_names = ["left_wrist_yaw_link", "right_wrist_yaw_link"]
+                eef_names = [f"{left_right}_wrist_{roll_pitch_yaw}_link" for left_right in ["left", "right"] for roll_pitch_yaw in ["roll", "pitch", "yaw"]]
+                contact_geom_prim_path = obj_cfg.prim_path
+                if obj_name == "foldchair":
+                    contact_geom_prim_path += "/seat_link"
+
                 for eef_name in eef_names:
                     contact_sensor_name = f"{eef_name}_{obj_name}_contact_forces"
                     eef_prim_path = "{ENV_REGEX_NS}/Robot/" + eef_name
@@ -82,7 +85,7 @@ class SimpleEnv(_Env):
                         prim_path=eef_prim_path,
                         history_length=0,
                         track_air_time=False,
-                        filter_prim_paths_expr=[obj_cfg.prim_path],
+                        filter_prim_paths_expr=[contact_geom_prim_path],
                     ))
                     
             body_scale_rand = self.cfg.randomization.get("body_scale", None)
@@ -96,7 +99,7 @@ class SimpleEnv(_Env):
 
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
             scene_cfg.contact_forces = ContactSensorCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/.*(ankle_roll|wrist_yaw)_link", 
+                prim_path="{ENV_REGEX_NS}/Robot/.*(ankle_roll|wrist_roll|wrist_pitch|wrist_yaw)_link", 
                 history_length=3,
                 track_air_time=True
             )
