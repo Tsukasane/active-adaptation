@@ -57,7 +57,7 @@ class PPOConfig:
     entropy_coef: float = 0.0005
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
-    vecnorm: Union[str, None] = None
+    vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
@@ -132,7 +132,9 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor(fake_input)
         self.critic(fake_input)
 
-        self.vecnorm: VecNorm = VecNorm([OBS_KEY, OBS_PRIV_KEY], decay=0.9999)
+        from termcolor import colored
+        print(colored(f"[Info]: create VecNorm for keys: {self.cfg.vecnorm}", "green"))
+        self.vecnorm: VecNorm = VecNorm(self.cfg.vecnorm, decay=0.9999)
 
         self.count_parameters()
 

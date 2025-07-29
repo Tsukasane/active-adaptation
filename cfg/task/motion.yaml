@@ -47,6 +47,11 @@ observation:
   ref_motion_:
     ref_orientation:      {steps: 5}
     ref_height:           {steps: 5}
+    ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                          .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                          .*knee.*, .*shoulder_yaw.*,
+                                          .*ankle_pitch.*, .*elbow_pitch.*],
+                            steps: 5}
     ref_keypoints:        {steps: 5}
     ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
@@ -66,25 +71,24 @@ observation:
 
 reward:
   loco:
-    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
-    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
-    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.16,
+    tracking_root_trans:    {weight: 2., enabled: true, sigma: 0.16}
+    tracking_root_rot:      {weight: 1., enabled: true, sigma: 0.16}
+    tracking_qpos:          {weight: 1., enabled: true, sigma: 0.16,
                               joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
                                             .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                             .*knee.*, .*shoulder_yaw.*,
                                             .*ankle_pitch.*, .*elbow_pitch.*]}
-    tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
+    tracking_keypoints:     {weight: 2., enabled: true, sigma: 0.16,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link]}
-    tracking_eff:           {weight: 8., enabled: true, sigma: 0.16,
+    tracking_eff:           {weight: 2., enabled: true, sigma: 0.16,
                               body_names: [left_ankle_roll_link, left_zero_link,
                                         right_ankle_roll_link, right_zero_link]}
 
     feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
     feet_slip:          {weight: 2., enabled: true, body_names: .*ankle_roll_link, sigma: 0.16}
-    # max_feet_height:    {weight: 1.5, enabled: true, body_names: .*ankle_roll_link, target_height: 0.15}
 
     joint_acc_l2:       {weight: 1.0e-8, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
@@ -96,7 +100,12 @@ reward:
     action_rate2_l2:    {weight: 0.01, enabled: true}
 
 randomization:
-  push:     {body_names: ["torso_link", "pelvis"], force_range: [0.0, 0.1]}
+  push:
+    body_names: ["torso_link", "pelvis"]
+    force_range: [0.0, 0.1]
+  push_eff:
+    body_names: ["left_zero_link", "right_zero_link"]
+    force_range: [0.0, 20.0]
   perturb_body_mass:
     .*: [0.9, 1.1]
   perturb_body_materials:

@@ -26,7 +26,7 @@ def main(cfg):
     app_launcher = AppLauncher(OmegaConf.to_container(cfg.app))
     simulation_app = app_launcher.app
 
-    env, agent, vecnorm = make_env_policy(cfg)
+    env, agent = make_env_policy(cfg)
     
     keys = [
         ("next", "stats")

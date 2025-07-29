@@ -31,7 +31,7 @@ def main(cfg):
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
 
-    env, policy, vecnorm = make_env_policy(cfg)
+    env, policy = make_env_policy(cfg)
     
     if cfg.export_policy:
         import time
@@ -50,8 +50,7 @@ def main(cfg):
         FILE_PATH = os.path.dirname(__file__)
         
         deploy_policy = policy.get_rollout_policy("deploy")
-        obs_norm = ObsNorm.from_vecnorm(vecnorm, deploy_policy.in_keys)
-        _policy = TensorDictSequential(obs_norm, deploy_policy).cpu()
+        _policy = TensorDictSequential(deploy_policy).cpu()
         
         print(f"Inference time of policy: {test(_policy, fake_input)}")
 

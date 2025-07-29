@@ -78,7 +78,7 @@ def main(cfg: DictConfig):
     run.save(cfg_save_path, policy="now")
     run.save(os.path.join(run.dir, "config.yaml"), policy="now")
 
-    env, policy, vecnorm = make_env_policy(cfg)
+    env, policy = make_env_policy(cfg)
 
     import inspect
     import shutil
@@ -142,8 +142,6 @@ def main(cfg: DictConfig):
         state_dict["policy"] = policy.state_dict()
         state_dict["env"] = env.state_dict()
         state_dict["cfg"] = cfg
-        if "vecnorm" in locals():
-            state_dict["vecnorm"] = vecnorm.state_dict()
         torch.save(state_dict, ckpt_path)
         if artifact:
             artifact = wandb.Artifact(

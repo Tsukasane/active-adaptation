@@ -367,6 +367,10 @@ class push(Randomization):
             color=(1., 0.8, .4, 1.)
         )
 
+class push_eff(push):
+    def __init__(self, env, body_names, force_range = (0.2, 0.9), min_interval=100, decay: float=0.9):
+        super().__init__(env, body_names, force_range, min_interval, decay)
+
 class drag(Randomization):
     def __init__(self, env, body_names, drag_range=(0.0, 0.1)):
         super().__init__(env)

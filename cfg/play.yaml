@@ -15,7 +15,6 @@ eval_interval: -1
 save_interval: -1
 seed: 0
 checkpoint_path: null
-vecnorm: null
 export_policy: false
 
 camera_follow: true
