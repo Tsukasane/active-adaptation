@@ -86,7 +86,7 @@ class MotionLib(Command):
         end_frames = self.end_frames[motion_ids]
 
         motion_length = self.motion_length[motion_ids]
-        r = torch.rand(motion_length.shape)
+        r = torch.rand(motion_length.shape) * 0.5
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
 

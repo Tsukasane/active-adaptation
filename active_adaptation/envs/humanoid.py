@@ -22,6 +22,8 @@ class Humanoid(LocomotionEnv):
     def __init__(self, cfg):
         super().__init__(cfg)
         self.max_episode_length = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
+        self.start_frames = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.end_frames = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
 
     def _reset(self, tensordict: TensorDictBase, **kwargs) -> TensorDictBase:
         if tensordict is not None:
@@ -60,12 +62,19 @@ class Humanoid(LocomotionEnv):
 
         self.scene.reset(env_ids)
 
-        self.episode_length_buf[env_ids] = start_frames
-        self.max_episode_length[env_ids] = end_frames
+        self.episode_length_buf[env_ids] = self.start_frames[env_ids] = start_frames
+        self.max_episode_length[env_ids] = self.end_frames[env_ids] = end_frames
 
         # in `self._reset_callbacks`
         # self.command_manager.reset(env_ids=env_ids)
         # self.action_manager.reset(env_ids=env_ids)
+
+    def _compute_reward(self) -> TensorDictBase:
+        rew_dict = super()._compute_reward()
+        self.stats["episode_len"][:] = (self.episode_length_buf - self.start_frames).unsqueeze(1)
+        self.stats["success"][:] = (self.episode_length_buf >= self.end_frames).unsqueeze(1).float()
+        self.stats["episode_len_ratio"][:] = ((self.episode_length_buf - self.start_frames).float() / (self.end_frames - self.start_frames).float()).unsqueeze(1)
+        return rew_dict
 
     # Observations of reference motion
     class ref_orientation(mdp.Observation):
