@@ -234,10 +234,11 @@ class perturb_body_mass(Randomization):
             perturb_ranges, self.asset.body_names
         )
         self.mass_ranges = torch.tensor(values)
-        print(self.body_names)
+        # print("Perturb body mass: ", self.body_names)
 
     def startup(self):
         logging.info(f"Randomize body masses of {self.body_names} upon startup.")
+        logging.info(f"Perturb body mass: {self.mass_ranges}")
         masses = self.asset.root_physx_view.get_masses().clone()
         inertias = self.asset.root_physx_view.get_inertias().clone()
         print(f"Default masses: {masses[0]}")
@@ -360,12 +361,12 @@ class push(Randomization):
             self.forces = torch.where(i, push_forces * self.default_mass_total, self.forces * self.decay)
         self.asset.set_external_force_and_torque(self.forces, self.torques, body_ids=self.body_indices)
 
-    def debug_draw(self):
-        self.env.debug_draw.vector(
-            self.asset.data.body_pos_w[:, self.body_indices],
-            self.forces / self.default_mass_total,
-            color=(1., 0.8, .4, 1.)
-        )
+    # def debug_draw(self):
+    #     self.env.debug_draw.vector(
+    #         self.asset.data.body_pos_w[:, self.body_indices],
+    #         self.forces / self.default_mass_total,
+    #         color=(1., 0.8, .4, 1.)
+    #     )
 
 class push_eff(push):
     def __init__(self, env, body_names, force_range = (0.2, 0.9), min_interval=100, decay: float=0.9):
