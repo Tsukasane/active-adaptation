@@ -27,6 +27,7 @@ import torch.nn.functional as F
 import torch.distributions as D
 import warnings
 import functools
+import numpy as np
 
 from torchrl.data import CompositeSpec, TensorSpec
 from torchrl.modules import ProbabilisticActor
@@ -46,9 +47,9 @@ from ..modules.common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
-    name: str = "ppo"
+class TransformerConfig:
+    _target_: str = "active_adaptation.learning.transformer.transformer.TransformerPolicy"
+    name: str = "transformer"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -62,15 +63,100 @@ class PPOConfig:
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
+    d_model: int = 512
+    n_heads: int = 4
+    n_layers: int = 4
+    ff_size: int = 512
+    
+    tokens_per_field: dict[str, int] = field(default_factory=lambda: {
+        OBS_KEY: 1,
+        OBS_REF_KEY: 5,
+        OBS_PRIV_KEY: 1,
+    })
+
 cs = ConfigStore.instance()
-cs.store("ppo", node=PPOConfig, group="algo")
+cs.store("transformer", node=TransformerConfig, group="algo")
 
 
-class PPOPolicy(TensorDictModuleBase):
+class PositionalEmbedding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 100):
+        super().__init__()
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+                    torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+
+        self.pe = nn.Parameter(pe, requires_grad=False)
+        
+    def forward(self, x: torch.Tensor):
+        x = x + self.pe[:, :x.shape[1], :x.shape[2]]
+        return x
+
+class TransformerCore(nn.Module):
+    def __init__(self,  latent_dim: int, 
+                        n_heads: int, 
+                        n_layers: int, 
+                        ff_size: int, 
+                        dropout: float = 0.0, 
+                        activation = F.relu):
+        super().__init__()
+        self.pos_encoder = PositionalEmbedding(d_model=latent_dim)
+        enc_layer = nn.TransformerEncoderLayer( d_model=latent_dim, 
+                                                        nhead=n_heads,
+                                                        dim_feedforward=ff_size,
+                                                        dropout=dropout,
+                                                        activation=activation)
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+
+    def forward(self, x: torch.Tensor):
+        x = self.pos_encoder(x)
+        x = x.permute(1, 0, 2).contiguous()             # [seq_len, batch_size, d_model]
+        x = self.encoder(x)[0]                          # [batch_size, d_model]
+        return x
+
+class MultiObsTokenizer(nn.Module):
+    def __init__(self,  fields: List[tuple[str, int, int]],
+                        d_model: int):
+        super().__init__()
+        self.fields = fields
+        self.d_model = d_model
+
+        self.n_tokens_per_field = [n_tok for (key, in_dim, n_tok) in fields]
+        self.proj = nn.ModuleList(
+            [nn.Linear(in_dim, d_model * n_tok) for (key, in_dim, n_tok) in fields]
+        )
+
+    def forward(self, *xs: torch.Tensor):
+        """
+        Parameters
+        ----------
+        *xs : sequence of Tensors
+            One tensor per field, same order as `fields`.
+            Expected shape per tensor: [batch_size, in_dim].
+
+        Returns
+        -------
+        tokens : Tensor
+            Concatenated tokens of shape [batch_size, seq_len, d_model],
+            where seq_len = sum(n_tokens per field).
+        """
+        assert len(xs) == len(self.fields), f"Expected {len(self.fields)} inputs, got {len(xs)}"
+        B = xs[0].shape[0]
+        tokens = []
+        for x, proj, n_tok in zip(xs, self.proj, self.n_tokens_per_field):
+            x = proj(x).view(B, -1, self.d_model)
+            tokens.append(x)
+        return torch.cat(tokens, dim=1) # [B, seq_len, d_model]
+
+class TransformerPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOConfig, 
+        cfg: TransformerConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -96,13 +182,6 @@ class PPOPolicy(TensorDictModuleBase):
         fake_input = observation_spec.zero()
         print(fake_input)
         
-        def make_actor(out_key: str):
-            modules = [
-                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
-                TensorDictModule(make_mlp([2048, 1024, 512]), ["a_in"], [out_key])
-            ]
-            return modules
-        
         def make_critic(out_key: str):
             modules = [
                 CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
@@ -110,9 +189,25 @@ class PPOPolicy(TensorDictModuleBase):
             ]
             return modules
 
+        fields = []
+        for key, n_tok in self.cfg.tokens_per_field.items():
+            fields.append((key, observation_spec[key].shape[-1], n_tok))
+        self.tokenizer = MultiObsTokenizer(
+            fields=fields,
+            d_model=self.cfg.d_model
+        )
+
+        self.transformer_core = TransformerCore(
+            latent_dim=self.cfg.d_model,
+            n_heads=self.cfg.n_heads,
+            n_layers=self.cfg.n_layers,
+            ff_size=self.cfg.ff_size,
+        )
+
         _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
-            *make_actor("_actor_feature"),
+            TensorDictModule(self.tokenizer, [OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], ["tokens"]),
+            TensorDictModule(self.transformer_core, ["tokens"], ["_actor_feature"]),
             TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
@@ -153,6 +248,8 @@ class PPOPolicy(TensorDictModuleBase):
         
         self.actor.apply(init_)
         self.critic.apply(init_)
+        print(fake_input)
+        exit()
 
     def count_parameters(self):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)

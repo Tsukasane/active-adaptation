@@ -46,9 +46,9 @@ from ..modules.common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOConfig:
-    _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
-    name: str = "ppo"
+class MoeConfig:
+    _target_: str = "active_adaptation.learning.moe.moe.MoePolicy"
+    name: str = "moe"
     train_every: int = 32
     ppo_epochs: int = 5
     num_minibatches: int = 8
@@ -59,18 +59,50 @@ class PPOConfig:
     value_norm: bool = False
     vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
+    n_experts: int = 4
+
     checkpoint_path: Union[str, None] = None
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
-cs.store("ppo", node=PPOConfig, group="algo")
+cs.store("moe", node=MoeConfig, group="algo")
 
+class MoECore(nn.Module):
+    def __init__(self, n_experts: int, action_dim: int):
+        super().__init__()
+        self.n_experts = n_experts
+        self.gate = nn.Sequential(make_mlp([512, 256, 128]), nn.Linear(128, n_experts))
+        self.experts = nn.ModuleList([nn.Sequential(make_mlp([512, 256, 128]), Actor(action_dim)) for _ in range(n_experts)])
+    
+    @staticmethod
+    def moment_match_mog(g_logits: torch.Tensor,
+                     locs: torch.Tensor,
+                     scales: torch.Tensor,
+                     eps: float = 1e-6):
+        """
+        g_logits: [B, N]
+        locs:     [B, N, A]
+        scales:   [B, N, A]   (std)
+        returns:  mu [B, A], std [B, A]
+        """
+        probs = g_logits.unsqueeze(-1)                                          # [B, N, 1]
+        mu = (probs * locs).sum(dim=1)                                          # [B, A]
+        # Var[X] = E[Var] + Var[E]
+        var = (probs * (scales**2 + (locs - mu.unsqueeze(1))**2)).sum(dim=1)    # [B, A]
+        std = var.clamp_min(eps).sqrt()
+        return mu, std
 
-class PPOPolicy(TensorDictModuleBase):
+    def forward(self, x: torch.Tensor):
+        logits = self.gate(x).softmax(dim=-1)
+        locs, scales = (torch.stack(t, dim=1) for t in zip(*[expert(x) for expert in self.experts]))
+        mu, std = self.moment_match_mog(logits, locs, scales)
+        return mu, std, logits
+
+class MoePolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOConfig, 
+        cfg: MoeConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -99,7 +131,7 @@ class PPOPolicy(TensorDictModuleBase):
         def make_actor(out_key: str):
             modules = [
                 CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
-                TensorDictModule(make_mlp([2048, 1024, 512]), ["a_in"], [out_key])
+                TensorDictModule(make_mlp([2048, 1024]), ["a_in"], [out_key])
             ]
             return modules
         
@@ -110,11 +142,11 @@ class PPOPolicy(TensorDictModuleBase):
             ]
             return modules
 
-        _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
             *make_actor("_actor_feature"),
-            TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
+            TensorDictModule(MoECore(self.cfg.n_experts, self.action_dim), ["_actor_feature"], ["loc", "scale", "g_logits"])
         )
+
         self.actor: ProbabilisticActor = ProbabilisticActor(
             module=actor_module,
             in_keys=["loc", "scale"],
@@ -251,12 +283,16 @@ class PPOPolicy(TensorDictModuleBase):
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.opt.step()
         explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
+
+        gate_probs = tensordict["g_logits"]
+        gate_entropy = -(gate_probs * gate_probs.clamp_min(1e-8).log()).sum(-1).mean()
         return {
             "actor/policy_loss": policy_loss,
             "actor/entropy": entropy,
             "actor/noise_std": tensordict["scale"].mean(),
             "actor/grad_norm": actor_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+            "actor/gate_entropy": gate_entropy,
             "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
