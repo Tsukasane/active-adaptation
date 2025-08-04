@@ -18,8 +18,6 @@ max_iters: -1
 eval_interval: -1
 eval_render: false
 save_interval: 150
-render_interval: -1
-render_decimation: 4
 seed: 0
 checkpoint_path: null
 

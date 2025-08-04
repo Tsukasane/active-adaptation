@@ -18,7 +18,7 @@ from collections import OrderedDict
 from torchvision.io import write_video
 from omegaconf import OmegaConf, DictConfig
 import active_adaptation.learning
-
+from active_adaptation.utils.wandb import parse_checkpoint_path
 
 class Every:
     def __init__(self, func, steps):
@@ -92,38 +92,6 @@ class EpisodeStats:
 
     def __len__(self):
         return len(self._stats)
-
-def parse_checkpoint_path(path: str):
-    if path is None:
-        return None
-    
-    if path.startswith("run:"):
-        api = wandb.Api()
-        run = api.run(path[4:])
-        root = os.path.join(os.path.dirname(__file__), "wandb", run.name)
-        os.makedirs(root, exist_ok=True)
-        
-        checkpoints = []
-        for file in run.files():
-            print(file.name)
-            if "checkpoint" in file.name:
-                checkpoints.append(file)
-            elif file.name == "files/cfg.yaml":
-                file.download(root, replace=True)
-        
-        def sort_by_time(file):
-            number_str = file.name[:-3].split("_")[-1]
-            if number_str == "final":
-                return 100000
-            else:
-                return int(number_str)
-
-        checkpoints.sort(key=sort_by_time)
-        checkpoint = checkpoints[-1]
-        path = os.path.join(root, checkpoint.name)
-        print(f"Downloading checkpoint to {path}")
-        checkpoint.download(root, replace=True)
-    return path
 
     
 def make_env_policy(cfg: DictConfig):
@@ -247,49 +215,9 @@ def evaluate(
         video_array = np.stack(frames)
         frames.clear()
         video_path = os.path.join(os.path.dirname(__file__), f"recording-{time_str}.mp4")
-        write_video(video_path, video_array, fps=1 / env.step_dt)
+        write_video(
+            video_path, video_array=video_array, fps=int(1 / env.step_dt), video_codec="h264"
+        )
 
     info["episode_cnt"] = episode_cnt
     return dict(sorted(info.items())), trajs, stats
-
-@torch.inference_mode()
-def export_onnx(module: ModBase, td: TensorDictBase, path: str, meta=None):
-    if not path.endswith(".onnx"):
-        raise ValueError(f"Export path must end with .onnx, got {path}.")
-    
-    td = td.cpu().select(*module.in_keys, strict=True)
-    module = module.cpu()
-    onnx_program = torch.onnx.dynamo_export(module, **td.to_dict())
-    onnx_program.save(path)
-    print(f"Exported ONNX model to {path}.")
-
-    import json
-    meta_path = path.replace(".onnx", ".json")
-    if meta is None:
-        meta = {}
-    meta["in_keys"] = module.in_keys
-    meta["out_keys"] = module.out_keys
-    meta["in_shapes"] =  [td[k].shape for k in module.in_keys],
-    
-    json.dump(meta, open(meta_path, "w"), indent=4)
-    print(f"Exported metadata to {meta_path}.")
-
-    import onnxruntime as ort
-    ort_session = ort.InferenceSession(path.replace(".pt", ".onnx"), providers=["CPUExecutionProvider"])
-
-    def to_numpy(tensor):
-        return (
-            tensor.detach().cpu().numpy()
-            if tensor.requires_grad
-            else tensor.cpu().numpy()
-        )
-    
-    onnx_input = tuple(td[k] for k in module.in_keys)
-    onnxruntime_input = {
-        k.name: to_numpy(v) for k, v in 
-        zip(ort_session.get_inputs(), onnx_input)
-    }
-
-    ort_output = ort_session.run(None, onnxruntime_input)
-    assert len(ort_output) == len(module.out_keys)
-

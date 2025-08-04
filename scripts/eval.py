@@ -9,9 +9,6 @@ from omegaconf import OmegaConf
 
 from isaaclab.app import AppLauncher
 
-import wandb
-import logging
-from tqdm import tqdm
 from helpers import make_env_policy, evaluate
 
 import os

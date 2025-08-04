@@ -43,22 +43,22 @@ observation:
                                         left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
                                         yaw_only: false}
-    prev_actions:         {steps: 3}
+    prev_actions:         {steps: 1}
   ref_motion_:
-    ref_orientation:      {steps: 5}
-    ref_height:           {steps: 5}
+    ref_orientation:      {steps: 10}
+    ref_height:           {steps: 10}
     ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
                                           .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                           .*knee.*, .*shoulder_yaw.*,
                                           .*ankle_pitch.*, .*elbow_pitch.*],
-                            steps: 5}
-    ref_keypoints:        {steps: 5}
+                            steps: 10}
+    ref_keypoints:        {steps: 10}
     ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
                                         left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
                                         right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
-                            steps: 5}
-    ref_trans_gap:        {steps: 5}
+                            steps: 10}
+    ref_trans_gap:        {steps: 10}
   priv:
     root_height:      {}
     root_linvel_b:    {}

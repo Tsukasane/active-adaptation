@@ -6,17 +6,11 @@ import itertools
 from omegaconf import OmegaConf
 
 from isaaclab.app import AppLauncher
-# from omni_drones.utils.wandb import init_wandb
-# from omni_drones.utils.torchrl import SyncDataCollector
-
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from tensordict.nn import TensorDictSequential
 from collections import OrderedDict
-from helpers import EpisodeStats, make_env_policy, ObsNorm, export_onnx
-
-import wandb
-import logging
-from tqdm import tqdm
+from helpers import EpisodeStats, make_env_policy, ObsNorm
+from active_adaptation.utils.export import export_onnx
 
 import os
 import datetime
@@ -63,9 +57,6 @@ def main(cfg):
         export_onnx(_policy, fake_input, path.replace(".pt", ".onnx"), meta)
         
 
-    frames_per_batch = env.num_envs * 32
-    total_frames = cfg.get("total_frames", -1) // frames_per_batch * frames_per_batch
-
     stats_keys = [
         k for k in env.reward_spec.keys(True, True) 
         if isinstance(k, tuple) and k[0]=="stats"
@@ -74,18 +65,20 @@ def main(cfg):
     policy = policy.get_rollout_policy("eval")
 
 
+    env.base_env.eval()
     td_ = env.reset()
-    
-    for i in itertools.count():
-        td_ = policy(td_)       # "loc" and "scale" in td_ are the mean and std of the policy distribution
-        td, td_ = env.step_and_maybe_reset(td_)
-        # td_.update(td["next"])
-        episode_stats.add(td)
+    assert not env.base_env.training
+    with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
+        torch.compiler.cudagraph_mark_step_begin()
+        for i in itertools.count():
+            td_ = policy(td_)
+            td, td_ = env.step_and_maybe_reset(td_)
+            episode_stats.add(td)
 
-        if len(episode_stats) >= env.num_envs:
-            print("Step", i)
-            for k, v in sorted(episode_stats.pop().items(True, True)):
-                print(k, torch.mean(v).item())
+            if len(episode_stats) >= env.num_envs:
+                print("Step", i)
+                for k, v in sorted(episode_stats.pop().items(True, True)):
+                    print(k, torch.mean(v).item())
     
     env.close()
     simulation_app.close()

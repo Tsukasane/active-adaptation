@@ -19,34 +19,12 @@ from isaaclab.app import AppLauncher
 from active_adaptation.utils.torchrl import SyncDataCollector
 
 # local import
-from helpers import make_env_policy, EpisodeStats, evaluate
+from helpers import make_env_policy, EpisodeStats
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
-
-
-def log_video(env, it, render_interval, render_decimation):
-    if it == 0 or it - env.last_recording_it >= render_interval:
-        env.start_recording(render_decimation)
-        env.last_recording_it = it
-
-    frames = env.get_complete_frames()
-    if len(frames) > 0:
-        env.pause_recording()
-        video_array = np.stack(frames, axis=0).transpose(0, 3, 1, 2)
-        video_tensor = torch.from_numpy(video_array)
-
-        run_dir = wandb.run.dir
-        video_path = os.path.join(run_dir, f"video_{it}.mp4")
-        torchvision.io.write_video(
-            video_path,
-            video_tensor.permute(0, 2, 3, 1),  # Change to (T, H, W, C) format
-            fps=1 / env.step_dt / env.render_decimation
-        )
-        
-        wandb.log({"video": wandb.Video(video_path)}, step=it)
 
 FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(FILE_PATH, "..", "cfg")
@@ -90,9 +68,6 @@ def main(cfg: DictConfig):
     frames_per_batch = env.num_envs * cfg.algo.train_every
     total_frames = cfg.get("total_frames", -1) // frames_per_batch * frames_per_batch
     total_iters = total_frames // frames_per_batch
-    eval_interval = cfg.get("eval_interval", -1)
-    render_interval = cfg.get("render_interval", -1)
-    render_decimation = cfg.get("render_decimation", 1)
     save_interval = cfg.get("save_interval", -1)
 
     log_interval = cfg.algo.train_every
@@ -178,9 +153,6 @@ def main(cfg: DictConfig):
         
         if save_interval > 0  and i % save_interval == 0:
             save(policy, f"checkpoint_{i}")
-
-        if render_interval > 0:
-            log_video(env, i, render_interval, render_decimation)
 
         run.log(info)
 
