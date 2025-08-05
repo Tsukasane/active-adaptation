@@ -26,20 +26,10 @@ def main(cfg):
     app_launcher = AppLauncher(OmegaConf.to_container(cfg.app))
     simulation_app = app_launcher.app
 
-    env, agent, vecnorm = make_env_policy(cfg)
+    env, agent = make_env_policy(cfg)
     
     keys = [
-        ("next", "stats"),
-        ("next", "done"), 
-        ("next", "reward"),
-        "value_obs",
-        "value_priv",
-        "value_adapt",
-        "context_expert",
-        "context_scale",
-        "context_adapt",
-        "context_adapt_scale",
-        "action_kl",
+        ("next", "stats")
     ]
     
     policy_eval = agent.get_rollout_policy("eval")
@@ -47,11 +37,6 @@ def main(cfg):
     
     print(termcolor.colored(trajs, "light_yellow"))
     time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
-    path = os.path.join(os.path.dirname(__file__), f"trajs-{time_str}.pt")
-    torch.save(trajs, path)
-
-    path = os.path.join(os.path.dirname(__file__), f"stats-{time_str}.pt")
-    torch.save(stats, path)
 
     info["task"] = cfg.task.name
     info["algo"] = cfg.algo.name

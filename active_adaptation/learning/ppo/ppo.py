@@ -26,32 +26,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
 import warnings
+import functools
 
 from torchrl.data import CompositeSpec, TensorSpec
 from torchrl.modules import ProbabilisticActor
 from torchrl.envs.transforms import CatTensors, VecNorm
 from tensordict import TensorDict
-from tensordict.nn import (
-    TensorDictModuleBase,
-    TensorDictModule,
-    TensorDictSequential,
-    CudaGraphModule
-)
+from tensordict.nn import TensorDictModuleBase, TensorDictModule, TensorDictSequential
 
 from hydra.core.config_store import ConfigStore
 from dataclasses import dataclass, field
 from typing import Union, List
 from collections import OrderedDict
 
-from ..utils.valuenorm import ValueNorm1, ValueNormFake
+from ..modules.valuenorm import ValueNorm1, ValueNormFake
 from ..modules.distributions import IndependentNormal
-from .common import *
-
-torch.set_float32_matmul_precision('high')
+from ..modules.common import *
 
 import active_adaptation
 import torch.distributed as distr
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+torch.set_float32_matmul_precision('high')
 
 @dataclass
 class PPOConfig:
@@ -62,14 +58,15 @@ class PPOConfig:
     num_minibatches: int = 8
     lr: float = 5e-4
     clip_param: float = 0.2
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.0005
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
+    vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
     compile: bool = False
     use_ddp: bool = True
     checkpoint_path: Union[str, None] = None
-    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY])
+    in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_REF_KEY,OBS_PRIV_KEY])
 
 cs = ConfigStore.instance()
 cs.store("ppo", node=PPOConfig, group="algo")
@@ -83,8 +80,7 @@ class PPOPolicy(TensorDictModuleBase):
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
-        device,
-        env=None,
+        device
     ):
         super().__init__()
         self.cfg = cfg
@@ -104,10 +100,26 @@ class PPOPolicy(TensorDictModuleBase):
         self.value_norm = value_norm_cls(input_shape=1).to(self.device)
 
         fake_input = observation_spec.zero()
+        print(fake_input)
+        
+        def make_actor(out_key: str):
+            modules = [
+                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
+                TensorDictModule(make_mlp([2048, 1024, 512]), ["a_in"], [out_key])
+            ]
+            return modules
+        
+        def make_critic(out_key: str):
+            modules = [
+                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
+                TensorDictModule(make_mlp([2048, 1024, 512]), ["c_in"], [out_key])
+            ]
+            return modules
 
+        _actor = nn.Sequential(make_mlp([256, 128]), Actor(self.action_dim))
         actor_module = TensorDictSequential(
-            TensorDictModule(make_mlp([256, 256, 128]), [OBS_KEY], ["_actor_feature"]),
-            TensorDictModule(Actor(self.action_dim), ["_actor_feature"], ["loc", "scale"])
+            *make_actor("_actor_feature"),
+            TensorDictModule(_actor, ["_actor_feature"], ["loc", "scale"])
         )
         self.actor: ProbabilisticActor = ProbabilisticActor(
             module=actor_module,
@@ -117,18 +129,25 @@ class PPOPolicy(TensorDictModuleBase):
             return_log_prob=True
         ).to(self.device)
         
+        _critic = nn.Sequential(make_mlp([256, 128]), nn.Linear(128, 1))
         self.critic = TensorDictSequential(
-            TensorDictModule(make_mlp([256, 256, 128]), [OBS_KEY], ["_critic_feature"]),
-            TensorDictModule(nn.LazyLinear(1), ["_critic_feature"], ["state_value"])
+            *make_critic("_critic_feature"),
+            TensorDictModule(_critic, ["_critic_feature"], ["state_value"])
         ).to(self.device)
 
         self.actor(fake_input)
         self.critic(fake_input)
 
+        from termcolor import colored
+        print(colored(f"[Info]: create VecNorm for keys: {self.cfg.vecnorm}", "green"))
+        self.vecnorm: VecNorm = VecNorm(self.cfg.vecnorm, decay=0.9999)
+
+        self.count_parameters()
+        
         def init_(module):
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, 0.01)
-                nn.init.constant_(module.bias, 0.)
+                nn.init.constant_(module.bias, -1.)
         
         self.actor.apply(init_)
         self.critic.apply(init_)
@@ -148,7 +167,7 @@ class PPOPolicy(TensorDictModuleBase):
                     distr.broadcast(param, src=0)
                 for param in self.critic.parameters():
                     distr.broadcast(param, src=0)
-        
+
         self.opt = torch.optim.Adam(
             [
                 {"params": self.actor.parameters()},
@@ -160,14 +179,29 @@ class PPOPolicy(TensorDictModuleBase):
         self.update = self._update
         if self.cfg.compile and not active_adaptation.is_distributed():
             self.update = torch.compile(self.update, fullgraph=True)
-            # self.update = CudaGraphModule(self.update)
+
+    def count_parameters(self):
+        num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
+        num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
+        actor_params_m = num_actor_params / 1e6
+        critic_params_m = num_critic_params / 1e6
+        print(f'Number of actor parameters: {actor_params_m:.2f}M')
+        print(f'Number of critic parameters: {critic_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
-        policy = TensorDictSequential(self.actor)
-        if self.cfg.compile:
-            policy = torch.compile(policy, fullgraph=True)
+        if mode == "train":
+            policy = TensorDictSequential(
+                self.vecnorm,
+                self.actor,
+            )
+        else:
+            policy = TensorDictSequential(
+                self.vecnorm.to_observation_norm(),
+                self.actor,
+            )
         return policy
 
+    # @torch.compile
     def train_op(self, tensordict: TensorDict):
         tensordict = tensordict.copy()
         infos = []
@@ -179,13 +213,9 @@ class PPOPolicy(TensorDictModuleBase):
             for minibatch in batch:
                 infos.append(TensorDict(self.update(minibatch), []))
         
-        out = {}
-        for k, v in sorted(torch.stack(infos).items()):
-            out[k] = v.detach().mean().item()
-        out["critic/value_mean"] = tensordict["ret"].mean().item()
-        out["critic/value_std"] = tensordict["ret"].std().item()
-        out["critic/neg_rew_ratio"] = (tensordict[REWARD_KEY].sum(-1) <= 0.).float().mean().item()
-        return out
+        infos = {k: v.mean().item() for k, v in sorted(torch.stack(infos).items())}
+        infos["critic/value_mean"] = tensordict["ret"].mean().item()
+        return infos
 
     @torch.no_grad()
     def _compute_advantage(
@@ -196,17 +226,17 @@ class PPOPolicy(TensorDictModuleBase):
         ret_key: str="ret",
         update_value_norm: bool=True,
     ):
-        keys = tensordict.keys(True, True)
-        if not ("state_value" in keys and ("next", "state_value") in keys):
-            with tensordict.view(-1) as tensordict_flat:
-                critic(tensordict_flat)
-                critic(tensordict_flat["next"])
+        with tensordict.view(-1) as tensordict_flat:
+            critic(tensordict_flat)
+            self.vecnorm.freeze()
+            self.vecnorm(tensordict_flat["next"])
+            critic(tensordict_flat["next"])
+            self.vecnorm.unfreeze()
 
         values = tensordict["state_value"]
         next_values = tensordict["next", "state_value"]
 
-        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True).clamp_min(0.)
-        discount = tensordict["next", "discount"]
+        rewards = tensordict[REWARD_KEY].sum(-1, keepdim=True)
         terms = tensordict[TERM_KEY]
         dones = tensordict[DONE_KEY]
         values = self.value_norm.denormalize(values)
@@ -221,17 +251,14 @@ class PPOPolicy(TensorDictModuleBase):
         tensordict.set(ret_key, ret)
         return tensordict
 
+    # @torch.compile
     def _update(self, tensordict: TensorDict):
-        action_data = tensordict[ACTION_KEY]
-        log_probs_data = tensordict["action_log_prob"]
-        self.actor(tensordict)
-        dist = IndependentNormal(tensordict["loc"], tensordict["scale"])
-        # dist = self.actor.get_dist(tensordict)
-        log_probs = dist.log_prob(action_data)
+        dist = self.actor.get_dist(tensordict)
+        log_probs = dist.log_prob(tensordict[ACTION_KEY])
         entropy = dist.entropy().mean()
 
         adv = tensordict["adv"]
-        log_ratio = (log_probs - log_probs_data).unsqueeze(-1)
+        log_ratio = (log_probs - tensordict["sample_log_prob"]).unsqueeze(-1)
         ratio = torch.exp(log_ratio)
         surr1 = adv * ratio
         surr2 = adv * ratio.clamp(1.-self.clip_param, 1.+self.clip_param)
@@ -254,22 +281,18 @@ class PPOPolicy(TensorDictModuleBase):
             for param in self.critic.parameters():
                 distr.all_reduce(param.grad.data, op=distr.ReduceOp.SUM)
                 param.grad.data /= self.world_size
-        
+
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
         self.opt.step()
-        
-        with torch.no_grad():
-            explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
-            clipfrac = ((ratio - 1.0).abs() > self.clip_param).float().mean()
-            approx_kl = ((ratio - 1.0) - log_ratio).mean()
+        explained_var = 1 - F.mse_loss(values, b_returns) / b_returns.var()
         return {
-            "actor/policy_loss": policy_loss.detach(),
-            "actor/entropy": entropy.detach(),
+            "actor/policy_loss": policy_loss,
+            "actor/entropy": entropy,
+            "actor/noise_std": tensordict["scale"].mean(),
             "actor/grad_norm": actor_grad_norm,
-            "actor/clamp_ratio": clipfrac,
-            "actor/approx_kl": approx_kl,
-            "critic/value_loss": value_loss.detach(),
+            'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+            "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,
         }
@@ -278,6 +301,7 @@ class PPOPolicy(TensorDictModuleBase):
         state_dict = OrderedDict()
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
+        state_dict["vecnorm"] = self.vecnorm.state_dict()
         return state_dict
     
     def load_state_dict(self, state_dict, strict=True):

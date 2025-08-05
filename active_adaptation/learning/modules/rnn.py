@@ -3,23 +3,17 @@ import torch.nn as nn
 import einops
 import contextlib
 
-from torch.utils._contextlib import _DecoratorContextManager
-
 _RECURRENT_MODE = False
 
-class set_recurrent_mode(_DecoratorContextManager):
-    def __init__(self, mode: bool = True):
-        super().__init__()
-        self.mode = mode
-        self.prev = _RECURRENT_MODE
-    
-    def __enter__(self):
-        global _RECURRENT_MODE
-        _RECURRENT_MODE = self.mode
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        global _RECURRENT_MODE
-        _RECURRENT_MODE = self.prev
+@contextlib.contextmanager
+def set_recurrent_mode(mode: bool):
+    global _RECURRENT_MODE
+    try:
+        prev_mode = _RECURRENT_MODE
+        _RECURRENT_MODE = mode
+        yield
+    finally:
+        _RECURRENT_MODE = prev_mode
 
 
 def recurrent_mode():

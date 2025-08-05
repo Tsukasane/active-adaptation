@@ -14,7 +14,6 @@ eval_interval: -1
 save_interval: -1
 seed: 0
 checkpoint_path: null
-vecnorm: eval # ${oc.select:algo.vecnorm,train}
 export_policy: false
 
 camera_follow: true
@@ -32,9 +31,11 @@ wandb:
 
 
 defaults:
-  - task: Velocity
+  - task: motion
   - algo: ppo
   - _self_
 
 task:
-  num_envs: 64
+  num_envs: 4
+  command:
+    mode: play

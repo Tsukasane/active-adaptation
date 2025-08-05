@@ -21,18 +21,18 @@ render_interval: -1
 render_decimation: 4
 seed: 42
 checkpoint_path: null
-vecnorm: ${oc.select:algo.vecnorm,train}
 
 camera_follow: true
 
 wandb:
   name: ${..exp_name}/${now:%m-%d}_${now:%H-%M}
   job_type: train
-  project: go2m_impedance
-  mode: online # set to 'disabled' when debugging locally
+  entity: cyber dribble
+  project: sim2real
+  mode: online # online, disabled
   tags: []
 
 defaults:
-  - task: Velocity
+  - task: motion
   - algo: ppo
   - _self_

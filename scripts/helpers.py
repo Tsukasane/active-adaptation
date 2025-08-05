@@ -99,49 +99,17 @@ def make_env_policy(cfg: DictConfig):
     OmegaConf.set_struct(cfg, False)
     cfg.seed = cfg.seed + active_adaptation.get_local_rank()
     
-    from active_adaptation.envs import SimpleEnv
+    from active_adaptation.envs import SimpleEnv, Humanoid
     from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, VecNorm, StepCounter
     
-    base_env = SimpleEnv(cfg.task)
-
     checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)
     if checkpoint_path is not None:
         state_dict = torch.load(checkpoint_path, weights_only=False)
     else:
         state_dict = {}
-    
-    policy_in_keys = cfg.algo.get("in_keys", ["policy", "priv"])
 
-    for obs_group_key in list(cfg.task.observation.keys()):
-        if (
-            obs_group_key not in policy_in_keys
-            and not obs_group_key.endswith("_")
-        ):
-            cfg.task.observation.pop(obs_group_key)
-            print(colored(f"Discard obs group {obs_group_key} as it is not used.", "yellow"))
-    
-    obs_keys = [
-        key for key, spec in base_env.observation_spec.items(True, True) 
-        if not (spec.dtype == bool or key.endswith("_"))
-    ]
+    base_env = Humanoid(cfg.task)
     transform = Compose(InitTracker(), StepCounter())
-
-    assert cfg.vecnorm in ("train", "eval", None)
-    print(colored(f"[Info]: create VecNorm for keys: {obs_keys}", "green"))
-    vecnorm = VecNorm(obs_keys, decay=0.9999)
-    vecnorm(base_env.fake_tensordict())
-
-    if "vecnorm" in state_dict.keys():
-        print(colored("[Info]: Load VecNorm from checkpoint.", "green"))
-        vecnorm.load_state_dict(state_dict["vecnorm"])
-    if cfg.vecnorm == "train":
-        print(colored("[Info]: Updating obervation normalizer.", "green"))
-        transform.append(vecnorm)
-    elif cfg.vecnorm == "eval":
-        print(colored("[Info]: Not updating obervation normalizer.", "green"))
-        transform.append(vecnorm.to_observation_norm())
-    elif cfg.vecnorm is not None:
-        raise ValueError
 
     env = TransformedEnv(base_env, transform)
     env.set_seed(cfg.seed)
@@ -154,8 +122,7 @@ def make_env_policy(cfg: DictConfig):
         env.observation_spec, 
         env.action_spec, 
         env.reward_spec,
-        device=base_env.device,
-        env=env
+        device=base_env.device
     )
     
     if "policy" in state_dict.keys():
@@ -168,7 +135,7 @@ def make_env_policy(cfg: DictConfig):
         transform.append(primer)
         env = TransformedEnv(env.base_env, transform)
 
-    return env, policy, vecnorm
+    return env, policy
 
 
 from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
@@ -197,10 +164,11 @@ def evaluate(
     trajs = []
     frames = []
 
+    num_frames = env.command_manager.num_frames
     inference_time = []
     torch.compiler.cudagraph_mark_step_begin()
     with set_exploration_type(exploration_type):
-        for i in tqdm(range(env.max_episode_length), miniters=10):
+        for i in tqdm(range(num_frames), miniters=10):
             s = time.perf_counter()
             tensordict_ = policy(tensordict_)
             e = time.perf_counter()

@@ -110,7 +110,7 @@ class _Env(EnvBase):
         self.setup_scene()
         self._ground_mesh = None
         
-        self.max_episode_length = self.cfg.max_episode_length
+        self.max_episode_length = torch.ones(self.num_envs, dtype=torch.long, device=self.sim.device) * self.cfg.max_episode_length
         self.step_dt = self.cfg.sim.step_dt
         self.physics_dt = self.sim.get_physics_dt()
         self.decimation = int(self.step_dt / self.physics_dt)
@@ -139,6 +139,7 @@ class _Env(EnvBase):
                 "stats": {
                     "episode_len": UnboundedContinuous([self.num_envs, 1]),
                     "success": UnboundedContinuous([self.num_envs, 1]),
+                    "episode_len_ratio": UnboundedContinuous([self.num_envs, 1]),
                 },
             },
             shape=[self.num_envs]

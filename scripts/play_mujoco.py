@@ -24,7 +24,7 @@ def main(cfg):
     # TODO: maybe implement these
     cfg.task.randomization = {}
     cfg.task.reward = {}
-    env, policy, vecnorm = make_env_policy(cfg)
+    env, policy = make_env_policy(cfg)
     
     if cfg.export_policy:
         import time
@@ -44,8 +44,7 @@ def main(cfg):
         FILE_PATH = os.path.dirname(__file__)
         
         deploy_policy = copy.deepcopy(policy.get_rollout_policy("deploy"))
-        obs_norm = ObsNorm.from_vecnorm(vecnorm, deploy_policy.in_keys)
-        _policy = TensorDictSequential(obs_norm, deploy_policy).cpu()
+        _policy = TensorDictSequential(deploy_policy).cpu()
         
         print(f"Inference time of policy: {test(_policy, fake_input)}")
 
@@ -55,7 +54,7 @@ def main(cfg):
         torch.save(_policy, path)
 
         meta = {}
-        # meta["action_scaling"] = dict(cfg.task.action.get("action_scaling"))
+        meta["action_scaling"] = dict(cfg.task.action.get("action_scaling"))
         export_onnx(_policy, fake_input, path.replace(".pt", ".onnx"), meta)
     
     stats_keys = [

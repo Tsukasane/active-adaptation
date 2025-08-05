@@ -20,7 +20,7 @@ from isaaclab.app import AppLauncher
 from active_adaptation.utils.torchrl import SyncDataCollector
 
 # local import
-from scripts.helpers import make_env_policy, EpisodeStats, evaluate
+from helpers import make_env_policy, EpisodeStats, evaluate
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -43,32 +43,27 @@ def main(cfg: DictConfig):
     )
     simulation_app = app_launcher.app
 
-    run = wandb.init(
-        job_type=cfg.wandb.job_type,
-        project=cfg.wandb.project,
-        mode=cfg.wandb.mode,
-        tags=cfg.wandb.tags,
-    )
-    run.config.update(OmegaConf.to_container(cfg))
-    
-    default_run_name = f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
-    run_idx = run.name.split("-")[-1]
-    run.name = f"{run_idx}-{default_run_name}"
-    setproctitle(run.name)
+    if aa.is_main_process():
+        run = wandb.init(
+            job_type=cfg.wandb.job_type,
+            project=cfg.wandb.project,
+            mode=cfg.wandb.mode,
+            tags=cfg.wandb.tags,
+        )
+        run.config.update(OmegaConf.to_container(cfg))
+        run.config["world_size"] = aa.get_world_size()
+        
+        default_run_name = f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
+        run_idx = run.name.split("-")[-1]
+        run.name = f"{run_idx}-{default_run_name}"
+        setproctitle(run.name)
 
-    cfg_save_path = os.path.join(run.dir, "cfg.yaml")
-    OmegaConf.save(cfg, cfg_save_path)
-    run.save(cfg_save_path, policy="now")
-    run.save(os.path.join(run.dir, "config.yaml"), policy="now")
+        cfg_save_path = os.path.join(run.dir, "cfg.yaml")
+        OmegaConf.save(cfg, cfg_save_path)
+        run.save(cfg_save_path, policy="now")
+        run.save(os.path.join(run.dir, "config.yaml"), policy="now")
 
-    env, policy, vecnorm = make_env_policy(cfg)
-
-    import inspect
-    import shutil
-    source_path = inspect.getfile(policy.__class__)
-    target_path = os.path.join(run.dir, source_path.split("/")[-1])
-    shutil.copy(source_path, target_path)
-    wandb.save(target_path, policy="now")
+    env, policy = make_env_policy(cfg)
 
     frames_per_batch = env.num_envs * cfg.algo.train_every
     total_frames = cfg.get("total_frames", -1) // aa.get_world_size()
@@ -76,7 +71,7 @@ def main(cfg: DictConfig):
     total_iters = total_frames // frames_per_batch
     save_interval = cfg.get("save_interval", -1)
 
-    log_interval = (env.max_episode_length // cfg.algo.train_every) + 1
+    log_interval = cfg.algo.train_every
     logging.info(f"Log interval: {log_interval} steps")
 
     stats_keys = [
@@ -160,11 +155,6 @@ def main(cfg: DictConfig):
     if aa.is_main_process():
         save(policy, "checkpoint_final")
 
-    policy_eval = policy.get_rollout_policy("eval")
-    info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
-    info["env_frames"] = collector._frames
-    run.log(info)
-
     wandb.finish()
     exit(0)
     
@@ -175,4 +165,3 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
-

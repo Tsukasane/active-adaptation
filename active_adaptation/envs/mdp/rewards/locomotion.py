@@ -28,19 +28,47 @@ def reward_wrapper(func: Callable[[], torch.Tensor]):
             return func()
     return RewardWrapper
 
-
-class joint_acc_l2(Reward):
-    def __init__(self, env, weight: float, enabled: bool = True):
+class joint_vel_l2(Reward):
+    def __init__(self, env, joint_names: str, weight: float, enabled: bool = True):
         super().__init__(env, weight, enabled)
         self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids, _ = self.asset.find_joints(joint_names)
+        self.joint_vel = torch.zeros(
+            self.num_envs, 2, len(self.joint_ids), device=self.device
+        )
+
+    def post_step(self, substep):
+        self.joint_vel[:, substep % 2] = self.asset.data.joint_vel[:, self.joint_ids]
 
     def compute(self) -> torch.Tensor:
-        r = -self.asset.data.joint_acc.square().sum(dim=-1, keepdim=True)
-        if hasattr(self.asset.data, "linvel_exp"):
-            return r * (0.5 + 0.5 * self.asset.data.linvel_exp)
-        else:
-            return r
+        joint_vel = self.joint_vel.mean(1)
+        return -joint_vel.square().sum(1, True)
 
+class joint_acc_l2(Reward):
+    def __init__(self, env, weight: float, joint_names: str, enabled: bool = True):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids, _ = self.asset.find_joints(joint_names)
+    
+    def compute(self) -> torch.Tensor:
+        return - self.asset.data.joint_acc[:, self.joint_ids].square().sum(1, True)
+
+
+class joint_torques_l2(Reward):
+    def __init__(
+        self, env, weight: float, enabled: bool = True, joint_names: str = ".*"
+    ):
+        super().__init__(env, weight, enabled)
+        self.asset: Articulation = self.env.scene["robot"]
+        self.joint_ids = self.asset.find_joints(joint_names)[0]
+        self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
+
+    def compute(self) -> torch.Tensor:
+        return (
+            -self.asset.data.applied_torque[:, self.joint_ids]
+            .square()
+            .sum(1, keepdim=True)
+        )
 
 class survival(Reward):
     def compute(self):
@@ -150,24 +178,6 @@ class energy_dist_fb(Reward):
         energy_front = self.energy_ema[:, self.front_joint_ids]
         energy_rear = self.energy_ema[:, self.rear_joint_ids]
         return -(energy_front - energy_rear).square().sum(1, keepdim=True)
-
-
-class joint_torques_l2(Reward):
-    def __init__(
-        self, env, weight: float, enabled: bool = True, joint_names: str = ".*"
-    ):
-        super().__init__(env, weight, enabled)
-        self.asset: Articulation = self.env.scene["robot"]
-        self.joint_ids = self.asset.find_joints(joint_names)[0]
-        self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
-
-    def compute(self) -> torch.Tensor:
-        return (
-            -self.asset.data.applied_torque[:, self.joint_ids]
-            .square()
-            .sum(1, keepdim=True)
-        )
-
 
 class joint_torques_berhu(Reward):
     """
@@ -1029,25 +1039,6 @@ class stance_width(Reward):
         )
         width = torch.cat([front_width, back_width], dim=1)
         return -(self.target_width - width).clamp_min(0.0).sum(1, keepdim=True)
-
-
-class joint_vel_l2(Reward):
-    def __init__(self, env, joint_names: str, weight: float, enabled: bool = True):
-        super().__init__(env, weight, enabled)
-        self.asset: Articulation = self.env.scene["robot"]
-        self.joint_ids, _ = self.asset.find_joints(joint_names)
-        self.joint_vel = torch.zeros(
-            self.num_envs, 2, len(self.joint_ids), device=self.device
-        )
-
-    def post_step(self, substep):
-        self.joint_vel[:, substep % 2] = self.asset.data.joint_vel[:, self.joint_ids]
-
-    def compute(self) -> torch.Tensor:
-        joint_vel = self.joint_vel.mean(1)
-        return -joint_vel.square().sum(1, True)
-
-
 
 class feet_swing_height(Reward):
     def __init__(self, env, target_height: float, weight: float, enabled: bool = True):

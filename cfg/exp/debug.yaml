@@ -1,7 +1,0 @@
-# @package _global_
-
-task:
-  num_envs: 64
-
-wandb:
-  mode: disabled

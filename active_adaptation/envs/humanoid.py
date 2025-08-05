@@ -4,297 +4,351 @@ import torch
 from isaaclab.sensors import ContactSensor, RayCaster
 from isaaclab.actuators import DCMotor
 from isaaclab.assets import Articulation
-from isaaclab.utils.math import yaw_quat, quat_mul
+from isaaclab.utils.math import yaw_quat
 from isaaclab.utils.warp import raycast_mesh
 from active_adaptation.utils.helpers import batchify
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 
 quat_rotate = batchify(quat_rotate)
 quat_rotate_inverse = batchify(quat_rotate_inverse)
+from tensordict.tensordict import TensorDictBase, TensorDict
 
-from active_adaptation.envs.locomotion import Env, LocomotionEnv
+from active_adaptation.envs.locomotion import SimpleEnv
 
 import active_adaptation.envs.mdp as mdp
 
-class Humanoid(LocomotionEnv):
+class Humanoid(SimpleEnv):
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        # self.max_episode_length = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
+        self.start_frames = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.end_frames = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
+
+    def _reset(self, tensordict: TensorDictBase, **kwargs) -> TensorDictBase:
+        if tensordict is not None:
+            env_mask = tensordict.get("_reset").reshape(self.num_envs)
+            env_ids = env_mask.nonzero().squeeze(-1)
+            self.episode_count += env_ids.numel()
+        else:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        if len(env_ids):
+            self._reset_idx(env_ids)
+            self.scene.reset(env_ids)
+        for callback in self._reset_callbacks:
+            callback(env_ids)
+        tensordict = TensorDict({}, self.num_envs, device=self.device)
+        tensordict.update(self.observation_spec.zero())
+        # self._compute_observation(tensordict)
+        return tensordict
     
-    feet_name_expr = ".*ankle_link"
-
-    class feet_too_close(mdp.Termination):
-        def __init__(self, env, feet_names: str, thres: float=0.1):
-            super().__init__(env)
-            self.threshold = thres
-            self.asset: Articulation = self.env.scene["robot"]
-            self.body_ids = self.asset.find_bodies(feet_names)[0]
-            assert len(self.body_ids) == 2, "Only support two feet"
-
-        def __call__(self):
-            feet_pos = self.asset.data.body_pos_w[:, self.body_ids]
-            distance_xy = (feet_pos[:, 0, :2] - feet_pos[:, 1, :2]).norm(dim=-1)
-            return (distance_xy < self.threshold).reshape(-1, 1)
-    
-    class arm_swing(mdp.Reward):
-        
-        l: float = 0.2
-
-        def __init__(self, env, arm_names: str,weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.arm_ids = self.asset.find_bodies(arm_names)[0]
-            self.phase: torch.Tensor = self.asset.data.phase
-            self.fwd_vec = torch.tensor([1., 0., 0.], device=self.device)
-            self.command_manager = self.env.command_manager
-
-        def compute(self) -> torch.Tensor:
-            quat_root = yaw_quat(self.asset.data.root_quat_w)
-            arm_displacement = (
-                + self.asset.data.body_pos_w[:, self.arm_ids[0]]
-                - self.asset.data.body_pos_w[:, self.arm_ids[1]]
+    def _reset_idx(self, env_ids: torch.Tensor):
+        init_root_state, start_frames, end_frames = self.command_manager.sample_init(env_ids)
+        if not self.robot.is_fixed_base:
+            self.robot.write_root_state_to_sim(
+                init_root_state, 
+                env_ids=env_ids
             )
-            arm_displacement = (quat_rotate(quat_root, self.fwd_vec) * arm_displacement).sum(-1, True)
-            reward = (self.phase.cos().sign().unsqueeze(1) * arm_displacement).clamp(max=self.l)
-            return reward.reshape(self.num_envs, 1) * (~self.command_manager.is_standing_env)
+        self.stats[env_ids] = 0.
 
-        
-    class step_up(mdp.Reward):
-        
+        self.scene.reset(env_ids)
+
+        self.episode_length_buf[env_ids] = self.start_frames[env_ids] = start_frames
+        self.max_episode_length[env_ids] = self.end_frames[env_ids] = end_frames
+
+        # in `self._reset_callbacks`
+        # self.command_manager.reset(env_ids=env_ids)
+        # self.action_manager.reset(env_ids=env_ids)
+
+    def _compute_reward(self) -> TensorDictBase:
+        rew_dict = super()._compute_reward()
+        self.stats["episode_len"][:] = (self.episode_length_buf - self.start_frames).unsqueeze(1)
+        self.stats["success"][:] = (self.episode_length_buf >= self.end_frames).unsqueeze(1).float()
+        self.stats["episode_len_ratio"][:] = ((self.episode_length_buf - self.start_frames).float() / (self.end_frames - self.start_frames).float()).unsqueeze(1)
+        return rew_dict
+
+    # Observations of reference motion
+    class ref_orientation(mdp.Observation):
+
         env: "Humanoid"
 
-        def __init__(self, env, feet_names: str, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.body_ids = self.asset.find_bodies(feet_names)[0]
-            assert len(self.body_ids) == 2, "Only support two feet"
-
-            self.height_scan: torch.Tensor = self.asset.data.height_scan
-            self.phase: torch.Tensor = self.asset.data.phase
-            self.scan_size = self.height_scan.shape[-2:]
-        
-        def update(self):
-            self.feet_pos = self.asset.data.body_pos_w[:, self.body_ids]
-            self.feet_height = self.feet_pos[:, :, 2]
-            height_scan = (
-                self.height_scan 
-                - self.asset.data.root_pos_w[:, 2].reshape(-1, 1, 1)
-                + self.feet_height.min(dim=1).values.reshape(-1, 1, 1)
-            )
-            height_front = height_scan[:, :, self.scan_size[1]//2:].mean(dim=(1, 2))
-            self.stairs_front = (height_front < -0.0).unsqueeze(1)
-            
-        def compute(self) -> torch.Tensor:
-            phase_sin = self.phase.sin().unsqueeze(1)
-            feet_height_diff = (self.feet_height[:, 0] - self.feet_height[:, 1]).unsqueeze(1)
-            feet_height_diff = torch.where(phase_sin > 0, feet_height_diff, -feet_height_diff)
-            r = (feet_height_diff.clamp(0, 0.15) / 0.15).sqrt()
-            r = (self.stairs_front & (phase_sin.abs() > 0.1)) * r
-            return r.reshape(self.num_envs, 1)
-
-        def debug_draw(self):
-            phase_sin = self.phase.sin().unsqueeze(1)
-            with torch.device(self.device):
-                feet_pos = self.asset.data.body_pos_w[:, self.body_ids]
-                lift_foot = torch.where(phase_sin > 0, feet_pos[:, 0], feet_pos[:, 1])
-                lift = torch.tensor([0, 0, 1.5]).expand_as(lift_foot)
-            self.env.debug_draw.vector(
-                lift_foot, 
-                lift * self.stairs_front,
-                size=5,
-                color=(1, 0, 0, 1)
-            )
-
-    class root_orientation(mdp.Reward):
-            
-        env: "Humanoid"
-
-        def __init__(self, env, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-
-        def compute(self) -> torch.Tensor:
-            z = - self.asset.data.projected_gravity_b[:, 2]
-            # y = self.asset.data.projected_gravity_b[:, 1].abs()
-            x = self.asset.data.projected_gravity_b[:, 0].clamp_max(0.1)
-            return (z + 2 * x).unsqueeze(1)
-    
-
-    class arm_velocity_exp(mdp.Reward):
-
-        def __init__(self, env, arm_names: str, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.arm_ids = self.asset.find_bodies(arm_names)[0]
-
-            self.action_manager: mdp.action.HumanoidWithArm = self.env.action_manager
-            if not isinstance(self.action_manager, mdp.action.HumanoidWithArm):
-                raise ValueError("`HumanoidWithArm` action manager required")
-            
-            with torch.device(self.device):
-                self.arm_linvel_w = torch.zeros(self.num_envs, len(self.arm_ids), 3)
-                self.arm_linvel_b = torch.zeros(self.num_envs, len(self.arm_ids), 3)
-                self.error = torch.zeros(self.num_envs, len(self.arm_ids))
-                self.cum_error = torch.zeros(self.num_envs, len(self.arm_ids))
-                self.action_manager.cum_error = self.cum_error
-
-        def reset(self, env_ids):
-            self.cum_error[env_ids] = 0
-
-        def update(self):
-            arm_linvel_w = self.asset.data.body_lin_vel_w[:, self.arm_ids]
-            arm_linvel_b = quat_rotate_inverse(self.asset.data.root_quat_w.unsqueeze(1), arm_linvel_w)
-            self.error = (arm_linvel_b - self.action_manager.command_arm_linvel).square().sum(dim=-1)
-            self.cum_error.add_(self.error * self.env.step_dt).mul_(0.99)
-            self.arm_linvel_w[:] = arm_linvel_w
-            self.arm_linvel_b[:] = arm_linvel_b
-            
-        def compute(self) -> torch.Tensor:
-            r = torch.exp(- self.error / 0.25 ).mean(1, True)
-            return r
-
-        def debug_draw(self):
-            arm_pos_w = self.asset.data.body_pos_w[:, self.arm_ids]
-            command_arm_linvel = quat_rotate(self.asset.data.root_quat_w.unsqueeze(1), self.action_manager.command_arm_linvel)
-            self.env.debug_draw.vector(
-                arm_pos_w.reshape(-1, 3),
-                command_arm_linvel.reshape(-1, 3),
-                color=(0.5, 0.6, 0.5, 1),
-            )
-            self.env.debug_draw.vector(
-                arm_pos_w.reshape(-1, 3),
-                self.arm_linvel_w.reshape(-1, 3),
-                color=(0.6, 0.5, 0.5, 1),
-            )
-    
-    class arm_velocity_cum_error(mdp.Termination):
-        def __init__(self, env, thres: float=0.8):
+        def __init__(self, env, steps: int=1):
             super().__init__(env)
-            self.threshold = thres
-            self.asset: Articulation = self.env.scene["robot"]
-            self.action_manager: mdp.action.HumanoidWithArm = self.env.action_manager
-            if not isinstance(self.action_manager, mdp.action.HumanoidWithArm):
-                raise ValueError("`HumanoidWithArm` action manager required")
-            self.cum_error = self.action_manager.cum_error
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_orientation = self.env.command_manager.root_orientation
 
-        def __call__(self):
-            return (self.cum_error > self.threshold).any(1, True)
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range  # (num_envs, steps)
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_orientation = self.ref_orientation[timestep].to(self.device)
+            return ref_orientation.reshape(self.num_envs, -1)
+
+    class ref_height(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_root_translation = self.env.command_manager.root_translations
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_root_translation = self.ref_root_translation[timestep].to(self.device)
+            return ref_root_translation[:, :, 2].reshape(self.num_envs, -1)
+        
+    class ref_qpos(mdp.Observation):
+        def __init__(self, env, joint_names, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
+            self.steps = steps
+            self.ref_qpos = self.env.command_manager.qpos[:, self.joint_indices]
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_qpos = self.ref_qpos[timestep].to(self.device)
+            return ref_qpos.reshape(self.num_envs, -1)
+        
+    class ref_keypoints(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_keypoints = self.ref_keypoints[timestep].to(self.device)    # (num_envs, steps, num_joints, 3)
+            return ref_keypoints.reshape(self.num_envs, -1)
+        
+    class ref_keypoints_gap(mdp.Observation):
+        def __init__(self, env, body_names: str, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.body_pos_local = torch.zeros(self.num_envs, len(self.body_indices), 3, device=self.device)
+
+        def update(self):
+            quat = self.robot.data.root_quat_w.unsqueeze(1)
+            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
+            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
+            self.body_pos_local = quat_rotate_inverse(quat, body_pos)
+
+        def compute(self):
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_keypoints = self.ref_keypoints[timestep].to(self.device)   # (num_envs, steps, num_joints, 3)
+            body_pos_local = self.body_pos_local.unsqueeze(1).expand_as(ref_keypoints)
+            ref_keypoints_gap = ref_keypoints - body_pos_local
+            return ref_keypoints_gap.reshape(self.num_envs, -1)
     
-    class command_arm_linvel(mdp.Observation):
+    class ref_trans_gap(mdp.Observation):
+        def __init__(self, env, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.ref_root_translation = self.env.command_manager.root_translations
+
+        def compute(self):
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            ref_root_translation = self.ref_root_translation[timestep].to(self.device)  # (num_envs, steps, 3)
+            ref_root_translation += self.env.scene.env_origins.unsqueeze(1)
+            self.root_pos = self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            self.gap = ref_root_translation - self.root_pos
+            ref_trans_gap = quat_rotate_inverse(root_quat_w, self.gap)
+            return ref_trans_gap.reshape(self.num_envs, -1)
+        
+        def debug_draw(self):
+            self.env.debug_draw.vector(
+                self.root_pos[:, 0],
+                self.gap[:, 0],
+                color=(1., 0., 1., 1.),
+                size=1.
+            )
+    
+    # Motion Tracking Reward
+    class tracking_root_trans(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device) + self.env.scene.env_origins
+            root_pos_w = self.robot.data.root_pos_w
+            error = (root_pos_w - ref_root_translation).square().sum(-1, True)
+            reward = torch.exp(- error.sqrt() / self.sigma)
+            return reward
+        
+    class tracking_root_rot(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_root_orientation = self.env.command_manager.root_orientation[timestep].to(self.device)
+            root_quat_w = self.robot.data.root_quat_w
+            dot_product = dot(root_quat_w, ref_root_orientation)
+            error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
+            reward = torch.exp(- error / self.sigma)
+            return reward
+        
+    class tracking_qpos(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+            self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_qpos = self.env.command_manager.qpos[timestep].to(self.device)[:, self.joint_indices]
+            qpos = self.robot.data.joint_pos[:, self.joint_indices]
+            error = (qpos - ref_qpos).square().mean(-1, True)
+            reward = torch.exp(- error / self.sigma)
+            return reward
+        
+    class tracking_keypoints(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
+            ref_keypoints = ref_keypoints[:, self.idx]
+            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
+            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
+
+            diff = (ref_keypoints - body_pos_local).norm(dim=-1)
+            error = diff.square().sum(-1, True)
+            reward = torch.exp(- error.sqrt() / self.sigma)
+            return reward
+        
+        def debug_draw(self):
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_keypoints = self.env.command_manager.kp[timestep].reshape(self.num_envs, -1, 3).to(self.device)
+            
+            root_position = self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+
+            kp_global = quat_rotate(root_quat_w, ref_keypoints) + root_position
+            for i in range(kp_global.shape[1]):
+                self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
+
+    class tracking_eff(tracking_keypoints):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
+            super().__init__(env, weight, enabled, sigma, body_names)
+
+        def compute(self):
+            return super().compute()
+        
+    # Joint Position Penalty
+    class joint_pos_l2(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.sigma = sigma
+            self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
+
+        def compute(self) -> torch.Tensor:
+            qpos = self.robot.data.joint_pos[:, self.joint_indices]
+            return -qpos.square().mean(-1, True)
+
+    # Early Termination Conditions
+    class dummy(mdp.Termination):
         def __init__(self, env):
             super().__init__(env)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.action_manager: mdp.action.HumanoidWithArm = self.env.action_manager
-            if not isinstance(self.action_manager, mdp.action.HumanoidWithArm):
-                raise ValueError("`HumanoidWithArm` action manager required")
+            self.device = self.env.device
 
-        def compute(self) -> torch.Tensor:
-            return self.action_manager.command_arm_linvel.reshape(self.num_envs, -1)
+        def compute(self, termination: torch.Tensor) -> torch.Tensor:
+            return torch.zeros((self.num_envs, 1), device=self.device, dtype=torch.bool)
 
-    class symmetry(mdp.Observation):
-        def __init__(self, env, body_names: str):
+    class root_deviation(mdp.Termination):
+        def __init__(self, env, max_distance: float):
             super().__init__(env)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.body_ids, self.body_names = self.asset.find_bodies(body_names)
-            
-            self.flipy = torch.tensor([1., -1., 1.], device=self.device)
+            self.device = self.env.device
+            self.max_distance = torch.tensor(max_distance, device=self.env.device)
+            self.robot: Articulation = self.env.scene["robot"]
 
-        def compute(self) -> torch.Tensor:
-            root_quat = self.asset.data.root_quat_w
-            root_pos  = self.asset.data.root_pos_w
-            
-            body_pos = quat_rotate(
-                root_quat.unsqueeze(1),
-                self.asset.data.body_pos_w[:, self.body_ids] - root_pos.unsqueeze(1)
-            ).reshape(self.num_envs, -1, 2, 3)
-            body_vel = quat_rotate(
-                root_quat.unsqueeze(1),
-                self.asset.data.body_lin_vel_w[:, self.body_ids]
-            ).reshape(self.num_envs, -1, 2, 3)
-            
-            gravity = self.asset.data.projected_gravity_b
-            lin_vel_b = self.asset.data.root_lin_vel_b
-            ang_vel_b = self.asset.data.root_ang_vel_b
-            left = torch.cat([
-                gravity,
-                lin_vel_b,
-                ang_vel_b,
-                body_pos.reshape(self.num_envs, -1),
-                body_vel.reshape(self.num_envs, -1)
-            ], dim=-1)
-            right = torch.cat([
-                gravity * self.flipy, 
-                lin_vel_b * self.flipy,
-                ang_vel_b * torch.tensor([-1., 1., -1.], device=self.device),
-                (body_pos.flip(dims=(2,)) * self.flipy).reshape(self.num_envs, -1), 
-                (body_vel.flip(dims=(2,)) * self.flipy).reshape(self.num_envs, -1)
-            ], dim=-1)
-            return torch.stack([left, right], dim=1)
-
-
-    class hand_pose(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.hand_ids = self.asset.find_bodies(".*arm_link6")[0]
-            self.hand_pos_target = torch.tensor([0.3, 0.0, 0.1], device=self.device)
+        def compute(self, termination: torch.Tensor) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf - 1).cpu()
+            ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device) + self.env.scene.env_origins
+            root_pos_w = self.robot.data.root_pos_w
+            deviation = (root_pos_w - ref_root_translation).norm(dim=1, keepdim=True)
+            return deviation > self.max_distance
         
-        def compute(self) -> torch.Tensor:
-            hand_pos = self.asset.data.body_pos_w[:, self.hand_ids]
-            hand_pos_target = (
-                self.asset.data.root_pos_w.unsqueeze(1) 
-                + quat_rotate(self.asset.data.root_quat_w.unsqueeze(1), self.hand_pos_target)
-            )
-            diff = hand_pos - hand_pos_target
-            return - diff.square().sum(dim=-1).sum(1, True)
+    class root_rot_deviation(mdp.Termination):
+        def __init__(self, env, max_theta: float):
+            super().__init__(env)
+            self.device = self.env.device
+            self.max_theta = torch.tensor(max_theta * 3.14 / 180, device=self.env.device)
+            self.robot: Articulation = self.env.scene["robot"]
 
+        def compute(self, termination: torch.Tensor) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf - 1).cpu()
+            ref_root_orientation = self.env.command_manager.root_orientation[timestep].to(self.device)
 
-    class attach_z(mdp.Reward):
-        def __init__(self, env, weight, enabled: bool, target_height: float):
-            super().__init__(env, weight, enabled)
-            self.asset: Articulation = self.env.scene["robot"]
-            self.target_height = target_height
-            
-            from .mdp.observations import _initialize_warp_meshes
-            self.body_ids = self.asset.find_bodies(".*attach_point.*")[0]
-            self.num_attach_points = len(self.body_ids)
-            self.mesh = _initialize_warp_meshes("/World/ground", "cuda")
+            root_quat_w = self.robot.data.root_quat_w
+            dot_product = dot(root_quat_w, ref_root_orientation)
+            deviation = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
 
-            with torch.device(self.device):
-                self.attach_point_height = torch.full((self.num_envs, self.num_attach_points), self.target_height)
-                self.ray_direction = torch.tensor([0., 0., -1.]).expand(self.num_envs, self.num_attach_points, 3)
-                self.kp = torch.zeros(self.num_envs, 1)
-                self.kd = 20
+            return deviation > self.max_theta
+        
+    class track_kp_error(mdp.Termination):
+        def __init__(self, env, max_distance: float, body_names: str = ".*"):
+            super().__init__(env)
+            self.device = self.env.device
+            self.max_distance = torch.tensor(max_distance, device=self.env.device)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
 
-        def reset(self, env_ids):
-            kp = 1200
-            self.kp[env_ids] = kp
+        def compute(self, termination: torch.Tensor) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf - 1).cpu()
+            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
+            ref_keypoints = ref_keypoints[:, self.idx]
+            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
+            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
+            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
 
-        def update(self):
-            self.ray_hit_w = raycast_mesh(
-                self.asset.data.root_pos_w,
-                self.ray_direction,
-                self.mesh,
-                max_dist=100.0
-            )[0]
-            self.attach_point_height = self.asset.data.body_pos_w[:, self.body_ids, 2] - self.ray_hit_w[:, 2].unsqueeze(1)
+            diff = (ref_keypoints - body_pos_local).norm(dim=-1)    # (num_envs, num_bodies)
+            mean_diff = diff.mean(-1, True)     # (num_envs, 1)
+            return mean_diff > self.max_distance
 
-        def step(self, substep):
-            attach_point_linvel = self.asset.data.body_lin_vel_w[:, self.body_ids]
-            self.force = torch.zeros(self.num_envs, 4, 3, device=self.device)
-            self.force[:, :, 2] = (
-                self.kp * (self.target_height - self.attach_point_height) + 
-                self.kd * (0. - attach_point_linvel[:, :, 2])
-            ) * (self.target_height > self.attach_point_height)
-            self.force[:, :, :2] = - 1.0 * attach_point_linvel[:, :, :2] * self.force[:, :, 2].unsqueeze(2)
-            force = quat_rotate_inverse(self.asset.data.body_quat_w[:, self.body_ids], self.force)
-            self.asset._external_force_b[:, self.body_ids] += force
-            self.asset.has_external_wrench = True
-
-        def compute(self) -> torch.Tensor:
-            return -(self.force / 50).square().sum(dim=-1).mean(1, True)
-
-        def debug_draw(self):
-            self.env.debug_draw.vector(
-                self.asset.data.body_pos_w[:, self.body_ids],
-                self.force / 100,
-                color=(1., 0., 0., 1.),
-                size=5.,
-            )
+def dot(a: torch.Tensor, b: torch.Tensor):
+    return (a * b).sum(-1, True)

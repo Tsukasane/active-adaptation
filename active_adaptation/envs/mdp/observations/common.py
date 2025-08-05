@@ -230,10 +230,14 @@ def observation_func(func):
     
     return ObsFunc
 
+class root_quat_w(Observation):
+    def __init__(self, env, noise_std: float=0.):
+        super().__init__(env)
+        self.asset = self.env.scene["robot"]
+        self.noise_std = noise_std
 
-@observation_func
-def root_quat_w(self):
-    return self.scene["robot"].data.root_quat_w
+    def compute(self):
+        return random_noise(self.asset.data.root_quat_w, self.noise_std)
 
 
 class command(Observation):
