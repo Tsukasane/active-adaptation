@@ -12,7 +12,7 @@ from isaaclab.app import AppLauncher
 import wandb
 import logging
 from tqdm import tqdm
-from scripts.helpers import make_env_policy, evaluate
+from helpers import make_env_policy, evaluate
 
 import os
 import datetime

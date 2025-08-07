@@ -23,8 +23,8 @@ def main(cfg):
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
 
-    from scripts.helpers import EpisodeStats, make_env_policy, ObsNorm
-    env, policy, vecnorm = make_env_policy(cfg)
+    from helpers import EpisodeStats, make_env_policy, ObsNorm
+    env, policy = make_env_policy(cfg)
     
     if cfg.export_policy:
         import time

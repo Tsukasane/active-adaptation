@@ -150,9 +150,9 @@ class _Env(EnvBase):
 
         RAND_FUNCS = mdp.RAND_FUNCS
         RAND_FUNCS.update(mdp.get_obj_by_class(members, mdp.Randomization))
-        ADDONS = mdp.ADDONS
+        # ADDONS = mdp.ADDONS
 
-        self.addons = OrderedDict()
+        # self.addons = OrderedDict()
         self.randomizations = OrderedDict()
         self.observation_funcs: Dict[str, ObsGroup] = OrderedDict()
         self.reward_funcs = OrderedDict()
@@ -179,14 +179,14 @@ class _Env(EnvBase):
             shape=[self.num_envs]
         ).to(self.device)
         
-        addons = self.cfg.get("addons", {})
-        print(f"Addons: {ADDONS.keys()}")
-        for key, params in addons.items():
-            addon = ADDONS[key](self, **params if params is not None else {})
-            self.addons[key] = addon
-            self._reset_callbacks.append(addon.reset)
-            self._update_callbacks.append(addon.update)
-            self._debug_draw_callbacks.append(addon.debug_draw)
+        # addons = self.cfg.get("addons", {})
+        # print(f"Addons: {ADDONS.keys()}")
+        # for key, params in addons.items():
+        #     addon = ADDONS[key](self, **params if params is not None else {})
+        #     self.addons[key] = addon
+        #     self._reset_callbacks.append(addon.reset)
+        #     self._update_callbacks.append(addon.update)
+        #     self._debug_draw_callbacks.append(addon.debug_draw)
         
         for key, params in self.cfg.randomization.items():
             rand = RAND_FUNCS[key](self, **params if params is not None else {})

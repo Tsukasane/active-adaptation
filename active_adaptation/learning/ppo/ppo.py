@@ -258,7 +258,7 @@ class PPOPolicy(TensorDictModuleBase):
         entropy = dist.entropy().mean()
 
         adv = tensordict["adv"]
-        log_ratio = (log_probs - tensordict["sample_log_prob"]).unsqueeze(-1)
+        log_ratio = (log_probs - tensordict["action_log_prob"]).unsqueeze(-1)
         ratio = torch.exp(log_ratio)
         surr1 = adv * ratio
         surr2 = adv * ratio.clamp(1.-self.clip_param, 1.+self.clip_param)

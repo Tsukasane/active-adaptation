@@ -16,5 +16,7 @@ setup(
         "pandas",
         "termcolor",
         "pygame", # for game controller
+        "pynput",
+        "setproctitle",
     ],
 )
