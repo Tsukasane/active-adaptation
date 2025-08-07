@@ -27,6 +27,7 @@ import torch.nn.functional as F
 import torch.distributions as D
 import warnings
 import functools
+import hydra
 
 from torchrl.data import CompositeSpec, TensorSpec
 from torchrl.modules import ProbabilisticActor
@@ -46,7 +47,7 @@ from ..modules.common import *
 torch.set_float32_matmul_precision('high')
 
 @dataclass
-class PPOConfig:
+class TeacherConfig:
     _target_: str = "active_adaptation.learning.ppo.ppo.PPOPolicy"
     name: str = "ppo"
     train_every: int = 32
@@ -60,17 +61,38 @@ class PPOConfig:
     vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
     checkpoint_path: Union[str, None] = None
+    # checkpoint_path: Union[str, None] = "/home/ubuntu/Desktop/g1-sim2real/scripts/outputs/2025-08-01/15-07-36-more_ref_horizon-ppo/wandb/latest-run/files/checkpoint_final.pt"
     in_keys: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
 
+@dataclass
+class PPOStudentConfig:
+    _target_: str = "active_adaptation.learning.ppo.student.PPOStudentPolicy"
+    name: str = "ppo_student"
+    train_every: int = 32
+    ppo_epochs: int = 5
+    num_minibatches: int = 8
+    lr: float = 5e-4
+    clip_param: float = 0.2
+    entropy_coef: float = 0.0005
+    layer_norm: Union[str, None] = "before"
+    value_norm: bool = False
+    vecnorm: List[str] = field(default_factory=lambda: ["robot_h"])
+    kl_coef: float = 0.01
+    short_history: int = 5
+
+    checkpoint_path: Union[str, None] = None
+    in_keys: List[str] = field(default_factory=lambda: ["robot_h", OBS_PRIV_KEY])
+
+    teacher: TeacherConfig = field(default_factory=TeacherConfig)
+
 cs = ConfigStore.instance()
-cs.store("ppo", node=PPOConfig, group="algo")
+cs.store("ppo_student", node=PPOStudentConfig, group="algo")
 
-
-class PPOPolicy(TensorDictModuleBase):
+class PPOStudentPolicy(TensorDictModuleBase):
 
     def __init__(
         self, 
-        cfg: PPOConfig, 
+        cfg: PPOStudentConfig, 
         observation_spec: CompositeSpec, 
         action_spec: CompositeSpec, 
         reward_spec: TensorSpec,
@@ -98,14 +120,14 @@ class PPOPolicy(TensorDictModuleBase):
         
         def make_actor(out_key: str):
             modules = [
-                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "a_in"),
+                CatTensors(["robot_h", "stu_ref_motion_"], "a_in"),
                 TensorDictModule(make_mlp([2048, 1024, 512]), ["a_in"], [out_key])
             ]
             return modules
         
         def make_critic(out_key: str):
             modules = [
-                CatTensors([OBS_KEY, OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
+                CatTensors(["robot_h", OBS_REF_KEY, OBS_PRIV_KEY], "c_in"),
                 TensorDictModule(make_mlp([2048, 1024, 512]), ["c_in"], [out_key])
             ]
             return modules
@@ -154,6 +176,15 @@ class PPOPolicy(TensorDictModuleBase):
         self.actor.apply(init_)
         self.critic.apply(init_)
 
+        if self.cfg.teacher.checkpoint_path is not None:
+            print(colored(f"[Info]: create teacher {self.cfg.teacher._target_}", "green"))
+            TeacherCls = hydra.utils.get_class(self.cfg.teacher._target_)
+            self.teacher = TeacherCls(self.cfg.teacher, observation_spec, action_spec, reward_spec, device)
+            self.teacher.load_state_dict(torch.load(self.cfg.teacher.checkpoint_path)["policy"])
+            self.teacher_actor = self.teacher.actor.eval()
+            self.teacher_vecnorm = self.teacher.vecnorm.freeze()
+            self.teacher_vecnorm = self.teacher_vecnorm.to_observation_norm()
+
     def count_parameters(self):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
         num_critic_params = sum(p.numel() for p in self.critic.parameters() if p.requires_grad)
@@ -163,8 +194,14 @@ class PPOPolicy(TensorDictModuleBase):
         print(f'Number of critic parameters: {critic_params_m:.2f}M')
     
     def get_rollout_policy(self, mode: str="train"):
+        def cache_raw_keys(tensordict: TensorDictBase):
+            for k in [OBS_KEY, OBS_PRIV_KEY]:
+                tensordict.set(f"{k}_raw", tensordict.get(k).clone())
+            return tensordict
+        
         if mode == "train":
             policy = TensorDictSequential(
+                cache_raw_keys,
                 self.vecnorm,
                 self.actor,
             )
@@ -243,8 +280,17 @@ class PPOPolicy(TensorDictModuleBase):
         values = self.critic(tensordict)["state_value"]
         value_loss = self.critic_loss_fn(b_returns, values)
         value_loss = (value_loss * (~tensordict["is_init"])).mean()
-        
-        loss = policy_loss + entropy_loss + value_loss
+
+        # teacher imitation loss
+        td_teacher = tensordict.clone()
+        for k in [OBS_KEY, OBS_PRIV_KEY]:
+            td_teacher.set(k, tensordict.get(f"{k}_raw"))
+        self.teacher_vecnorm(td_teacher)
+        dist_teacher = self.teacher_actor.get_dist(td_teacher)
+        kl_div = D.kl_divergence(dist, dist_teacher).mean()
+        kl_loss = kl_div * self.cfg.kl_coef
+
+        loss = policy_loss + entropy_loss + value_loss + kl_loss
         self.opt.zero_grad()
         loss.backward()
         actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
@@ -257,6 +303,7 @@ class PPOPolicy(TensorDictModuleBase):
             "actor/noise_std": tensordict["scale"].mean(),
             "actor/grad_norm": actor_grad_norm,
             'actor/approx_kl': ((ratio - 1) - log_ratio).mean(),
+            "actor/kl_loss": kl_loss,
             "critic/value_loss": value_loss,
             "critic/grad_norm": critic_grad_norm,
             "critic/explained_var": explained_var,

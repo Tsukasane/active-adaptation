@@ -32,6 +32,6 @@ wandb:
   tags: []
 
 defaults:
-  - task: test
+  - task: motion
   - algo: ppo
   - _self_

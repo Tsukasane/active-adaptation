@@ -31,16 +31,13 @@ class ObsGroup:
         name: str,
         funcs: Dict[str, mdp.Observation],
         max_delay: int,
-        use_flip: bool = False,
     ):
         self.name = name
         self.funcs = funcs
         self.max_delay = max_delay
-        self.use_flip = use_flip
         self.raw_obs_t = OrderedDict()
         self.raw_obs_tm1: OrderedDict = None
         self.buf_obs = OrderedDict()
-        self.buf_mask = OrderedDict()
         self.timestamp = -1
 
     @property
@@ -53,9 +50,6 @@ class ObsGroup:
             foo = self.compute({}, 0)
             spec = {}
             spec[self.name] = UnboundedContinuous(foo[self.name].shape, dtype=foo[self.name].dtype)
-            spec[self.name + "_mask_"] = Binary(len(self.keys), foo[self.name + "_mask_"].shape, dtype=bool)
-            if self.use_flip:
-                spec[self.name + "_flipped"] = spec[self.name]
             self._spec = Composite(spec, shape=[foo[self.name].shape[0]]).to(foo[self.name].device)
         return self._spec
 
@@ -68,7 +62,6 @@ class ObsGroup:
                 tensor, mask = func()
                 self.raw_obs_tm1[obs_key] = self.raw_obs_t.get(obs_key, tensor)
                 self.raw_obs_t[obs_key] = tensor
-                self.buf_mask[obs_key] = mask
                 if self.max_delay > 0:
                     shape = tensor.shape[0:1] + (1,) * (tensor.ndim - 1)
                     delay = torch.rand(shape, device=tensor.device) * self.max_delay
@@ -78,13 +71,7 @@ class ObsGroup:
         self.timestamp = timestamp
         
         tensors = torch.cat([self.buf_obs[key] for key in self.funcs.keys()], dim=-1)
-        masks = torch.stack([self.buf_mask[key] for key in self.funcs.keys()], dim=-1)
         tensordict[self.name] = tensors
-        tensordict[self.name + "_mask_"] = masks
-
-        if self.use_flip:
-            tensors = torch.cat([func.fliplr(self.buf_obs[key]) for key, func in self.funcs.items()], dim=-1)
-            tensordict[self.name + "_flipped"] = tensors
         
         return tensordict
 
@@ -227,7 +214,6 @@ class Env(EnvBase):
 
         for group_key, params in self.cfg.observation.items():
             max_delay = params.pop("_max_delay_", 0)
-            use_flip = params.pop("_use_flip_", False)
             if max_delay > self.cfg.decimation:
                 raise ValueError("Max delay cannot be greater than decimation.")
             max_delay = max_delay / self.cfg.decimation
@@ -242,7 +228,7 @@ class Env(EnvBase):
                 self._reset_callbacks.append(obs.reset)
                 self._debug_draw_callbacks.append(obs.debug_draw)
             
-            self.observation_funcs[group_key] = ObsGroup(group_key, funcs, max_delay=max_delay, use_flip=use_flip)
+            self.observation_funcs[group_key] = ObsGroup(group_key, funcs, max_delay=max_delay)
         
         for callback in self._startup_callbacks:
             callback()        

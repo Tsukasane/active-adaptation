@@ -1,0 +1,137 @@
+# @package task
+
+name: Test
+task: Humanoid
+
+defaults:
+  # see https://hydra.cc/docs/advanced/overriding_packages/
+  - /task/Track@_here_
+  - override /task/action@action: null
+  - _self_
+
+payload: false
+
+action:
+  _target_: active_adaptation.envs.mdp.action.JointPosition
+  action_scaling:
+    torso_joint: 0.5
+    .*hip.*: 0.5
+    .*shoulder.*: 0.5
+    .*knee.*: 0.5
+    .*ankle_pitch.*: 0.5
+    .*elbow_pitch.*: 0.5
+  max_delay: 1
+  alpha: [0.5, 1.0]
+
+command:
+  _target_: active_adaptation.envs.mdp.MotionLib
+  motion_clip_dir: "scripts/data"
+  dataset: amass
+  occlusion: "amass_copycat_occlusion_v3.pkl"
+  mode: train
+  eval_id: null
+  
+observation:
+  robot:
+    root_quat_w:
+    root_angvel_b:        {noise_std: 0.05}
+    projected_gravity_b:  {noise_std: 0.01}
+    joint_pos:            {noise_std: 0.05}
+    joint_vel:            {noise_std: 0.2}
+    body_pos:             {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
+                                        yaw_only: false}
+    prev_actions:         {steps: 1}
+  ref_motion_:
+    ref_orientation:      {steps: 10}
+    ref_height:           {steps: 10}
+    ref_qpos:             { joint_names: [.*hip_pitch.*, torso_joint, .*hip_roll.*,
+                                          .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
+                                          .*knee.*, .*shoulder_yaw.*,
+                                          .*ankle_pitch.*, .*elbow_pitch.*],
+                            steps: 10}
+    ref_keypoints:        {steps: 10}
+    ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
+                            steps: 10}
+    ref_trans_gap:        {steps: 10}
+  priv:
+    root_height:      {}
+    root_linvel_b:    {}
+    body_vel:         {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link], 
+                                        yaw_only: false}
+    # joint_forces:     {}
+  stu_ref_motion_:
+    ref_orientation:      {steps: 1}
+    ref_height:           {steps: 1}
+    ref_keypoints:        {steps: 1}
+    ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                        right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, left_zero_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link, right_zero_link],
+                            steps: 1}
+    ref_trans_gap:        {steps: 1}
+
+
+
+reward:
+  loco:
+    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
+    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
+    tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
+                              body_names: [left_hip_pitch_link, left_knee_link,
+                                        right_hip_pitch_link, right_knee_link,
+                                        left_shoulder_roll_link, left_elbow_pitch_link, 
+                                        right_shoulder_roll_link, right_elbow_pitch_link]}
+    tracking_eff:           {weight: 8., enabled: true, sigma: 0.16,
+                              body_names: [left_ankle_roll_link, left_zero_link,
+                                        right_ankle_roll_link, right_zero_link]}
+
+    feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
+    feet_slip:          {weight: 0.25, enabled: true, body_names: .*ankle_roll_link}
+
+    joint_acc_l2:       {weight: 1.0e-8, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    joint_vel_l2:       {weight: 1.0e-4, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    joint_torques_l2:   {weight: 2.5e-6, enabled: true, joint_names: [torso_joint, .*hip.*, .*knee.*,
+                                                                  .*shoulder.*, .*elbow.*, .*ankle.*]}
+    action_rate_l2:     {weight: 0.01, enabled: true}
+    action_rate2_l2:    {weight: 0.05, enabled: true}
+
+randomization:
+  push:
+    body_names: ["torso_link", "pelvis"]
+    force_range: [0.0, 0.1]
+  perturb_body_mass:
+    ".*zero_link": [1.0, 3.0]
+    "^(?!.*zero_link).*": [0.9, 1.1]
+    # .*: [0.9, 1.1]
+  perturb_body_materials:
+    body_names: ".*ankle_roll_link"
+    static_friction_range: [0.6, 4.0]
+    dynamic_friction_range: [0.6, 4.0]
+    restitution_range: [0.0, 0.2]
+  motor_params:
+    actuator_name:    legs
+    stiffness_range:  [0.7, 1.0]
+    damping_range:    [0.7, 1.0]
+  reset_joint_states_uniform:
+    pos_ranges:
+      .*: [-0.1, 0.1]
+    rel: true
+
+termination:
+  dummy: {}
+  root_deviation: {max_distance: 0.5}
+  root_rot_deviation: {max_theta: 30}
+  track_kp_error: {max_distance: 0.4, 
+                  body_names: [left_zero_link, right_zero_link,
+                                left_ankle_roll_link, right_ankle_roll_link]}

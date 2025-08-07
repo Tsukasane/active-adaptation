@@ -116,11 +116,15 @@ def make_env_policy(cfg: DictConfig):
     long_history = cfg.algo.get("long_history", 0)
     if long_history > 0:
         print(colored(f"[Info]: Long history length {long_history}.", "green"))
-        transform.append(StackFrames(long_history, ["policy"], ["policy_h"]))
+        transform.append(StackFrames(long_history, ["robot"], ["robot_h"]))
     short_history = cfg.algo.get("short_history", 0)
     if short_history > 0:
         print(colored(f"[Info]: Short history length {short_history}.", "green"))
-        transform.append(CatFrames(short_history, -1, ["policy"], ["policy_h"]))
+        transform.append(CatFrames( short_history, 
+                                    dim=-1,
+                                    padding="constant",
+                                    in_keys=["robot"], 
+                                    out_keys=["robot_h"]))
 
     env = TransformedEnv(base_env, transform)
     env.set_seed(cfg.seed)

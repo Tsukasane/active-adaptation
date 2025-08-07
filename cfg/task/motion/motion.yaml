@@ -104,7 +104,7 @@ randomization:
     body_names: ["torso_link", "pelvis"]
     force_range: [0.0, 0.1]
   perturb_body_mass:
-    ".*zero_link": [1.0, 2.0]
+    ".*zero_link": [1.0, 3.0]
     "^(?!.*zero_link).*": [0.9, 1.1]
     # .*: [0.9, 1.1]
   perturb_body_materials:

@@ -16,6 +16,7 @@ setup(
         "av", # for moviepy
         "pandas",
         "termcolor",
+        "pynput",
         # install by cloning from github
         # "tensordict" 
         # "torchrl",
