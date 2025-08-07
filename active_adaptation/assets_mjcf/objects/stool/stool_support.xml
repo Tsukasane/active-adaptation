@@ -1,0 +1,12 @@
+<mujoco model="stool_support">
+  <compiler angle="radian" />
+  
+  <worldbody>
+   <body name="stool_support" pos="0 0 0">
+
+      <freejoint name="stool_support_root" />
+      <site name="stool_support_root" pos="0 0 0" size="0.05" type="sphere" rgba="0.5 0.5 0.5 1"/>
+      <geom type="box" size="0.1 0.1 0.02" pos="0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -2,7 +2,6 @@ import os
 import json
 import torch
 from isaaclab.utils import configclass
-from isaaclab.utils.dict import update_class_from_dict
 
 import active_adaptation
 from active_adaptation.envs.base import _Env
@@ -61,22 +60,31 @@ class SimpleEnv(_Env):
             scene_cfg.robot: ArticulationCfg = ROBOTS[self.cfg.robot.name]
             
             if hasattr(self.cfg.robot, 'override_params'):
+                from active_adaptation.utils import update_class_from_dict
                 update_class_from_dict(scene_cfg.robot, self.cfg.robot.override_params, _ns="")
             
             scene_cfg.robot.prim_path = "{ENV_REGEX_NS}/Robot"
             robot_type = self.cfg.robot.get("robot_type", self.cfg.robot.name)
             scene_cfg.robot.spawn.usd_path = scene_cfg.robot.spawn.usd_path.format(ROBOT_TYPE=robot_type)
 
-            for obj_name in self.cfg.get("object_names", []):
+            # for obj_name in self.cfg.get("object_names", []):
+            if self.cfg.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking":
+                extra_object_names = self.cfg.command.get("extra_object_names", [])
+                for extra_obj_name in extra_object_names:
+                    extra_obj_cfg = OBJECTS[extra_obj_name]
+                    extra_obj_cfg.prim_path = "{ENV_REGEX_NS}/" + extra_obj_name
+                    setattr(scene_cfg, extra_obj_name, extra_obj_cfg)
+
+                obj_name = self.cfg.command.object_asset_name
+                obj_contact_body_name = self.cfg.command.object_body_name
+
                 obj_cfg = OBJECTS[obj_name]
                 obj_cfg.prim_path = "{ENV_REGEX_NS}/" + obj_name
                 setattr(scene_cfg, obj_name, obj_cfg)
 
                 # add contact sensor to the box
-                eef_names = [f"{left_right}_wrist_{roll_pitch_yaw}_link" for left_right in ["left", "right"] for roll_pitch_yaw in ["roll", "pitch", "yaw"]]
-                contact_geom_prim_path = obj_cfg.prim_path
-                if obj_name == "foldchair":
-                    contact_geom_prim_path += "/seat_link"
+                eef_names = [f"{left_right}_wrist_{roll_pitch_yaw}_link" for left_right in ["left", "right"] for roll_pitch_yaw in ["yaw"]]
+                contact_geom_prim_path = "{ENV_REGEX_NS}/" + obj_name + "/" + obj_contact_body_name
 
                 for eef_name in eef_names:
                     contact_sensor_name = f"{eef_name}_{obj_name}_contact_forces"
@@ -99,7 +107,7 @@ class SimpleEnv(_Env):
 
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
             scene_cfg.contact_forces = ContactSensorCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/.*(ankle_roll|wrist_roll|wrist_pitch|wrist_yaw)_link", 
+                prim_path="{ENV_REGEX_NS}/Robot/.*(ankle_roll|wrist_.*)_link", 
                 history_length=3,
                 track_air_time=True
             )
@@ -120,6 +128,7 @@ class SimpleEnv(_Env):
             sim_cfg.physx.gpu_found_lost_pairs_capacity = 2538320 # 2**20
             sim_cfg.physx.gpu_found_lost_aggregate_pairs_capacity = 61999079 # 2**26
             sim_cfg.physx.gpu_total_aggregate_pairs_capacity = 2**23
+            sim_cfg.physx.enable_stabilization = False
             # sim_cfg.physx.gpu_collision_stack_size = 2**25
             # sim_cfg.physx.gpu_heap_capacity = 2**24
             

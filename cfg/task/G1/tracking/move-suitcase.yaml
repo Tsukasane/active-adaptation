@@ -1,0 +1,10 @@
+# @package task
+defaults:
+  - G1/tracking/tracking-base
+  - _self_
+
+name: G1TrackSuitcase
+
+command:
+  data_path: data/motion/g1/omomo/sub1_suitcase_011
+  

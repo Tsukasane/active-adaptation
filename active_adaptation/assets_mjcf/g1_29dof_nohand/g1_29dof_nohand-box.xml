@@ -1,7 +1,6 @@
 <mujoco model="g1_29dof_rev_1_0">
   <compiler angle="radian" meshdir="meshes"/>
-  <include file="../objects/stool/stool.xml"/>
-  <include file="../objects/stool/stool_support.xml"/>
+  <include file="../objects/box/box.xml"/>
 
   <asset>
     <mesh name="pelvis" file="pelvis.STL"/>

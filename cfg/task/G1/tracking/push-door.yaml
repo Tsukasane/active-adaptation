@@ -1,0 +1,59 @@
+# @package task
+defaults:
+  - G1/tracking/tracking-base
+  - _self_
+
+viewer:
+  resolution: [1280, 720]
+  lookat: [0., 0., 0.]
+  eye: [4.0, 4.0, 4.0]
+  env_spacing: 5.0
+
+name: G1TrackDoor
+
+command:
+  # data_path: data/motion/g1/push_door/push_door-3steps-no_door_amass-processed
+  data_path: data/motion/g1/push_door/push_door-5steps_amass
+
+  object_asset_name: "door"
+  object_body_name:  "door_panel"
+  object_joint_name: "door_joint"
+
+  contact_eef_body_name: ["right_wrist_yaw_link"]
+  contact_frc_eef_body_name: ["right_wrist_yaw_link"]
+  contact_eef_pos_offset:
+    - [0.05, 0.0, 0.0]
+  contact_target_pos_offset:
+    - [0.0, -0.6, 1.0]   # right wrist
+
+  # replay_motion: true
+
+object_names: ["door"]
+
+reward:
+  object_tracking:
+    object_pos_tracking: ~
+    object_ori_tracking: ~
+    object_joint_pos_tracking: {weight: 1.0, sigma: 0.5}
+
+    # for better contact
+    eef_contact_exp:       {weight: 5.0, enabled: true, pos_sigma: 0.1, frc_sigma: 10, frc_thres: 1.0}
+
+randomization:
+  object_joint_randomization:
+    friction_range: [5.0, 5.0]
+    damping_range: [2.0, 2.0]
+    armature_range: [0.0, 0.01]
+
+    # friction_range: [5.0, 10.0]
+    # damping_range: [2.0, 4.0]
+    # armature_range: [0.0, 0.01]
+
+  object_body_randomization:
+    static_friction_range: [0.1, 0.5]
+    dynamic_friction_range: [0.1, 0.5]
+    restitution_range: [0.0, 0.2]
+    mass_range: [5.0, 20.0]
+  
+termination:
+ cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.1, frc_thres: 2.0}

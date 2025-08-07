@@ -6,7 +6,7 @@
   </default>
 
   <asset>
-    <material name="metal" rgba="0.5 0.5 0.5 1"/>
+    <material name="foldchair_seat_metal" rgba="0.5 0.5 0.5 1"/>
     <material name="wood" rgba="0.8 0.52 0.25 1"/>
   </asset>
 
@@ -19,7 +19,7 @@
 
       <body name="seat" pos="0 0 0" quat="0.85 0 -0.86 0">
           <joint name="foldchair_joint" type="hinge" axis="0 1 0" pos="0 0 0" damping="50" range="-0.1 1.57"/>
-          <geom name="seat_geom" type="box" size="0.15 0.15 0.02" pos="0.13 0.0 0.0" material="metal"/>
+          <geom name="seat_geom" type="box" size="0.15 0.15 0.02" pos="0.13 0.0 0.0" material="foldchair_seat_metal"/>
           <site name="left_hand_contact" pos="0.28 -0.1 0.02  " size="0.02" type="sphere" rgba="1 0 0 1"/>
           <site name="right_hand_contact" pos="0.28 0.1 0.02" size="0.02" type="sphere" rgba="1 0 0 1"/>
       </body>

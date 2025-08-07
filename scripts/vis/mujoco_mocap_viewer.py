@@ -5,7 +5,6 @@ import threading
 import mujoco
 import mujoco.viewer
 
-from active_adaptation.utils.motion import unitree_joint_names
 from common import ZMQSubscriber, PORTS
 from typing import List
 
@@ -14,7 +13,16 @@ scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-stool.xml"
 # scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-ball.xml"
 # scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-foldchair.xml"
-scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-lowstool.xml"
+# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-lowstool.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-door.xml"
+scene = "active_adaptation/assets_mjcf/t1/t1-stool.xml"
+scene = "active_adaptation/assets_mjcf/t1/t1-foldchair.xml"
+scene = "active_adaptation/assets_mjcf/t1/t1-suitcase.xml"
+scene = "active_adaptation/assets_mjcf/t1/t1-ball.xml"
+
+# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-eef_L-box.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.xml"
+scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-stool.xml"
 
 class MuJoCoMocapViewer:
     def __init__(
@@ -31,35 +39,40 @@ class MuJoCoMocapViewer:
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data, show_left_ui=False, show_right_ui=False)
 
-        
-        # Get joint IDs and addresses
+        # Get all joint names from MuJoCo model (excluding free joints)
         mujoco_joint_names = [self.model.joint(i).name for i in range(self.model.njnt) if self.model.joint(i).type != mujoco.mjtJoint.mjJNT_FREE]
-        shared_joint_names = list(sorted(set(mujoco_joint_names) & set(unitree_joint_names)))
-        unitree_joint_indices = [unitree_joint_names.index(name) for name in shared_joint_names]
+        
+        # Wait for publisher to send joint names and create mapping
+        print("Waiting for publisher joint names...")
+        joint_names_subscriber = ZMQSubscriber(PORTS['joint_names'])
+        while True:
+            publisher_joint_names = joint_names_subscriber.receive_names()
+            if publisher_joint_names is not None:
+                break
+        joint_names_subscriber.close()
+        
+        print(f"Received publisher joint names: {publisher_joint_names}")
+        print(f"MuJoCo joint names: {mujoco_joint_names}")
+        
+        # Create mapping from publisher joints to MuJoCo joints
+        shared_joint_names = list(sorted(set(mujoco_joint_names) & set(publisher_joint_names)))
+        publisher_joint_indices = [publisher_joint_names.index(name) for name in shared_joint_names]
         mujoco_joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name) for name in shared_joint_names]
         mujoco_qpos_adrs = [self.model.jnt_qposadr[joint_id] for joint_id in mujoco_joint_ids]
-        self.joint_ids_unitree = np.array(unitree_joint_indices)
-        self.joint_qpos_adrs = np.array(mujoco_qpos_adrs)
-
+        self.publisher_joint_indices = np.array(publisher_joint_indices)
+        self.mujoco_joint_qpos_adrs = np.array(mujoco_qpos_adrs)
+        
+        # Handle root joints (free joints)
         root_joint_ids = [i for i in range(self.model.njnt) if self.model.joint(i).type == mujoco.mjtJoint.mjJNT_FREE]
         self.root_joint_names = [self.model.joint(i).name.replace('_root', '') for i in root_joint_ids]
         self.root_joint_qpos_adrs = self.model.jnt_qposadr[root_joint_ids]
         self.root_joint_subscribers: List[ZMQSubscriber] = []
-
-        object_joint_names = list(sorted(set(mujoco_joint_names) - set(unitree_joint_names)))
-        self.object_joint_names = [name for name in object_joint_names if f"{name}_pos" in PORTS]
-
-        self.object_joint_qpos_adrs = [self.model.jnt_qposadr[self.model.joint(name).id] for name in self.object_joint_names]
-        self.object_joint_subscribers: List[ZMQSubscriber] = []
 
         # Initialize ZMQ subscribers
         self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'])
         for root_joint_name in self.root_joint_names:
             subscriber = ZMQSubscriber(PORTS[f"{root_joint_name}_pose"])
             self.root_joint_subscribers.append(subscriber)
-        for joint_name in self.object_joint_names:
-            subscriber = ZMQSubscriber(PORTS[f"{joint_name}_pos"])
-            self.object_joint_subscribers.append(subscriber)
 
         self.running = True
         self.comm_thread = threading.Thread(target=self.zmq_communication_loop)
@@ -72,8 +85,9 @@ class MuJoCoMocapViewer:
         """Handle ZMQ communication in a separate thread"""
         while self.running:
             joint_msg = self.joint_subscriber.receive_joint_state()
-            if joint_msg and len(self.joint_qpos_adrs):
-                self.data.qpos[self.joint_qpos_adrs] = joint_msg.positions[self.joint_ids_unitree]
+            if joint_msg and len(self.mujoco_joint_qpos_adrs):
+                # Map from publisher joint order to MuJoCo joint order
+                self.data.qpos[self.mujoco_joint_qpos_adrs] = joint_msg.positions[self.publisher_joint_indices]
             
             for qpos_adr, subscriber in zip(self.root_joint_qpos_adrs, self.root_joint_subscribers):
                 pose_msg = subscriber.receive_pose()
@@ -81,11 +95,6 @@ class MuJoCoMocapViewer:
                     pose = np.concatenate([pose_msg.position, pose_msg.quaternion])
                     self.data.qpos[qpos_adr:qpos_adr + 7] = pose
             
-            for joint_qpos_adr, subscriber in zip(self.object_joint_qpos_adrs, self.object_joint_subscribers):
-                joint_msg = subscriber.receive_joint_state()
-                if joint_msg:
-                    self.data.qpos[joint_qpos_adr:joint_qpos_adr + 1] = joint_msg.positions
-
             time.sleep(0.005)
 
     def mujoco_update(self):
@@ -115,8 +124,9 @@ class MuJoCoMocapViewer:
         if hasattr(self, 'comm_thread'):
             self.comm_thread.join()
         
-        self.pelvis_subscriber.close()
         self.joint_subscriber.close()
+        for subscriber in self.root_joint_subscribers:
+            subscriber.close()
         
         if self.viewer:
             self.viewer.close()

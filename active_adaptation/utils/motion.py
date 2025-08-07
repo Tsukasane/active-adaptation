@@ -192,7 +192,7 @@ class MotionDataset:
         return self
 
     @classmethod
-    def create_from_path(cls, root_path: str | List[str], target_fps: int = 50, memory_mapped: bool = False):
+    def create_from_path(cls, root_path: str | List[str], isaac_joint_names: List[str] | None = None, target_fps: int = 50, memory_mapped: bool = False):
         import active_adaptation
         base_dir = Path(active_adaptation.__file__).parent.parent
         if isinstance(root_path, ListConfig) or isinstance(root_path, list):
@@ -248,25 +248,27 @@ class MotionDataset:
             total_length += motion["body_pos_w"].shape[0]
             motions.append(motion)
             
-        share_joint_names = [name for name in meta["joint_names"] if name in unitree_joint_names]
-        src_joint_indices = [meta["joint_names"].index(name) for name in share_joint_names]
-        dest_joint_indices = [unitree_joint_names.index(name) for name in share_joint_names]
+        if isaac_joint_names is not None:
+            share_joint_names = [name for name in meta["joint_names"] if name in isaac_joint_names]
+            src_joint_indices = [meta["joint_names"].index(name) for name in share_joint_names]
+            dst_joint_indices = [isaac_joint_names.index(name) for name in share_joint_names]
 
-        more_joint_names = [name for name in meta["joint_names"] if name not in unitree_joint_names]
-        src_more_joint_indices = [meta["joint_names"].index(name) for name in more_joint_names]
-        dest_more_joint_indices = [len(unitree_joint_names) + i for i in range(len(more_joint_names))]
+            more_joint_names = [name for name in meta["joint_names"] if name not in isaac_joint_names]
+            src_more_joint_indices = [meta["joint_names"].index(name) for name in more_joint_names]
+            dst_more_joint_indices = [len(isaac_joint_names) + i for i in range(len(more_joint_names))]
 
-        joint_names = unitree_joint_names + more_joint_names
-        src_joint_indices = src_joint_indices + src_more_joint_indices
-        dest_joint_indices = dest_joint_indices + dest_more_joint_indices
+            joint_names = isaac_joint_names + more_joint_names
+            src_joint_indices = src_joint_indices + src_more_joint_indices
+            dst_joint_indices = dst_joint_indices + dst_more_joint_indices
 
-        for motion in motions:
-            joint_pos = np.zeros((motion["joint_pos"].shape[0], len(joint_names)))
-            joint_vel = np.zeros((motion["joint_vel"].shape[0], len(joint_names)))
-            joint_pos[:, dest_joint_indices] = motion["joint_pos"][:, src_joint_indices]
-            joint_vel[:, dest_joint_indices] = motion["joint_vel"][:, src_joint_indices]
-            motion["joint_pos"] = joint_pos
-            motion["joint_vel"] = joint_vel
+            for motion in motions:
+                joint_pos = np.zeros((motion["joint_pos"].shape[0], len(joint_names)))
+                joint_vel = np.zeros((motion["joint_vel"].shape[0], len(joint_names)))
+                joint_pos[:, dst_joint_indices] = motion["joint_pos"][:, src_joint_indices]
+                joint_vel[:, dst_joint_indices] = motion["joint_vel"][:, src_joint_indices]
+                motion["joint_pos"] = joint_pos
+                motion["joint_vel"] = joint_vel
+            meta["joint_names"] = joint_names
         
         TensorClass = MemoryMappedTensor if memory_mapped else torch
 
@@ -276,9 +278,9 @@ class MotionDataset:
         body_lin_vel_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 3)
         body_quat_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 4)
         body_ang_vel_w: torch.Tensor = TensorClass.empty(total_length, len(meta["body_names"]), 3)
-        joint_pos: torch.Tensor = TensorClass.empty(total_length, len(joint_names))
-        joint_vel: torch.Tensor = TensorClass.empty(total_length, len(joint_names))
-    
+        joint_pos: torch.Tensor = TensorClass.empty(total_length, len(meta["joint_names"]))
+        joint_vel: torch.Tensor = TensorClass.empty(total_length, len(meta["joint_names"]))
+
         start_idx = 0
         
         starts = []
@@ -317,7 +319,7 @@ class MotionDataset:
 
         return cls(
             body_names=meta["body_names"],
-            joint_names=joint_names,
+            joint_names=meta["joint_names"],
             motion_paths=motion_paths,
             starts=starts,
             ends=ends,

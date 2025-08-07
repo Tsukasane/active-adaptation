@@ -7,14 +7,14 @@ import torch
 
 ASSET_PATH = os.path.dirname(__file__)
 
-class DoorArticulation(Articulation):
+class CustomArticulation(Articulation):
     def _create_buffers(self):
         super()._create_buffers()
         self.friction = torch.zeros((self.num_instances,), device=self.device)
         self.damping = torch.zeros((self.num_instances,), device=self.device)
-        self.door_joint_id = self.joint_names.index("door_joint")
-
-        self.door_torques = torch.zeros((self.num_instances,), device=self.device)
+        assert len(self.joint_names) == 1, "DoorArticulation should have exactly one joint."
+        self.custom_joint_id = 0
+        self.custom_torques = torch.zeros((self.num_instances,), device=self.device)
     
     def _initialize_impl(self):
         super()._initialize_impl()
@@ -23,7 +23,7 @@ class DoorArticulation(Articulation):
         joint_attrs_zero = torch.zeros((self.num_instances, self.num_joints), device=self.device)
         self.write_joint_stiffness_to_sim(joint_attrs_zero)
         self.write_joint_damping_to_sim(joint_attrs_zero)
-        self.write_joint_friction_to_sim(joint_attrs_zero)
+        self.write_joint_friction_coefficient_to_sim(joint_attrs_zero)
 
         # set actuator stiffness and damping to 0
         for actuator in self.actuators.values():
@@ -31,16 +31,16 @@ class DoorArticulation(Articulation):
             actuator.damping.fill_(0.0)
     
     def write_data_to_sim(self):
-        door_joint_vel = self.data.joint_vel[:, self.door_joint_id]
-        door_joint_friction = -torch.sign(door_joint_vel) * (door_joint_vel.abs() > 0.01) * self.friction
-        door_joint_damping = -door_joint_vel * self.damping
-        self.door_torques[:] = door_joint_friction + door_joint_damping
+        j_vel = self.data.joint_vel[:, self.custom_joint_id]
+        j_friction = -torch.sign(j_vel) * (j_vel.abs() > 0.01) * self.friction
+        j_damping = -j_vel * self.damping
+        self.custom_torques[:] = j_friction + j_damping
         
-        self.set_joint_effort_target(self.door_torques.unsqueeze(-1), joint_ids=[self.door_joint_id])
+        self.set_joint_effort_target(self.custom_torques.unsqueeze(-1), joint_ids=[self.custom_joint_id])
         super().write_data_to_sim()
 
 DOOR_CFG = ArticulationCfg(
-    class_type=DoorArticulation,
+    class_type=CustomArticulation,
     prim_path="{ENV_REGEX_NS}/Door",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{ASSET_PATH}/objects/door/door.usd",
@@ -132,7 +132,7 @@ BOX_SMALL_CFG = RigidObjectCfg(
 SUITCASE_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/suitcase",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/objects/suitcase/suitcase-simplified.usd",
+        usd_path=f"{ASSET_PATH}/objects/suitcase/suitcase.usd",
         activate_contact_sensors=True,
         mass_props=sim_utils.MassPropertiesCfg(
             mass=0.5,
@@ -142,10 +142,28 @@ SUITCASE_CFG = RigidObjectCfg(
 STOOL_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/stool",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{ASSET_PATH}/objects/stool/stool.usd",
+        # usd_path=f"{ASSET_PATH}/objects/stool/stool.usd",
+        usd_path=f"{ASSET_PATH}/objects/stool/stool-side_widened.usd",
         activate_contact_sensors=True,
         mass_props=sim_utils.MassPropertiesCfg(
             mass=0.5,
+        ),
+    ),
+)
+STOOL_SUPPORT_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/stool_support",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/stool/stool_support.usd",
+        activate_contact_sensors=False,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.5,
+        ),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            rigid_body_enabled=True,
+            kinematic_enabled=True,
+        ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            collision_enabled=True,
         ),
     ),
 )
@@ -161,6 +179,7 @@ BALL_CFG = RigidObjectCfg(
 )
 
 FOLDCHAIR_CFG = ArticulationCfg(
+    class_type=CustomArticulation,
     prim_path="{ENV_REGEX_NS}/foldchair",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{ASSET_PATH}/objects/foldchair/foldchair.usd",

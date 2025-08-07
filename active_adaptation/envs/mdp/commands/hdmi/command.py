@@ -4,6 +4,7 @@ from active_adaptation.utils.motion import MotionDataset, MotionData
 from typing import List, Dict, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from isaaclab.sensors import ContactSensor
+    from isaaclab.assets import Articulation, RigidObject
 
 import torch
 import numpy as np
@@ -16,7 +17,11 @@ torch.set_printoptions(precision=3, sci_mode=False, linewidth=120)
 class RobotTracking(Command):
     def __init__(
         self, env, data_path: List[str] | str,
+        tracking_keypoint_names: List[str],
+        tracking_joint_names: List[str],
         # reset parameters
+        root_body_name: str = "pelvis",
+        reset_range: Tuple[float, float] | None = None,
         lift_height: float = 0.00,
         pose_range: Dict[str, Tuple[float, float]] = {
             "x": (-0.0, 0.0),
@@ -39,45 +44,25 @@ class RobotTracking(Command):
         call_update: bool = True,
         sample_motion: bool = False,
         replay_motion: bool = False,
-        **kwargs,
     ):
-        if kwargs:
-            print("Warning: Unused kwargs in RobotTracking:", kwargs)
         from . import observations
         from . import rewards
-        # from . import randomizations
+        from . import randomizations
         from . import terminations
         super().__init__(env)
         self.contact_forces: ContactSensor = self.env.scene["contact_forces"]
 
         self.dataset = MotionDataset.create_from_path(
             data_path,
+            isaac_joint_names=self.asset.joint_names,
             target_fps=int(1/self.env.step_dt)
         ).to(self.device)
 
         # Set tracking body and joint names for observation and termination
-        tracking_keypoint_names = [
-            ".*_hip_(pitch|yaw)_link", 
-            ".*_knee_link", 
-            ".*_ankle_roll_link", 
-            "pelvis", 
-            "torso_link", 
-            ".*_shoulder_pitch_link", 
-            ".*_elbow_link", 
-            ".*_wrist_yaw_link"
-        ]
         self.tracking_keypoint_names = self.asset.find_bodies(tracking_keypoint_names)[1]
         self.tracking_body_indices_motion = [self.dataset.body_names.index(name) for name in self.tracking_keypoint_names]
         self.tracking_body_indices_asset = [self.asset.body_names.index(name) for name in self.tracking_keypoint_names]
 
-        tracking_joint_names = [
-            "waist_.*_joint", 
-            ".*_hip_.*_joint", 
-            ".*_knee_joint", 
-            ".*_ankle_.*_joint", 
-            ".*_shoulder_.*_joint", 
-            ".*_elbow_joint"
-        ]
         self.tracking_joint_names = self.asset.find_joints(tracking_joint_names)[1]
         self.tracking_joint_indices_motion = [self.dataset.joint_names.index(name) for name in self.tracking_joint_names]
         self.tracking_joint_indices_asset = [self.asset.joint_names.index(name) for name in self.tracking_joint_names]
@@ -87,7 +72,7 @@ class RobotTracking(Command):
         self.num_future_steps = len(future_steps)
 
         # get root body and joint indices in motion for reset
-        root_body_name = "pelvis"
+        self.root_body_name = root_body_name
         self.root_body_idx_motion = self.dataset.body_names.index(root_body_name)
         
         asset_joint_names = self.asset.joint_names
@@ -106,6 +91,7 @@ class RobotTracking(Command):
 
             self.eval_t = torch.randint(0, self.dataset.lengths[0], (self.num_envs,), device=self.device)
 
+        self.reset_range = reset_range
         self.lift_height = lift_height
 
         pose_range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
@@ -119,6 +105,11 @@ class RobotTracking(Command):
         self.first_sample_motion = True
         self.sample_motion = sample_motion
         self.replay_motion = replay_motion
+
+        if replay_motion:
+            self.pose_range.fill_(0.0)
+            self.init_joint_pos_noise = 0.0
+            self.init_joint_vel_noise = 0.0
 
         if call_update:
             self._init_debug_draw()
@@ -136,13 +127,15 @@ class RobotTracking(Command):
         else:
             motion_len = self.motion_len[env_ids]
 
-
-        max_len = motion_len - self.future_steps[-1]
-        start_phase = torch.rand(len(env_ids), device=self.device)
-        start_t = (start_phase * max_len).long()
-        
+        if self.reset_range is None:
+            max_len = motion_len - self.future_steps[-1]
+            start_phase = torch.rand(len(env_ids), device=self.device)
+            start_t = (start_phase * max_len).long()
+        else:
+            start_t = torch.randint(*self.reset_range, (len(env_ids),), device=self.device)
+            
         if not self.env.training:
-            start_t.fill_(100)
+            start_t.fill_(0)
 
         if self.replay_motion:
             self.replay_motion_t[env_ids] = (self.replay_motion_t[env_ids] + 1) % motion_len
@@ -152,6 +145,8 @@ class RobotTracking(Command):
 
 
     def sample_init(self, env_ids: torch.Tensor) -> None:
+        if not self.env.training:
+            self.pose_range.fill_(0.0)
         self._sample_motions(env_ids)
 
         # reset root state and joint position/velocity from motion
@@ -301,11 +296,11 @@ class RobotTracking(Command):
 class RobotObjectTracking(RobotTracking):
     def __init__(
         self,
+        extra_object_names: List[str],
         object_asset_name: str, # for finding the object in the scene
         object_body_name: str, # for the body that defines the contact target position
         object_joint_name: str | None = None, # object joint to track
         # for reset
-        reset_range: Tuple[float, float] | None = None,
         object_pose_range: Dict[str, Tuple[float, float]] = {
             "x": (-0.0, 0.0),
             "y": (-0.0, 0.0),
@@ -324,6 +319,10 @@ class RobotObjectTracking(RobotTracking):
     ):
         super().__init__(**kwargs, call_update=False)
 
+        self.extra_objects: List[Articulation | RigidObject] = [self.env.scene[name] for name in extra_object_names]
+        self.extra_object_body_id_motion = [self.dataset.body_names.index(name) for name in extra_object_names]
+
+        self.object_asset_name = object_asset_name
         if object_joint_name is None:
             self.object = self.env.scene.rigid_objects[object_asset_name]
             self.object_joint_idx_motion = None
@@ -338,7 +337,9 @@ class RobotObjectTracking(RobotTracking):
 
         pose_range_list = [object_pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         self.object_pose_range = torch.tensor(pose_range_list, device=self.device)
-        
+        if self.replay_motion:
+            self.object_pose_range.fill_(0.0)
+
         # setup contact body indices
         assert len(contact_eef_body_name) == len(contact_target_pos_offset) == len(contact_eef_pos_offset), \
             "contact_eef_body_name, contact_target_pos_offset, and contact_eef_pos_offset must have the same length"
@@ -406,8 +407,22 @@ class RobotObjectTracking(RobotTracking):
         super()._sample_motions(env_ids)
     
     def sample_init(self, env_ids):
+        if not self.env.training:
+            self.object_pose_range.fill_(0.0)
         super().sample_init(env_ids)
-        
+         
+        for object_, object_body_id_motion in zip(self.extra_objects, self.extra_object_body_id_motion):
+            init_object_pos = self._motion_reset.body_pos_w[:, object_body_id_motion]
+            init_object_quat = self._motion_reset.body_quat_w[:, object_body_id_motion]
+
+            init_object_state_w = object_.data.default_root_state[env_ids]
+            init_object_state_w[:, 0:3] = init_object_pos + self.env.scene.env_origins[env_ids]
+            init_object_state_w[:, 3:7] = init_object_quat
+            init_object_state_w[:, 7:]  = 0.0  # zero velocity
+
+            object_.write_root_link_pose_to_sim(init_object_state_w[:, 0:7], env_ids=env_ids)
+            object_.write_root_com_velocity_to_sim(init_object_state_w[:, 7:], env_ids=env_ids)
+
         init_object_pos = self._motion_reset.body_pos_w[:, self.object_body_id_motion]
         init_object_quat = self._motion_reset.body_quat_w[:, self.object_body_id_motion]
 
@@ -424,6 +439,13 @@ class RobotObjectTracking(RobotTracking):
 
         self.object.write_root_link_pose_to_sim(init_object_state_w[:, 0:7], env_ids=env_ids)
         self.object.write_root_com_velocity_to_sim(init_object_state_w[:, 7:], env_ids=env_ids)
+
+        # robot_pos_w = self.asset.data.root_link_pos_w[env_ids]
+        # robot_quat_w = self.asset.data.root_link_quat_w[env_ids]
+        # object_pos_b = quat_apply_inverse(robot_quat_w, (init_object_pos + self.env.scene.env_origins[env_ids]) - robot_pos_w)
+        # from isaaclab.utils.math import quat_conjugate
+        # object_quat_b = quat_mul(quat_conjugate(robot_quat_w), init_object_quat)
+        # print(f"Object initial position in robot frame: {object_pos_b}, orientation: {object_quat_b}")
 
         if self.object_joint_idx_asset is not None:
             init_joint_pos = self._motion_reset.joint_pos[:, self.object_joint_idx_motion].unsqueeze(1)
@@ -453,7 +475,6 @@ class RobotObjectTracking(RobotTracking):
             self.object_joint_pos = self.object.data.joint_pos[:, self.object_joint_idx_asset]
             self.object_joint_vel = self.object.data.joint_vel[:, self.object_joint_idx_asset]
             
-        # shape: [num_envs, 3/4]
         idx = (self.motion_starts + self.t).unsqueeze(1) + self.future_steps.unsqueeze(0)
         idx.clamp_max_(self.motion_ends.unsqueeze(1) - 1)
         self.ref_object_contact_future = self._object_contact[idx]
@@ -525,6 +546,8 @@ class RobotObjectTracking(RobotTracking):
         
         self.eef_contact_markers_pos_w[:, 0, :, :] = self.contact_eef_pos_w
         self.eef_contact_markers_pos_w[:, 1, :, :] = self.contact_target_pos_w
+        in_range_mask = self.ref_object_contact # shape [num_envs,]
+        self.eef_contact_markers_pos_w[~in_range_mask] = -1000.0
         
         self.eef_contact_markers.visualize(
             translations=self.eef_contact_markers_pos_w.view(-1, 3),

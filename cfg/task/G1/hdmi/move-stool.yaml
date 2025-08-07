@@ -1,0 +1,55 @@
+# @package task
+defaults:
+  - G1/hdmi/hdmi-base
+  - _self_
+
+name: G1TrackStool
+
+robot:
+  robot_type: g1_29dof_nohand-feet_sphere-eef_box-body_none
+  override_params:
+    init_state:
+      joint_pos:
+        left_wrist_roll_joint: 0.8
+        right_wrist_roll_joint: -0.8
+
+command:
+  data_path: data/motion/data_for_sim/move_stool
+
+  # extra_object_names: ["stool_support"]
+  object_asset_name: "stool"
+  object_body_name:  "stool"
+
+  # reset_range: [0, 150]
+  object_pose_range:
+    x: [-0., 0.]
+    y: [-0., 0.]
+    z: [0.01, 0.03]
+    roll: [-0., 0.]
+    pitch: [-0., 0.]
+    yaw: [-0.1, 0.1]
+
+  contact_target_pos_offset:
+    - [0.0, 0.16, -0.05]  # left wrist
+    - [0.0,-0.16, -0.05]  # right wrist
+
+  future_steps: [1, 2, 8, 16, 32, 64]
+  # replay_motion: true
+
+randomization:
+  object_body_randomization:
+    static_dynamic_friction_ratio_range: [1.0, 2.0]
+    dynamic_friction_range: [0.8, 0.8]
+    restitution_range: [0.0, 0.2]
+    mass_range: [0.5, 0.5]
+  
+  body_scale:
+    name: "stool"
+    scale_range: [0.9, 1.1]
+
+reward:
+  object_tracking:
+    eef_contact_exp: {weight: 5.0, enabled: true, pos_sigma: 0.2, frc_sigma: 0.2, frc_thres: [0.0, 1.0, 0.0]}
+
+termination:
+  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.2, frc_thres: [0.0, 1.0, 0.0]}

@@ -21,7 +21,18 @@ class ref_joint_pos_future(RobotTrackObservation):
 class ref_joint_vel_future(RobotTrackObservation):
     def compute(self):
         return self.command_manager.ref_joint_vel_future_.view(self.num_envs, -1)
-    
+
+class ref_joint_pos_action(RobotTrackObservation):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        action_manager = self.env.action_manager
+        action_joint_names = action_manager.joint_names
+        self.action_indices_motion = [self.command_manager.dataset.joint_names.index(joint_name) for joint_name in action_joint_names]
+
+    def compute(self):
+        ref_joint_pos = self.command_manager.current_ref_motion.joint_pos[:, self.action_indices_motion]
+        return ref_joint_pos
+
 class ref_root_pos_future_b(RobotTrackObservation):
     """
     Reference root position in robot root frame
@@ -269,24 +280,51 @@ class ref_contact_pos_b(RobotObjectTrackObservation):
     """
     Reference end-effector target position in robot root frame
     """
-    def __init__(self, noise_std: float=0.0, **kwargs):
+    def __init__(self, noise_std: float=0.0, episodic_noise_std: float=0.0, yaw_only: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.noise_std = noise_std
+        self.episodic_noise_std = episodic_noise_std
+        self.yaw_only = yaw_only
         self.ref_contact_pos_b = torch.zeros_like(self.command_manager.contact_target_pos_w)
 
+        self.step_noise = torch.zeros_like(self.command_manager.contact_target_pos_w)
+        self.episodic_noise = torch.zeros_like(self.command_manager.contact_target_pos_w)
+    
+    def reset(self, env_ids):
+        if self.episodic_noise_std > 0.0:
+            self.episodic_noise[env_ids] = torch.empty(len(env_ids), *self.command_manager.contact_target_pos_w.shape[1:], device=self.device).uniform_(-1, 1) * self.episodic_noise_std
+    
     def update(self):
+        if self.noise_std > 0.0:
+            self.step_noise = torch.randn_like(self.command_manager.contact_target_pos_w).clamp(-3, 3) * self.noise_std
+
         ref_contact_target_pos_w = self.command_manager.contact_target_pos_w # shape: [num_envs, n, 3]
         robot_root_pos_w = self.command_manager.robot_root_pos_w[:, None, :] # shape: [num_envs, 1, 3]
         robot_root_quat_w = self.command_manager.robot_root_quat_w[:, None, :] # shape: [num_envs, 1, 4]
+
+        if self.yaw_only:
+            robot_root_quat_w = yaw_quat(robot_root_quat_w)
 
         ref_contact_pos_b = quat_apply_inverse(robot_root_quat_w, ref_contact_target_pos_w - robot_root_pos_w)
         if self.noise_std > 0.0:
             noise = torch.randn_like(ref_contact_pos_b).clamp(-1, 1) * self.noise_std
             ref_contact_pos_b += noise
-        self.ref_contact_pos_b = ref_contact_pos_b
+        self.ref_contact_pos_b = ref_contact_pos_b + self.episodic_noise + self.step_noise
 
     def compute(self):
         return self.ref_contact_pos_b.view(self.num_envs, -1)
+
+    def debug_draw(self):
+        # draw vector from robot root to contact target
+        contact_target_pos_w = self.command_manager.contact_target_pos_w
+        robot_root_pos_w = self.command_manager.robot_root_pos_w[:, None, :]
+        
+        self.env.debug_draw.vector(
+            contact_target_pos_w.view(-1, 3),
+            (robot_root_pos_w - contact_target_pos_w).view(-1, 3),
+            color=(0, 1, 0, 1),
+            size=4.0,
+        )
 
 class diff_contact_pos_b(RobotObjectTrackObservation):
     """

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List, Tuple, Dict
 
 if TYPE_CHECKING:
     from isaaclab.sensors import ContactSensor
-    from active_adaptation.assets.objects import DoorArticulation
+    from active_adaptation.assets.objects import CustomArticulation
     from isaaclab.assets.rigid_object import RigidObject
 
 from active_adaptation.utils.motion import MotionDataset, MotionData
@@ -302,7 +302,7 @@ class MotionTrackingDoor(MotionTrackingCommand):
         wall_body_name = "Wall"
         door_joint_name = "door_joint"
 
-        self.door: DoorArticulation = self.env.scene.articulations[door_object_name]
+        self.door: CustomArticulation = self.env.scene.articulations[door_object_name]
         self.wall_body_id_motion = self.dataset.body_names.index(wall_body_name)
 
         self.door_joint_id_motion = self.dataset.joint_names.index(door_joint_name)

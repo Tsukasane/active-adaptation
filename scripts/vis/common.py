@@ -10,10 +10,11 @@ import struct
 
 # ZMQ Port Configuration
 PORTS = {
-    'pelvis_pose': 5555,
+    "joint_names": 5550,
+    "body_names": 5551,
+    "torso_link_pose": 5552, # for T1
+    'pelvis_pose': 5555, # for G1
     'box_pose': 5556,
-    'door_handle_pose': 5557,
-    'door_wall_left_pose': 5558,
     'joint_pos': 5559,
     'joint_vel': 5560,  # Reserved for future use
     "suitcase_pose": 5561,
@@ -22,16 +23,9 @@ PORTS = {
     "ball_pose": 5564,
     "foldchair_pose": 5565,
     "foldchair_joint_pos": 5566,
-}
-
-# ZMQ addresses
-ADDRESSES = {
-    'pelvis_pose': f"tcp://localhost:{PORTS['pelvis_pose']}",
-    'box_pose': f"tcp://localhost:{PORTS['box_pose']}",
-    'door_handle_pose': f"tcp://localhost:{PORTS['door_handle_pose']}",
-    'door_wall_left_pose': f"tcp://localhost:{PORTS['door_wall_left_pose']}",
-    'joint_pos': f"tcp://localhost:{PORTS['joint_pos']}",
-    'joint_vel': f"tcp://localhost:{PORTS['joint_vel']}",
+    "door_pose": 5567,
+    "door_joint_pos": 5568,
+    "stool_support_pose": 5569,
 }
 
 class PoseMessage:
@@ -119,6 +113,12 @@ class ZMQPublisher:
         msg = JointStateMessage(positions, velocities)
         self.socket.send(msg.to_bytes())
     
+    def publish_names(self, joint_names: list[str]):
+        """Publish a list of joint names"""
+        # Convert list to bytes
+        names_bytes = '\n'.join(joint_names).encode('utf-8')
+        self.socket.send(names_bytes)
+    
     def close(self):
         """Close the publisher"""
         self.socket.close()
@@ -155,6 +155,17 @@ class ZMQSubscriber:
             print(f"Error receiving joint state: {e}")
             return None
     
+    def receive_names(self) -> list[str] | None:
+        """Receive a list of joint names"""
+        try:
+            data = self.socket.recv()
+            return data.decode('utf-8').split('\n')
+        except zmq.Again:
+            return None  # No message available
+        except Exception as e:
+            print(f"Error receiving joint names: {e}")
+            return None
+
     def close(self):
         """Close the subscriber"""
         self.socket.close()

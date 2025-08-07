@@ -31,7 +31,6 @@
         "suitcase"
     ],
     "joint_names": [
-        "root",
         "left_hip_pitch_joint",
         "left_hip_roll_joint",
         "left_hip_yaw_joint",

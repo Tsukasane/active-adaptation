@@ -100,15 +100,27 @@ def main(cfg):
         policy_config["default_joint_pos"] = asset_meta["init_state"]["joint_pos"]
 
         ## policy joint names
-        from active_adaptation.envs.mdp.action import JointPosition
+        from active_adaptation.envs.mdp.action import JointPosition, ResidualJointPosition
         action_manager: JointPosition = env.action_manager
         policy_config["policy_joint_names"] = action_manager.joint_names
+        if isinstance(action_manager, ResidualJointPosition):
+            if action_manager.progress_iters == -1:
+                policy_config["use_residual_action"] = True
+                obs_cfg["_ref_joint_pos"] = {}
+                obs_cfg["_ref_joint_pos"]["ref_joint_pos_future"] = {}
+                obs_cfg["_ref_joint_pos"]["ref_joint_pos_future"]["joint_names"] = action_manager.joint_names
+                obs_cfg["_ref_joint_pos"]["ref_joint_pos_future"]["body_names"] = []
+                obs_cfg["_ref_joint_pos"]["ref_joint_pos_future"]["future_steps"] = [0]
+            elif action_manager.progress_iters >= 0:
+                assert env.current_iter >= action_manager.progress_iters, \
+                    "Current iter must be greater than progress_iters to anneal the residual action."
 
         ## command
-        from active_adaptation.envs.mdp.commands.motion_tracking.command import MotionTrackingCommand
-        command: MotionTrackingCommand = env.command_manager
+        command = env.command_manager
         command_obs = policy_config["observation"]["command"]
-        if isinstance(command, MotionTrackingCommand):
+        if cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.motion_tracking.command.MotionTrackingCommand":
+            from active_adaptation.envs.mdp.commands.motion_tracking.command import MotionTrackingCommand
+            command: MotionTrackingCommand
             motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
             future_steps = command.future_steps.tolist()
             tracking_keypoint_names = command.tracking_keypoint_names
@@ -120,9 +132,51 @@ def main(cfg):
                 command_obs[obs_key]["body_names"] = tracking_keypoint_names
                 command_obs[obs_key]["joint_names"] = tracking_joint_names
                 command_obs[obs_key]["root_body_name"] = "pelvis"
-        
-            
+        elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotTracking":
+            from active_adaptation.envs.mdp.commands.hdmi.command import RobotTracking
+            command: RobotTracking
+            tracking_keypoint_names = command.tracking_keypoint_names
+            tracking_joint_names = command.tracking_joint_names
+            motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
+            future_steps = command.future_steps.tolist()
+            tracking_keypoint_names = command.tracking_keypoint_names
+            tracking_joint_names = command.tracking_joint_names
+            root_body_name = command.root_body_name
 
+            for obs_key in command_obs:
+                command_obs[obs_key]["motion_duration_second"] = motion_duration_second
+                command_obs[obs_key]["future_steps"] = future_steps
+                command_obs[obs_key]["body_names"] = tracking_keypoint_names
+                command_obs[obs_key]["joint_names"] = tracking_joint_names
+                command_obs[obs_key]["root_body_name"] = root_body_name
+        elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking":
+            from active_adaptation.envs.mdp.commands.hdmi.command import RobotObjectTracking
+            command: RobotObjectTracking
+            tracking_keypoint_names = command.tracking_keypoint_names
+            tracking_joint_names = command.tracking_joint_names
+            motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
+            future_steps = command.future_steps.tolist()
+            tracking_keypoint_names = command.tracking_keypoint_names
+            tracking_joint_names = command.tracking_joint_names
+            root_body_name = command.root_body_name
+
+            for obs_key in command_obs:
+                command_obs[obs_key]["motion_duration_second"] = motion_duration_second
+                command_obs[obs_key]["future_steps"] = future_steps
+                command_obs[obs_key]["body_names"] = tracking_keypoint_names
+                command_obs[obs_key]["joint_names"] = tracking_joint_names
+                command_obs[obs_key]["root_body_name"] = root_body_name
+            
+            object_name = cfg.task.command.object_asset_name
+            contact_target_pos_offset = np.array(cfg.task.command.contact_target_pos_offset).tolist()
+            # convert to list
+            policy_obs = policy_config["observation"]["policy"]
+            ref_contact_obs_cfg = policy_obs.get("ref_contact_pos_b", None)
+            if ref_contact_obs_cfg is not None:
+                ref_contact_obs_cfg["object_name"] = object_name
+                ref_contact_obs_cfg["root_body_name"] = root_body_name
+                ref_contact_obs_cfg["contact_target_pos_offset"] = contact_target_pos_offset
+            
         import yaml
         with open(path.replace(".pt", ".yaml"), "w") as f:
             yaml.dump(policy_config, f, sort_keys=False)
@@ -157,4 +211,3 @@ def main(cfg):
 
 if __name__ == "__main__":
     main()
-

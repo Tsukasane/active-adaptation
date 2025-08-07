@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import List
 
 from sshkeyboard import listen_keyboard, stop_listening
-from active_adaptation.utils.motion import MotionDataset, MotionData, unitree_joint_names, unitree_body_names
+from active_adaptation.utils.motion import MotionDataset, MotionData
 from common import ZMQPublisher, PORTS
 
 class SMPLPublisher:
@@ -45,39 +45,27 @@ class SMPLPublisher:
         dataset = MotionDataset.create_from_path(str(self.tmp_dir), target_fps=rate).to("cpu")
         motion_data: MotionData = dataset.data
         
-        # root_body_indices, root_body_names = dataset.find_bodies("pelvis")
-        # assert len(root_body_indices) == 1
-        # root_body_index = root_body_indices[0]
+        # get joint names and state
+        self.joint_names = dataset.joint_names
+        self.joint_pos = motion_data.joint_pos.numpy()
 
-        # self.root_pos_w = motion_data.body_pos_w[:, root_body_index].numpy()
-        # self.root_quat_w = motion_data.body_quat_w[:, root_body_index].numpy()
-
-        matched_joint_names = list(sorted(set(unitree_joint_names) & set(dataset.joint_names)))
-        joint_indices_dataset = [dataset.joint_names.index(name) for name in matched_joint_names]
-        joint_indices_unitree = [unitree_joint_names.index(name) for name in matched_joint_names]
-        self.joint_pos = np.zeros((motion_data.joint_pos.shape[0], len(unitree_joint_names)))
-        self.joint_pos[:, joint_indices_unitree] = motion_data.joint_pos[:, joint_indices_dataset]
-
-        self.body_names = list(set(dataset.body_names) - set(unitree_body_names)) + ["pelvis"]
-        body_indices_dataset = [dataset.body_names.index(name) for name in self.body_names]
-        self.body_pos_w = motion_data.body_pos_w[:, body_indices_dataset].numpy()
-        self.body_quat_w = motion_data.body_quat_w[:, body_indices_dataset].numpy()
-
-        # Create ZMQ publishers
+        self.joint_names_publisher = ZMQPublisher(PORTS['joint_names'])
         self.joint_publisher = ZMQPublisher(PORTS['joint_pos'])
-        self.body_publishers: List[ZMQPublisher] = []
-        for body_name in self.body_names:
-            publisher = ZMQPublisher(PORTS[f"{body_name}_pose"])
-            self.body_publishers.append(publisher)
 
-        object_joint_names = list(sorted(set(dataset.joint_names) - set(unitree_joint_names)))
-        self.object_joint_names = [name for name in object_joint_names if f"{name}_pos" in PORTS]
-        self.object_joint_indices = [dataset.joint_names.index(name) for name in self.object_joint_names]
-        self.object_publishers: List[ZMQPublisher] = []
-        for joint_name in self.object_joint_names:
-            publisher = ZMQPublisher(PORTS[f"{joint_name}_pos"])
-            self.object_publishers.append(publisher)
-        self.motion_data = motion_data
+        # get body names and poses
+        self.body_names = []
+        self.body_publishers: List[ZMQPublisher] = []
+        for body_name in dataset.body_names:
+            try:
+                publisher = ZMQPublisher(PORTS[f"{body_name}_pose"])
+                self.body_publishers.append(publisher)
+                self.body_names.append(body_name)
+            except KeyError:
+                continue
+
+        body_indices = [dataset.body_names.index(name) for name in self.body_names]
+        self.body_pos_w = motion_data.body_pos_w[:, body_indices].numpy()
+        self.body_quat_w = motion_data.body_quat_w[:, body_indices].numpy()
 
         self.publish_rate = rate
         self.index = 0
@@ -89,10 +77,14 @@ class SMPLPublisher:
         self.lock = threading.Lock()
         
         print(f"Loaded {self.n_steps} frames at {rate} Hz")
+        print(f"Joint names: {self.joint_names}")
         print("Controls: Space=Pause/Resume, Left/Right=Navigate (when paused), Esc=Exit")
 
     def publish_once(self):
-        # Publish joint state
+        # Publish joint names
+        self.joint_names_publisher.publish_names(self.joint_names)
+
+        # Publish joint state with original joint order
         joint_qpos = self.joint_pos[self.index]
         self.joint_publisher.publish_joint_state(joint_qpos)
         
@@ -101,11 +93,6 @@ class SMPLPublisher:
             body_pos = self.body_pos_w[self.index, i]
             body_quat = self.body_quat_w[self.index, i]
             body_publisher.publish_pose(body_pos, body_quat)
-        
-        # Publish object joint positions
-        for i, object_publisher in enumerate(self.object_publishers):
-            object_joint_pos = self.motion_data.joint_pos[self.index, self.object_joint_indices[i]:self.object_joint_indices[i]+1]
-            object_publisher.publish_joint_state(object_joint_pos)
 
     def on_key_press(self, key):
         """Handle keyboard input"""
@@ -118,14 +105,10 @@ class SMPLPublisher:
             elif key == "left" and self.paused:
                 self.index = (self.index - 1) % self.n_steps
                 print(f"Frame {self.index}/{self.n_steps-1}")
-                # Publish the current frame immediately
-                # self.publish_once()
                 
             elif key == "right" and self.paused:
                 self.index = (self.index + 1) % self.n_steps
                 print(f"Frame {self.index}/{self.n_steps-1}")
-                # Publish the current frame immediately
-                # self.publish_once()
                 
             elif key == "esc":
                 print("Stopping...")
@@ -139,7 +122,7 @@ class SMPLPublisher:
                 listen_keyboard(
                     on_press=self.on_key_press,
                     until=None,  # Don't stop on any key, we handle it manually
-                    sequential=True
+                    # sequential=True
                 )
             except Exception as e:
                 print(f"Keyboard listener error: {e}")
@@ -180,9 +163,10 @@ class SMPLPublisher:
         self.running = False
         stop_listening()
         
+        self.joint_publisher.close()
+        self.joint_names_publisher.close()
         for publisher in self.body_publishers:
             publisher.close()
-        self.joint_publisher.close()
         
         # Cleanup temporary directory
         if hasattr(self, 'tmp_dir') and os.path.exists(self.tmp_dir):

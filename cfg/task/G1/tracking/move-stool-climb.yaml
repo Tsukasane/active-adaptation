@@ -1,0 +1,10 @@
+# @package task
+defaults:
+  - G1/tracking/tracking-base
+  - _self_
+
+name: G1TrackStool
+
+command:
+  data_path: data/motion/data_for_sim/move_stool-climb
+  

@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from typing import Dict, Tuple, Union, TYPE_CHECKING
 from tensordict import TensorDictBase
 import isaaclab.utils.string as string_utils
@@ -124,6 +125,7 @@ class ResidualJointPosition(ActionManager):
         action_scaling: float | Dict[str, float] = 0.5,
         max_delay: int | None = None,  # delay in simulation steps
         alpha: float | Tuple[float, float] = 0.5,
+        progress_iters: int = -1, # -1 means always use residual, 0 means never use residual
         **kwargs,
     ):
         super().__init__(env)
@@ -148,10 +150,9 @@ class ResidualJointPosition(ActionManager):
 
         self.default_joint_pos = self.asset.data.default_joint_pos.clone()
         self.offset = torch.zeros_like(self.default_joint_pos)
+        self.progress_iters = progress_iters
+        self.progress = 0
 
-        from active_adaptation.envs.mdp.commands.hdmi.command import RobotTracking
-        self.command_manager: RobotTracking = env.command_manager
-        assert isinstance(self.command_manager, RobotTracking)
 
         with torch.device(self.device):
             action_buf_hist = max((self.max_delay - 1) // self.env.decimation + 1, 3)
@@ -180,13 +181,20 @@ class ResidualJointPosition(ActionManager):
         )
         self.alpha[env_ids] = alpha
 
-    def __call__(self, action: torch.Tensor, substep: int):
+        if self.progress_iters > 0:
+            self.progress = self.env.current_iter / self.progress_iters
+            self.progress = np.clip(self.progress, 0.0, 1.0)
+        elif self.progress_iters == 0:
+            self.progress = 1.0
+        elif self.progress_iters == -1:
+            self.progress = 0.0
+
+    def __call__(self, input_td: TensorDictBase, substep: int):
         if substep == 0:
-            if isinstance(action, TensorDictBase):
-                action = action["action"]
             self.action_buf[:, :, 1:] = self.action_buf[:, :, :-1]
-            self.action_buf[:, :, 0] = action
-            self.ref_joint_pos = self.command_manager.current_ref_motion.joint_pos[:, self.command_manager.asset_joint_idx_motion]
+            self.action_buf[:, :, 0] = input_td["action"]
+            self.ref_joint_pos = input_td["ref_joint_pos_"]
+
         # if delay = 1
         #     substep = 0, action_dim: 1
         #     substep = 1, action_dim: 0
@@ -201,7 +209,6 @@ class ResidualJointPosition(ActionManager):
         action = self.action_buf.take_along_dim(action_dim.unsqueeze(1), dim=-1)
         self.applied_action.lerp_(action.squeeze(-1), self.alpha)
 
-        pos_target = self.ref_joint_pos + self.offset
-        pos_target[:, self.joint_ids] += self.applied_action * self.action_scaling
+        pos_target = self.default_joint_pos + self.offset
+        pos_target[:, self.joint_ids] += (1 - self.progress) * (self.ref_joint_pos - self.default_joint_pos[:, self.joint_ids]) + self.applied_action * self.action_scaling
         self.asset.set_joint_position_target(pos_target)
-        

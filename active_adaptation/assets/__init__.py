@@ -20,6 +20,7 @@ OBJECTS = {
     "stool": STOOL_CFG,
     "ball": BALL_CFG,
     "foldchair": FOLDCHAIR_CFG,
+    "stool_support": STOOL_SUPPORT_CFG,
 }
 
 

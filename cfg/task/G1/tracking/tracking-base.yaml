@@ -1,0 +1,12 @@
+# @package task
+
+defaults:
+  - /task/base/tracking-base
+  - _self_
+
+robot:
+  name: g1_HV
+  robot_type: g1_29dof_nohand-feet_sphere-eef_box-body_capsule
+
+command:
+  root_body_name: "pelvis"

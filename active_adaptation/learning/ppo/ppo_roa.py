@@ -53,6 +53,8 @@ from .common import *
 
 torch.set_float32_matmul_precision('high')
 
+REF_JPOS_KEY = "ref_joint_pos_"
+
 @dataclass
 class PPOConfig:
     _target_: str = "active_adaptation.learning.ppo.ppo_roa.PPOROA"
@@ -61,6 +63,10 @@ class PPOConfig:
     ppo_epochs: int = 3
     num_minibatches: int = 8
     clip_param: float = 0.2
+    gamma: float = 0.99
+    lmbda: float = 0.95
+
+    enable_residual_distillation: bool = True
 
     # lr linear schedule or adaptive lr
     lr_start: float = 3e-4
@@ -72,9 +78,9 @@ class PPOConfig:
     # entropy coef schedule
     entropy_coef_start: float = 0.001
     entropy_coef_end: float = 0.001
-    entropy_decay_iters: int = 1500
+    entropy_decay_iters: int = 1000
 
-    init_noise_scale: float = 1.5
+    init_noise_scale: float = 1.0
     load_noise_scale: float | None = 0.5
 
     clip_neg_reward: bool = False
@@ -173,7 +179,7 @@ class PPOROA(TensorDictModuleBase):
         self.critic_loss_fn = nn.MSELoss(reduction="none")
         self.adapt_loss_fn = nn.MSELoss(reduction="none")
         self.rec_loss = nn.MSELoss(reduction="none")
-        self.gae = GAE(0.99, 0.95)
+        self.gae = GAE(gamma=self.cfg.gamma, lmbda=self.cfg.lmbda)
         self.reward_groups = list(env.cfg.reward.keys())
         num_reward_groups = len(self.reward_groups)
         self.reward_scales = torch.ones(num_reward_groups, device=self.device)
@@ -199,7 +205,7 @@ class PPOROA(TensorDictModuleBase):
             global CMD_KEY
             CMD_KEY = "command_"
         
-        self.env = env
+        object.__setattr__(self, "env", env)
 
         if self.cfg.adapt_module == "gru":
             self.adapt_module =  Mod(
@@ -292,6 +298,28 @@ class PPOROA(TensorDictModuleBase):
             lr=self.lr,
         )
         self.num_updates = 0
+
+        if cfg.phase != "train":
+            cfg.enable_residual_distillation = False
+
+        if cfg.enable_residual_distillation:
+            assert REF_JPOS_KEY in observation_spec, f"{REF_JPOS_KEY} should be in observation_spec"
+            # if this is enabled, the teacher should be trained with residual joint position action space with progress_iters=-1
+            # and the student should be finetuned with residual joint position action space  with progress_iters=0
+
+            from active_adaptation.envs.mdp.action import ResidualJointPosition
+            action_manager: ResidualJointPosition = self.env.action_manager
+            assert isinstance(action_manager, ResidualJointPosition), "action_manager should be ResidualJointPosition"
+            assert action_manager.progress_iters == -1, "progress_iters should be -1 for ROA"
+
+            self.def_joint_pos = action_manager.default_joint_pos[0, action_manager.joint_ids]
+            self.action_scaling = action_manager.action_scaling
+            self.opt_adapt_actor = torch.optim.Adam(
+                [
+                    {"params": self.actor_adapt.parameters()},
+                ],
+                lr=self.lr,
+            )
     
     def make_tensordict_primer(self):
         num_envs = self.observation_spec.shape[0]
@@ -381,6 +409,19 @@ class PPOROA(TensorDictModuleBase):
             infos[f"critic/{group_name}.ret_mean"] = ret_mean[i].item()
             infos[f"critic/{group_name}.ret_std"] = ret_std[i].item()
             infos[f"critic/{group_name}.neg_rew_ratio"] = (tensordict[REWARD_KEY][:, :, i] <= 0.).float().mean().item()
+        
+        adv = tensordict["adv"]
+        adv_mean = adv.mean()
+        adv_std = adv.std()
+        adv_min = adv.min()
+        adv_max = adv.max()
+        infos["critic.adv/mean"] = adv_mean.item()
+        infos["critic.adv/std"] = adv_std.item()
+        infos["critic.adv/min"] = adv_min.item()
+        infos["critic.adv/max"] = adv_max.item()
+
+        # infos["actor/priv_feature_norm"] = tensordict["priv_feature"].norm(dim=-1).mean().item()
+        # infos["actor/priv_pred_norm"] = tensordict["priv_pred"].norm(dim=-1).mean().item()
         return dict(sorted(infos.items()))
     
     @set_recurrent_mode(True)
@@ -398,9 +439,26 @@ class PPOROA(TensorDictModuleBase):
                 self.opt_adapt.zero_grad()
                 priv_loss.backward()
                 self.opt_adapt.step()
-                infos.append(TensorDict({
-                    "adapt/priv_loss": priv_loss,
-                }, []))
+                info = {}
+                info["adapt/priv_loss"] = priv_loss
+                
+                if self.cfg.enable_residual_distillation:
+                    ref_joint_pos = minibatch[REF_JPOS_KEY]
+                    action_teacher = minibatch[ACTION_KEY].clone()
+                    jpos_teacher = ref_joint_pos + action_teacher * self.action_scaling
+
+                    minibatch["priv_pred"] = minibatch["priv_feature"]
+                    self.actor_adapt(minibatch)
+                    action_student = minibatch[ACTION_KEY]
+                    jpos_student = self.def_joint_pos + action_student * self.action_scaling
+
+                    adapt_loss = (jpos_student - jpos_teacher).square().mean()
+                    self.opt_adapt_actor.zero_grad()
+                    adapt_loss.backward()
+                    self.opt_adapt_actor.step()
+                    info["adapt/adapt_loss"] = adapt_loss
+                    
+                infos.append(TensorDict(info, []))
         
         soft_copy_(self.adapt_module, self.adapt_ema, 0.04)
         
@@ -544,6 +602,9 @@ class PPOROA(TensorDictModuleBase):
         return info
 
     def state_dict(self):
+        if self.cfg.phase == "train" and not self.cfg.enable_residual_distillation:
+            hard_copy_(self.actor, self.actor_adapt)
+
         state_dict = OrderedDict()
         for name, module in self.named_children():
             state_dict[name] = module.state_dict()
@@ -563,9 +624,6 @@ class PPOROA(TensorDictModuleBase):
                 warnings.warn(f"Failed to load state dict for {name}: {str(e)}")
                 failed_keys.append(name)
         print(f"Successfully loaded {succeed_keys}.")
-        if state_dict.get("last_phase", "train") == "train":
-            # only copy to initialize the actor once
-            hard_copy_(self.actor, self.actor_adapt)
 
         self.env.set_progress(state_dict.get("last_iter", 0))
 

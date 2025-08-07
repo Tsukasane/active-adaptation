@@ -549,11 +549,11 @@ class eef_contact_exp(RobotObjectTrackReward):
     ):
         super().__init__(**kwargs)
         self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
-        self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
         self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
 
         self.pos_sigma = pos_sigma
         self.pos_tolerance = pos_tolerance
+
         self.frc_sigma = frc_sigma
         self.frc_thres = frc_thres
         if isinstance(frc_thres, ListConfig):
@@ -563,11 +563,9 @@ class eef_contact_exp(RobotObjectTrackReward):
         self.in_range = self.command_manager.ref_object_contact
 
         eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
-        # eef_ori_diff = wrap_to_pi(self.command_manager.contact_eef_euler_xyz - self.command_manager.contact_target_euler_xyz)
         eef_frc = self.command_manager.eef_contact_forces_b
 
         self.eef_pos_error[:] = (eef_pos_diff.norm(dim=-1) - self.pos_tolerance).clamp_min(0.0)
-        # self.eef_ori_error[:] = eef_ori_diff.abs()
         self.eef_frc[:] = eef_frc
 
     def compute(self):
@@ -579,6 +577,20 @@ class eef_contact_exp(RobotObjectTrackReward):
         rew = torch.exp(-self.eef_pos_error / self.pos_sigma) * torch.exp(contact_frc / self.frc_sigma)
         # shape: [num_envs]
         return (rew.mean(dim=-1) * self.in_range.float()).unsqueeze(-1)
+
+    def debug_draw(self):
+        if self.env.backend != "isaac":
+            return
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) >= self.frc_thres)
+        else:
+            contact_frc = (self.eef_frc.abs() >= self.frc_thres).all(dim=-1)
+        contacted_points = self.command_manager.contact_target_pos_w[contact_frc]
+        self.env.debug_draw.point(
+            contacted_points.reshape(-1, 3),
+            color=(1.0, 1.0, 1.0, 1.0),
+            size=40,
+        )
 
 class eef_contact_exp_max(RobotObjectTrackReward):
     def __init__(
@@ -666,19 +678,17 @@ class eef_contact_all(RobotObjectTrackReward):
         # shape: [num_envs]
         return (contact_all * self.in_range.float()).unsqueeze(-1)
 
-    def debug_draw(self):
-        if self.env.backend != "isaac":
-            return
-        if isinstance(self.frc_thres, float):
-            contact_frc = (self.eef_frc.norm(dim=-1) >= self.frc_thres)
-        else:
-            contact_frc = (self.eef_frc.abs() >= self.frc_thres).all(dim=-1)
-        # contact_frc = (self.eef_frc.norm(dim=-1) >= 2.0)
-        # print(f"contact_frc: {self.eef_frc.abs()[:, 0]}")
-        contacted_points = self.command_manager.contact_target_pos_w[contact_frc]
-        # print(f"contacted_points: {contacted_points}")
-        self.env.debug_draw.point(
-            contacted_points.reshape(-1, 3),
-            color=(1.0, 1.0, 1.0, 1.0),
-            size=40,
-        )
+
+# # box specific regularization rewards
+
+# class push_box_no_force_xy_when_no_contact(RobotObjectTrackReward):
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+#         assert self.command_manager.object_asset_name == "box"
+    
+#     def compute(self):
+#         contact_force_xy = self.command_manager.eef_contact_forces_b[:, :, :2].norm(dim=-1)
+#         # shape: [num_envs, num_eefs]
+#         in_contact = self.command_manager.ref_object_contact
+#         rew = (-contact_force_xy * (~in_contact).unsqueeze(1).float()).mean(dim=-1)
+#         return rew.unsqueeze(-1)
