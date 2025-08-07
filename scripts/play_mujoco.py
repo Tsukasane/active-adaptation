@@ -20,7 +20,7 @@ def main(cfg):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
 
-    from scripts.helpers import EpisodeStats, make_env_policy, ObsNorm
+    from helpers import EpisodeStats, make_env_policy, ObsNorm
     # TODO: maybe implement these
     cfg.task.randomization = {}
     cfg.task.reward = {}
@@ -62,7 +62,7 @@ def main(cfg):
         if isinstance(k, tuple) and k[0]=="stats"
     ]
     episode_stats = EpisodeStats(stats_keys, device=env.device)
-    policy = policy.get_rollout_policy("eval")
+    policy = policy.get_rollout_policy("eval").to(env.device)
 
     env.base_env.eval()
     td_ = env.reset()

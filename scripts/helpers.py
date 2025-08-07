@@ -112,7 +112,7 @@ def make_env_policy(cfg: DictConfig):
     transform = Compose(InitTracker(), StepCounter())
 
     env = TransformedEnv(base_env, transform)
-    env.set_seed(cfg.seed)
+    # env.set_seed(cfg.seed)
     
     # setup policy
     policy_cls = hydra.utils.get_class(cfg.algo._target_)

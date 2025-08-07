@@ -16,7 +16,7 @@ from active_adaptation.utils.math import (
 )
 import active_adaptation.utils.symmetry as symmetry_utils
 
-from .base import Command
+from active_adaptation.envs.mdp.base import Command
 # from ..observations import _initialize_warp_meshes, raycast_mesh
 
 if TYPE_CHECKING:

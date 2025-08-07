@@ -4,13 +4,16 @@ import torch.distributions as D
 import math
 from typing import Sequence, TYPE_CHECKING
 
-from isaaclab.assets import Articulation
-import isaaclab.utils.math as math_utils
+if TYPE_CHECKING:
+    from isaaclab.assets import Articulation
+    from isaaclab.sensors import ContactSensor, RayCaster, Imu
+    from isaaclab.sensors import Camera, TiledCamera
+ 
+import active_adaptation
+from active_adaptation.envs.mdp.observations.motion import joint_vel
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse, MultiUniform
 from active_adaptation.utils.helpers import batchify
-from isaaclab.utils.math import quat_apply_yaw, yaw_quat
-from tensordict import TensorDict
-from .base import Command
+from active_adaptation.envs.mdp.base import Command
 
 import joblib
 import os
@@ -71,14 +74,21 @@ class MotionLib(Command):
             def on_press(key):
                 global CURRENT_MOTION
                 try:
-                    if key.char == "n":
+                    if key.char == "+":
                         CURRENT_MOTION += 1
                         CURRENT_MOTION %= self.num_motions
                         print(f"\nSwitching to motion {CURRENT_MOTION}")
                 except AttributeError:
                     pass
-            self.listener = keyboard.Listener(on_press=on_press)
-            self.listener.start()
+            # self.listener = keyboard.Listener(on_press=on_press)
+            # self.listener.start()
+        
+    #     if active_adaptation._BACKEND == "mujoco":
+    #         self.marker = self.env.scene.create_sphere_marker(0.05, (0, 1, 0, 1))
+            
+    # def debug_draw(self):
+    #     if active_adaptation._BACKEND == "mujoco":
+    #         self.marker.geom.pos = self.robot.data.body_pos_w[0, 10]
     
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
         motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
@@ -104,6 +114,7 @@ class MotionLib(Command):
         self.robot.write_joint_state_to_sim(
             qpos,
             self.robot.data.default_joint_vel[env_ids],
+            joint_ids = slice(None),
             env_ids=env_ids
         )
         

@@ -1,11 +1,17 @@
 from math import inf
 import torch
+from typing import Sequence, TYPE_CHECKING
 
-from isaaclab.sensors import ContactSensor, RayCaster
-from isaaclab.actuators import DCMotor
-from isaaclab.assets import Articulation
-from isaaclab.utils.math import yaw_quat
-from isaaclab.utils.warp import raycast_mesh
+if TYPE_CHECKING:
+    from isaaclab.assets import Articulation
+    from isaaclab.sensors import ContactSensor, RayCaster, Imu
+    from isaaclab.sensors import Camera, TiledCamera
+# from isaaclab.sensors import ContactSensor, RayCaster
+# from isaaclab.actuators import DCMotor
+# from isaaclab.assets import Articulation
+# from isaaclab.utils.math import yaw_quat
+# from isaaclab.utils.warp import raycast_mesh
+import active_adaptation
 from active_adaptation.utils.helpers import batchify
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 
@@ -184,12 +190,13 @@ class Humanoid(SimpleEnv):
             return ref_trans_gap.reshape(self.num_envs, -1)
         
         def debug_draw(self):
-            self.env.debug_draw.vector(
-                self.root_pos[:, 0],
-                self.gap[:, 0],
-                color=(1., 0., 1., 1.),
-                size=1.
-            )
+            if active_adaptation._BACKEND == "isaac":
+                self.env.debug_draw.vector(
+                    self.root_pos[:, 0],
+                    self.gap[:, 0],
+                    color=(1., 0., 1., 1.),
+                    size=1.
+                )
     
     # Motion Tracking Reward
     class tracking_root_trans(mdp.Reward):
@@ -259,15 +266,16 @@ class Humanoid(SimpleEnv):
             return reward
         
         def debug_draw(self):
-            timestep = (self.env.episode_length_buf-1).cpu()
-            ref_keypoints = self.env.command_manager.kp[timestep].reshape(self.num_envs, -1, 3).to(self.device)
-            
-            root_position = self.robot.data.root_pos_w.unsqueeze(1)
-            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
+            if active_adaptation._BACKEND == "isaac":
+                timestep = (self.env.episode_length_buf-1).cpu()
+                ref_keypoints = self.env.command_manager.kp[timestep].reshape(self.num_envs, -1, 3).to(self.device)
+                
+                root_position = self.robot.data.root_pos_w.unsqueeze(1)
+                root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
 
-            kp_global = quat_rotate(root_quat_w, ref_keypoints) + root_position
-            for i in range(kp_global.shape[1]):
-                self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
+                kp_global = quat_rotate(root_quat_w, ref_keypoints) + root_position
+                for i in range(kp_global.shape[1]):
+                    self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
 
     class tracking_eff(tracking_keypoints):
         def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
