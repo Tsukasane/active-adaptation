@@ -131,7 +131,7 @@ class Humanoid(SimpleEnv):
             super().__init__(env)
             self.robot: Articulation = self.env.scene["robot"]
             self.steps = steps
-            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+            self.ref_keypoints = self.env.command_manager.kp_global    # (num_frames, num_joints, 3)
 
         def compute(self) -> torch.Tensor:
             timestep = self.env.episode_length_buf.cpu()
@@ -147,15 +147,15 @@ class Humanoid(SimpleEnv):
             super().__init__(env)
             self.robot: Articulation = self.env.scene["robot"]
             self.steps = steps
-            self.ref_keypoints = self.env.command_manager.kp    # (num_frames, num_joints, 3)
+            self.ref_keypoints = self.env.command_manager.kp_global    # (num_frames, num_joints, 3)
             self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
-            self.body_pos_local = torch.zeros(self.num_envs, len(self.body_indices), 3, device=self.device)
+
+            self.root_quat_w = self.robot.data.root_quat_w[:, None, None]    # (num_envs, 1, 1, 4)
+            self.body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
 
         def update(self):
-            quat = self.robot.data.root_quat_w.unsqueeze(1)
-            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
-            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
-            self.body_pos_local = quat_rotate_inverse(quat, body_pos)
+            self.root_quat_w = self.robot.data.root_quat_w[:, None, None]    # (num_envs, 1, 1, 4)
+            self.body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
 
         def compute(self):
             timestep = self.env.episode_length_buf.cpu()
@@ -164,9 +164,20 @@ class Humanoid(SimpleEnv):
             timestep = timestep.unsqueeze(-1) + step_range
             timestep = torch.min(timestep, max_frame[:, None]-1)
             ref_keypoints = self.ref_keypoints[timestep].to(self.device)   # (num_envs, steps, num_joints, 3)
-            body_pos_local = self.body_pos_local.unsqueeze(1).expand_as(ref_keypoints)
-            ref_keypoints_gap = ref_keypoints - body_pos_local
+            ref_keypoints.add_(self.env.scene.env_origins[:, None, None])
+
+            body_pos_global = self.body_pos_global.unsqueeze(1).expand_as(ref_keypoints)
+            ref_keypoints_gap = quat_rotate_inverse(self.root_quat_w, ref_keypoints - body_pos_global)
             return ref_keypoints_gap.reshape(self.num_envs, -1)
+
+        def debug_draw(self):
+            if active_adaptation._BACKEND == "isaac":
+                timestep = self.env.episode_length_buf.cpu()
+                ref_keypoints = self.ref_keypoints[timestep].to(self.device)    # (num_envs, num_joints, 3)
+                ref_keypoints.add_(self.env.scene.env_origins[:, None])
+                for i in range(ref_keypoints.shape[1]):
+                    self.env.debug_draw.point(ref_keypoints[:, i], color=(1., 0., 0., 1.), size = 20)
+                    self.env.debug_draw.point(self.body_pos_global[:, i], color=(0., 1., 0., 1.), size = 20)
     
     class ref_trans_gap(mdp.Observation):
         def __init__(self, env, steps: int=1):
@@ -211,6 +222,8 @@ class Humanoid(SimpleEnv):
             root_pos_w = self.robot.data.root_pos_w
             error = (root_pos_w - ref_root_translation).square().sum(-1, True)
             reward = torch.exp(- error.sqrt() / self.sigma)
+            if active_adaptation.get_mode() == "play":
+                print(f"tracking root trans: {error.sqrt().mean()}")
             return reward
         
     class tracking_root_rot(mdp.Reward):
@@ -226,6 +239,8 @@ class Humanoid(SimpleEnv):
             dot_product = dot(root_quat_w, ref_root_orientation)
             error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
             reward = torch.exp(- error / self.sigma)
+            if active_adaptation.get_mode() == "play":
+                print(f"tracking root rot: {error.mean()}")
             return reward
         
     class tracking_qpos(mdp.Reward):
@@ -241,6 +256,8 @@ class Humanoid(SimpleEnv):
             qpos = self.robot.data.joint_pos[:, self.joint_indices]
             error = (qpos - ref_qpos).square().mean(-1, True)
             reward = torch.exp(- error / self.sigma)
+            if active_adaptation.get_mode() == "play":
+                print(f"tracking qpos: {error.mean()}")
             return reward
         
     class tracking_keypoints(mdp.Reward):
@@ -253,29 +270,17 @@ class Humanoid(SimpleEnv):
 
         def compute(self) -> torch.Tensor:
             timestep = (self.env.episode_length_buf-1).cpu()
-            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
-            ref_keypoints = ref_keypoints[:, self.idx]
-            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
-            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
-            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
-            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
+            ref_keypoints = self.env.command_manager.kp_local[timestep].to(self.device)[:, self.idx]
+            ref_keypoints.add_(self.env.scene.env_origins[:, None])
 
-            diff = (ref_keypoints - body_pos_local).norm(dim=-1)
+            body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
+
+            diff = (ref_keypoints - body_pos_global).norm(dim=-1)
             error = diff.square().sum(-1, True)
             reward = torch.exp(- error.sqrt() / self.sigma)
+            if active_adaptation.get_mode() == "play":
+                print(f"tracking keypoints: {error.sqrt().mean()}")
             return reward
-        
-        def debug_draw(self):
-            if active_adaptation._BACKEND == "isaac":
-                timestep = (self.env.episode_length_buf-1).cpu()
-                ref_keypoints = self.env.command_manager.kp[timestep].reshape(self.num_envs, -1, 3).to(self.device)
-                
-                root_position = self.robot.data.root_pos_w.unsqueeze(1)
-                root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
-
-                kp_global = quat_rotate(root_quat_w, ref_keypoints) + root_position
-                for i in range(kp_global.shape[1]):
-                    self.env.debug_draw.point(kp_global[:, i], color=(0., 1., 1., 1.), size = 30)
 
     class tracking_eff(tracking_keypoints):
         def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
@@ -347,14 +352,11 @@ class Humanoid(SimpleEnv):
 
         def compute(self, termination: torch.Tensor) -> torch.Tensor:
             timestep = (self.env.episode_length_buf - 1).cpu()
-            ref_keypoints = self.env.command_manager.kp[timestep].to(self.device)
-            ref_keypoints = ref_keypoints[:, self.idx]
-            body_pos = self.robot.data.body_pos_w[:, self.body_indices]
-            body_pos -= self.robot.data.root_pos_w.unsqueeze(1)
-            root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
-            body_pos_local = quat_rotate_inverse(root_quat_w, body_pos)
+            ref_keypoints = self.env.command_manager.kp_global[timestep].to(self.device)[:, self.idx]
+            ref_keypoints.add_(self.env.scene.env_origins[:, None])
+            body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
 
-            diff = (ref_keypoints - body_pos_local).norm(dim=-1)    # (num_envs, num_bodies)
+            diff = (ref_keypoints - body_pos_global).norm(dim=-1)    # (num_envs, num_bodies)
             mean_diff = diff.mean(-1, True)     # (num_envs, 1)
             return mean_diff > self.max_distance
 

@@ -2,6 +2,7 @@ import os
 import active_adaptation.learning
 
 _BACKEND = "isaac"
+_MODE = "train"
 
 _LOCAL_RANK = os.getenv("LOCAL_RANK", "0")
 _LOCAL_RANK = int(_LOCAL_RANK)
@@ -39,3 +40,11 @@ def set_backend(backend: str):
 def get_backend():
     return _BACKEND
 
+def set_mode(mode: str):
+    if not mode in ("train", "play"):
+        raise ValueError(f"mode must be either 'train' or 'play', got {mode}")
+    global _MODE
+    _MODE = mode
+
+def get_mode():
+    return _MODE

@@ -74,14 +74,14 @@ class MotionLib(Command):
             def on_press(key):
                 global CURRENT_MOTION
                 try:
-                    if key.char == "+":
+                    if key.char == "n":
                         CURRENT_MOTION += 1
                         CURRENT_MOTION %= self.num_motions
                         print(f"\nSwitching to motion {CURRENT_MOTION}")
                 except AttributeError:
                     pass
-            # self.listener = keyboard.Listener(on_press=on_press)
-            # self.listener.start()
+            self.listener = keyboard.Listener(on_press=on_press)
+            self.listener.start()
         
     #     if active_adaptation._BACKEND == "mujoco":
     #         self.marker = self.env.scene.create_sphere_marker(0.05, (0, 1, 0, 1))

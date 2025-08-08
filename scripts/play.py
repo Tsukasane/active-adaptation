@@ -7,6 +7,8 @@ import os
 import datetime
 from omegaconf import OmegaConf
 
+import active_adaptation
+
 from isaaclab.app import AppLauncher
 
 from torchrl.envs.utils import set_exploration_type, ExplorationType
@@ -17,6 +19,7 @@ from active_adaptation.utils.export import export_onnx
 
 @hydra.main(config_path="../cfg", config_name="play", version_base=None)
 def main(cfg):
+    active_adaptation.set_mode("play")
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
     
