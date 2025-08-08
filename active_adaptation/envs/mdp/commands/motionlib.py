@@ -139,9 +139,11 @@ class MotionLib(Command):
         self.root_orientation = []
         self.root_linear = []
         self.qpos = []
-        self.kp = []
+        self.kp_global = []
+        self.kp_local = []
 
         mujoco_to_isaac_idx = mujoco_to_isaac()
+        smpl_idx = [SMPL_BONE_ORDER_NAMES.index(j[1]) for j in joint_matches]
 
         pbar = tqdm(data.items())
         for k, motion in pbar:
@@ -149,23 +151,27 @@ class MotionLib(Command):
             interpolated_root_trans = self.interpolate(motion, "root_trans_offset", self.source_fps, self.target_fps)
             interpolated_root_rot = self.interpolate(motion, "root_rot", self.source_fps, self.target_fps)
             interpolated_qpos = self.interpolate(motion, "dof", self.source_fps, self.target_fps)
-            interpolated_kp = self.interpolate(motion, "smpl_joints", self.source_fps, self.target_fps)
-            interpolated_kp_local = convert2local(interpolated_kp, interpolated_root_rot)
+            interpolated_kp_global = self.interpolate(motion, "smpl_joints", self.source_fps, self.target_fps)
+            interpolated_kp_local = convert2local(interpolated_kp_global, interpolated_root_rot)
 
-            pad_root_trans, pad_root_rot, pad_qpos, pad_kp = self.pad(  interpolated_root_trans,
-                                                                        interpolated_root_rot[:, [3, 0, 1, 2]],
-                                                                        interpolated_qpos[:, mujoco_to_isaac_idx],
-                                                                        interpolated_kp_local)
+            # pad_root_trans, pad_root_rot, pad_qpos, pad_kp = self.pad(  interpolated_root_trans,
+            #                                                             interpolated_root_rot[:, [3, 0, 1, 2]],
+            #                                                             interpolated_qpos[:, mujoco_to_isaac_idx],
+            #                                                             interpolated_kp_local)
 
-            self.motion_length.append(pad_root_trans.shape[0])
-            self.phase.append(torch.linspace(0, 1, pad_root_trans.shape[0]))
-            self.root_translations.append(pad_root_trans)
-            self.root_linear.append(torch.diff(pad_root_trans,
+            interpolated_kp_global = interpolated_kp_global[:, smpl_idx, :]
+            interpolated_kp_local = interpolated_kp_local[:, smpl_idx, :]
+
+            self.motion_length.append(interpolated_root_trans.shape[0])
+            self.phase.append(torch.linspace(0, 1, interpolated_root_trans.shape[0]))
+            self.root_translations.append(interpolated_root_trans)
+            self.root_linear.append(torch.diff(interpolated_root_trans,
                                                dim=0,
                                                append=torch.zeros(1, 3)) * self.target_fps)
-            self.root_orientation.append(pad_root_rot)
-            self.qpos.append(pad_qpos)
-            self.kp.append(pad_kp)
+            self.root_orientation.append(interpolated_root_rot[:, [3, 0, 1, 2]])
+            self.qpos.append(interpolated_qpos[:, mujoco_to_isaac_idx])
+            self.kp_global.append(interpolated_kp_global)
+            self.kp_local.append(interpolated_kp_local)
 
         self.motion_length = torch.tensor(self.motion_length)
         self.phase = torch.cat(self.phase, dim=0).float()
@@ -173,7 +179,8 @@ class MotionLib(Command):
         self.root_orientation = torch.cat(self.root_orientation, dim=0).float()
         self.root_linear = torch.cat(self.root_linear, dim=0).float()
         self.qpos = torch.cat(self.qpos, dim=0).float()
-        self.kp = torch.cat(self.kp, dim=0).float()
+        self.kp_global = torch.cat(self.kp_global, dim=0).float()
+        self.kp_local = torch.cat(self.kp_local, dim=0).float()
 
         self.num_motions = len(data)
         self.num_frames = self.root_translations.shape[0]
@@ -260,10 +267,8 @@ def convert2local(kp, root_orientation):
     Returns:
         smpl_kp: (N, 24, 3) in local coordinate system
     '''
-    smpl_idx = [SMPL_BONE_ORDER_NAMES.index(j[1]) for j in joint_matches]
     smpl_root = kp[:, 0:1, :]
     smpl_kp = kp - smpl_root
-    smpl_kp = smpl_kp[:, smpl_idx, :]
     root_orient_inv = torch.tensor(R.from_quat(root_orientation.cpu().numpy()).inv().as_matrix())
     smpl_kp = torch.einsum('nij, nkj->nki', root_orient_inv, smpl_kp)
     # animate_3d(smpl_kp, root_orientation)
