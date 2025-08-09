@@ -17,7 +17,7 @@ from isaaclab.utils.math import (
 )
 from active_adaptation.utils.math import batchify
 from isaaclab.utils.string import resolve_matching_names
-from typing import Dict
+from typing import Dict, Type
 
 yaw_quat = batchify(yaw_quat)
 quat_apply_inverse = batchify(quat_apply_inverse)
@@ -122,7 +122,7 @@ def log_tensor_members(obj, prefix=""):
 class _RegistryMixin:
     def __init_subclass__(cls):
         if not hasattr(cls, 'registry'):
-            cls.registry = {}
+            cls.registry: Dict[str, Type[AMPObservation]] = {}
 
         cls_name = cls.__name__
         try:
@@ -142,7 +142,7 @@ class _RegistryMixin:
             raise ValueError(f"Term {cls_name} already registered in {location}")
 
 class AMPObservation(_RegistryMixin):
-    def __init__(self, buffer: "AMPObsBuffer"):
+    def __init__(self, buffer: "AMPObsBuffer", **kwargs):
         self.buffer = buffer
 
     def compute(self):
@@ -164,6 +164,8 @@ class AMPObsBuffer:
         self.joint_names = motion_lib.joint_names
         self.motion_num_frames = motion_lib.lengths
         self.total_num_frames = motion_lib.data.shape[0]
+        self.starts = motion_lib.starts
+        self.ends = motion_lib.ends
 
         amp_obs_list = []
         self.obs_metadata = []  # Store metadata for each observation type
@@ -197,7 +199,8 @@ class AMPObsBuffer:
 
     def sample(self, num_samples):
         sample_indices = torch.randint(0, self.total_num_frames, (num_samples,))
-        return self.amp_obs_buf[sample_indices]
+        amp_obs = self.amp_obs_buf[sample_indices]  # (num_samples, obs_dim)
+        return amp_obs
 
     def export(self, output_dir: str):
         """

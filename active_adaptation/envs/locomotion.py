@@ -67,8 +67,8 @@ class SimpleEnv(_Env):
             robot_type = self.cfg.robot.get("robot_type", self.cfg.robot.name)
             scene_cfg.robot.spawn.usd_path = scene_cfg.robot.spawn.usd_path.format(ROBOT_TYPE=robot_type)
 
-            # for obj_name in self.cfg.get("object_names", []):
-            if self.cfg.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking":
+            # if self.cfg.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking":
+            if "object_asset_name" in self.cfg.command:
                 extra_object_names = self.cfg.command.get("extra_object_names", [])
                 for extra_obj_name in extra_object_names:
                     extra_obj_cfg = OBJECTS[extra_obj_name]

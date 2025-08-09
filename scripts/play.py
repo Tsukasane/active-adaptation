@@ -176,6 +176,27 @@ def main(cfg):
                 ref_contact_obs_cfg["object_name"] = object_name
                 ref_contact_obs_cfg["root_body_name"] = root_body_name
                 ref_contact_obs_cfg["contact_target_pos_offset"] = contact_target_pos_offset
+        elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.box_transport.command.BoxTransport":
+            from active_adaptation.envs.mdp.commands.box_transport.command import BoxTransport
+            command: BoxTransport
+            object_name = command.object_asset_name
+            root_body_name = command.root_body_name
+            
+            policy_obs = policy_config["observation"]["policy"]
+            object_obs = ["object_pos_b", "object_ori_b"]
+            for obs_key in object_obs:
+                obs_cfg = policy_obs.get(obs_key, None)
+                if obs_cfg is not None:
+                    obs_cfg["object_name"] = object_name
+                    obs_cfg["root_body_name"] = root_body_name
+
+            ref_contact_obs_cfg = policy_obs.get("ref_contact_pos_b", None)
+            if ref_contact_obs_cfg is not None:
+                ref_contact_obs_cfg["object_name"] = object_name
+                ref_contact_obs_cfg["root_body_name"] = root_body_name
+                contact_target_pos_offset = np.array(cfg.task.command.contact_target_pos_offset).tolist()
+                policy_obs["ref_contact_pos_b"]["contact_target_pos_offset"] = contact_target_pos_offset
+                    
             
         import yaml
         with open(path.replace(".pt", ".yaml"), "w") as f:
@@ -192,7 +213,7 @@ def main(cfg):
     env.base_env.eval()
     td_ = env.reset()
     assert not env.base_env.training
-    with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
+    with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
         torch.compiler.cudagraph_mark_step_begin()
         for i in itertools.count():
             td_ = policy(td_)

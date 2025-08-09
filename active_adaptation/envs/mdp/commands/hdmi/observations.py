@@ -33,6 +33,21 @@ class ref_joint_pos_action(RobotTrackObservation):
         ref_joint_pos = self.command_manager.current_ref_motion.joint_pos[:, self.action_indices_motion]
         return ref_joint_pos
 
+class ref_joint_pos_action_policy(RobotTrackObservation):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        action_manager = self.env.action_manager
+        action_joint_names = action_manager.joint_names
+        self.action_indices_motion = [self.command_manager.dataset.joint_names.index(joint_name) for joint_name in action_joint_names]
+
+        self.action_scaling = action_manager.action_scaling
+        self.default_joint_pos = action_manager.default_joint_pos[:, action_manager.joint_ids]
+
+    def compute(self):
+        ref_joint_pos = self.command_manager.current_ref_motion.joint_pos[:, self.action_indices_motion]
+        ref_joint_action = (ref_joint_pos - self.default_joint_pos) / self.action_scaling
+        return ref_joint_action
+
 class ref_root_pos_future_b(RobotTrackObservation):
     """
     Reference root position in robot root frame

@@ -20,6 +20,7 @@ from isaaclab.app import AppLauncher
 # from active_adaptation.utils.torchrl import SyncDataCollector
 from torchrl.envs.utils import set_exploration_type, ExplorationType
 from tensordict.nn import TensorDictModuleBase
+from tensordict import TensorDict
 
 # local import
 from scripts.helpers import make_env_policy, EpisodeStats, evaluate
@@ -133,33 +134,49 @@ def main(cfg: DictConfig):
 
     rollout_policy: TensorDictModuleBase = policy.get_rollout_policy("train")
     
+    with torch.inference_mode():
+        tmp_carry = rollout_policy(carry.clone(False))
+        tmp_td, _ = env.step_and_maybe_reset(tmp_carry.clone(False))
+        tmp_td["next"] = tmp_td["next"].exclude(*rollout_policy.in_keys)
+
+    N = env.num_envs
+    T = cfg.algo.train_every
+    device = env.device
+
+    data_buf = TensorDict({}, batch_size=[N, T], device=device)
+    for key, value in tmp_td.items(include_nested=True, leaves_only=True):
+        shape_tail = value.shape[1:]
+        buf = torch.empty((N, T, *shape_tail), dtype=value.dtype, device=device)
+        data_buf.set(key, buf)
+
     env_frames = 0
     start_iter = env.current_iter
     for i in progress:
 
-        data = []
+        # data = []
         rollout_start = time.perf_counter()
         with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
             torch.compiler.cudagraph_mark_step_begin() # for compiled policy
             env.set_progress(start_iter + i)
-            for _ in range(cfg.algo.train_every):
+            for step in range(cfg.algo.train_every):
                 carry = rollout_policy(carry)
                 td, carry = env.step_and_maybe_reset(carry)
                 td["next"] = td["next"].exclude(*rollout_policy.in_keys)
-                data.append(td.to(policy.device))
-            data = torch.stack(data, dim=1)
+                # data.append(td.to(policy.device))
+                data_buf[:, step] = td
+            # data_buf = torch.stack(data, dim=1)
             
-            policy.critic(data)
-            values = data["state_value"]
-            data["next", "state_value"] = torch.where(
-                data["next", "done"],
+            policy.critic(data_buf)
+            values = data_buf["state_value"]
+            data_buf["next", "state_value"] = torch.where(
+                data_buf["next", "done"],
                 values, # a walkaround to avoid storing the next states
                 torch.cat([values[:, 1:], policy.critic(carry.copy())["state_value"].unsqueeze(1)], dim=1)
             )
         rollout_time = time.perf_counter() - rollout_start
 
-        episode_stats.add(data)
-        env_frames += data.numel()
+        episode_stats.add(data_buf)
+        env_frames += data_buf.numel()
 
         info = {}
         if i % log_interval == 0 and len(episode_stats):
@@ -167,7 +184,7 @@ def main(cfg: DictConfig):
                 key = "train/" + ("/".join(k) if isinstance(k, tuple) else k)
                 info[key] = torch.mean(v.float()).item()
         training_start = time.perf_counter()
-        info.update(policy.train_op(data))
+        info.update(policy.train_op(data_buf))
         training_time = time.perf_counter() - training_start
         info.update(env.extra)
         info.update(env.stats_ema) # step-wise exponential moving average of stats
@@ -176,7 +193,7 @@ def main(cfg: DictConfig):
             policy.step_schedule(i / total_iters)
         
         info["env_frames"] = env_frames
-        info["rollout_fps"] = data.numel() / rollout_time
+        info["rollout_fps"] = data_buf.numel() / rollout_time
         info["training_time"] = training_time
         
         if should_save(i):

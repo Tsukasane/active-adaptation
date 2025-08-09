@@ -91,33 +91,15 @@ BOX_CFG = RigidObjectCfg(
     ),
 )
 BOX_SMALL_CFG = RigidObjectCfg(
-    spawn=sim_utils.CuboidCfg(
-        size=(0.2, 0.2, 0.2),
-        visual_material=sim_utils.PreviewSurfaceCfg(
-            diffuse_color=(0.5, 0.5, 0.5),
-            metallic=0.2,
-            roughness=0.2,
-        ),
+    prim_path="{ENV_REGEX_NS}/box_small",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/box_small/box_small.usd",
         activate_contact_sensors=True,
         mass_props=sim_utils.MassPropertiesCfg(
-            mass=0.2,
-        ),
-        collision_props=sim_utils.CollisionPropertiesCfg(
-            collision_enabled=True,
-        ),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            retain_accelerations=False,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
-            max_depenetration_velocity=1.0,
+            mass=0.5,
         ),
     ),
-    init_state=RigidObjectCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.2),
-    ),
+
 )
 
 # from active_adaptation.assets.spawn import clone

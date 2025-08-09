@@ -1,0 +1,14 @@
+# @package algo
+defaults:
+  - ppo_amp_train
+
+amp:
+  motion_data_path:
+    - data/motion/default_controller/low_speed/segment-.*
+  replay_buffer_iters: 16
+  gan_type: wgan
+  eta_wgan: 0.3
+  grad_pen_weight: 10.0
+  grad_pen_target_norm: 1.0
+  grad_pen_source: 
+    - interpolated

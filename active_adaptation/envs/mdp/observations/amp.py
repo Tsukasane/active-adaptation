@@ -3,6 +3,8 @@ from active_adaptation.envs.mdp.base import Observation
 import torch
 from isaaclab.assets.articulation import Articulation
 from isaaclab.utils.math import quat_apply_inverse, matrix_from_quat, quat_mul, quat_conjugate, yaw_quat
+from active_adaptation.utils.math import batchify
+quat_apply_inverse = batchify(quat_apply_inverse)
 
 # obs for amp
 

@@ -679,4 +679,3 @@ class support_polygon(Reward):
                 torch.tensor([0.0, 0.0, -1.0], device=self.device).expand(self.num_envs, 3),
                 color=(1.0, 0.0, 0.0, 1.0),
             )
-

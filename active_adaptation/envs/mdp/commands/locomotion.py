@@ -153,41 +153,36 @@ class LocomotionCommand(Command):
         
         if resample_mask.any():
             resample_env_ids = resample_mask.nonzero().squeeze(-1)
-            self.sample_vel_command(resample_env_ids)
-            self.sample_yaw_command(resample_env_ids)
+            # self.sample_vel_command(resample_env_ids)
+            # self.sample_yaw_command(resample_env_ids)
+            self.sample_command(resample_env_ids)
         
-        # Update standing state
-        command_speed = self.command_linvel.norm(dim=-1, keepdim=True)
-        self.is_standing_env[:] = (command_speed < 0.1) & (self.command_angvel.abs() < 0.1)
-
-    def sample_vel_command(self, env_ids: torch.Tensor):
+    def sample_command(self, env_ids: torch.Tensor):
         if len(env_ids) == 0:
             return
             
+        stand_mask = torch.rand(len(env_ids), 1, device=self.device) < self.stand_prob
+
         next_command_linvel = torch.zeros(len(env_ids), 3, device=self.device)
         next_command_linvel[:, 0].uniform_(*self.linvel_x_range)
         next_command_linvel[:, 1].uniform_(*self.linvel_y_range)
 
         # Apply standing probability
         speed = next_command_linvel.norm(dim=-1, keepdim=True)
-        stand_mask = torch.rand(len(env_ids), 1, device=self.device) < self.stand_prob
         valid = ~((speed < 0.10) | stand_mask)
         self.next_command_linvel[env_ids] = next_command_linvel * valid
 
-    def sample_yaw_command(self, env_ids: torch.Tensor):
-        if len(env_ids) == 0:
-            return
-            
         self.target_yaw[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(-torch.pi, torch.pi)
         
         shape = (len(env_ids), 1)
-        self.yaw_stiffness[env_ids] = sample_uniform(
-            self.yaw_stiffness_range[0], self.yaw_stiffness_range[1], shape, self.device
-        )
-        self.use_stiffness[env_ids] = torch.rand(shape, device=self.device) < self.use_stiffness_ratio
-        self.fixed_yaw_speed[env_ids] = sample_uniform(
-            self.angvel_range[0], self.angvel_range[1], shape, self.device
-        )
+        self.yaw_stiffness[env_ids] = sample_uniform(*self.yaw_stiffness_range, shape, self.device)
+        use_stiffness = torch.rand(shape, device=self.device) < self.use_stiffness_ratio
+        fixed_yaw_speed = sample_uniform(*self.angvel_range, shape, self.device)
+        
+        self.use_stiffness[env_ids] = use_stiffness & valid
+        self.fixed_yaw_speed[env_ids] = fixed_yaw_speed * valid
+        
+        self.is_standing_env[env_ids] = ~valid
 
     def debug_draw(self):
         if self.env.backend == "isaac":
@@ -198,16 +193,19 @@ class LocomotionCommand(Command):
                 command_lin_vel_w,
                 color=(1.0, 1.0, 1.0, 1.0),
             )
+            target_yaw_non_stiffness = self.asset.data.heading_w.unsqueeze(1) + self.fixed_yaw_speed
+            target_yaw = torch.where(self.use_stiffness, self.target_yaw, target_yaw_non_stiffness)
+            target_yaw_vec = torch.cat(
+                [
+                    target_yaw.cos(),
+                    target_yaw.sin(),
+                    torch.zeros_like(target_yaw),
+                ],
+                dim=1,
+            )
             self.env.debug_draw.vector(
                 head_pos_w,
-                torch.stack(
-                    [
-                        self.target_yaw.cos(),
-                        self.target_yaw.sin(),
-                        torch.zeros_like(self.target_yaw),
-                    ],
-                    1,
-                ),
+                target_yaw_vec,
                 color=(0.2, 0.2, 1.0, 1.0),
             )
 
@@ -255,6 +253,11 @@ class track_ang_vel(LocomotionReward):
         # Compute tracking error
         angvel_error = (robot_angvel_w - command_angvel).abs()
         return torch.exp(-angvel_error / self.sigma)
+
+class is_standing_env(LocomotionReward):
+    """Check if the robot is standing based on linear and angular velocity"""
+    def compute(self):
+        return self.command_manager.is_standing_env.float()
 
 LocomotionTermination = BaseTermination[LocomotionCommand]
 class cum_lin_vel_error(LocomotionTermination):

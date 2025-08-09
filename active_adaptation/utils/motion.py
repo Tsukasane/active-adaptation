@@ -9,8 +9,6 @@ from typing import List, Union
 from scipy.spatial.transform import Rotation as sRot, Slerp
 from isaaclab.utils.string import resolve_matching_names
 from omegaconf import ListConfig
-import tempfile
-import shutil
 import re
 
 unitree_joint_names =  [
