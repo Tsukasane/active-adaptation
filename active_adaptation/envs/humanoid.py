@@ -23,6 +23,19 @@ from active_adaptation.envs.locomotion import SimpleEnv
 
 import active_adaptation.envs.mdp as mdp
 
+ADAPTIVE_SIGMA = {
+    "sigma": {
+        "tracking_root_trans": 0.16,
+        "tracking_root_rot": 0.16,
+        "tracking_qpos": 0.16,
+        "tracking_keypoints": 0.36,
+        "tracking_eff": 0.36
+    },
+    "params": {
+        "alpha": 1e-3
+    }
+}
+
 class Humanoid(SimpleEnv):
 
     def __init__(self, cfg):
@@ -30,6 +43,7 @@ class Humanoid(SimpleEnv):
         # self.max_episode_length = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
         self.start_frames = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.end_frames = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.command_manager.num_frames
+        self._init_adaptive_sigma()
 
     def _reset(self, tensordict: TensorDictBase, **kwargs) -> TensorDictBase:
         if tensordict is not None:
@@ -208,27 +222,36 @@ class Humanoid(SimpleEnv):
                     color=(1., 0., 1., 1.),
                     size=1.
                 )
+
+    def _init_adaptive_sigma(self):
+        self._adaptive_sigma = {k: v for k, v in ADAPTIVE_SIGMA["sigma"].items()}
+        self._error_ema = {k: v for k, v in self._adaptive_sigma.items()}
+        self._alpha = ADAPTIVE_SIGMA["params"]["alpha"]
+
+    def _update_adaptive_sigma(self, error, term):
+        self._error_ema[term] = self._error_ema[term] * (1 - self._alpha) + error * self._alpha
+        self._adaptive_sigma[term] = min(self._adaptive_sigma[term], self._error_ema[term])
     
     # Motion Tracking Reward
     class tracking_root_trans(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        def __init__(self, env, weight: float, enabled: bool = True):
             super().__init__(env, weight, enabled)
             self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
 
         def compute(self) -> torch.Tensor:
             timestep = (self.env.episode_length_buf-1).cpu()
             ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device) + self.env.scene.env_origins
             root_pos_w = self.robot.data.root_pos_w
-            error = (root_pos_w - ref_root_translation).square().sum(-1, True)
-            reward = torch.exp(- error.sqrt() / self.sigma)
+            error = (root_pos_w - ref_root_translation).square().sum(-1, True).sqrt()
+            # reward = torch.exp(- error / self.sigma)
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_root_trans"])
+            self.env._update_adaptive_sigma(error.mean().item(), "tracking_root_trans")
             return reward
         
     class tracking_root_rot(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1):
+        def __init__(self, env, weight: float, enabled: bool = True):
             super().__init__(env, weight, enabled)
             self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
 
         def compute(self) -> torch.Tensor:
             timestep = (self.env.episode_length_buf-1).cpu()
@@ -236,14 +259,15 @@ class Humanoid(SimpleEnv):
             root_quat_w = self.robot.data.root_quat_w
             dot_product = dot(root_quat_w, ref_root_orientation)
             error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
-            reward = torch.exp(- error / self.sigma)
+            # reward = torch.exp(- error / self.sigma)
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_root_rot"])
+            self.env._update_adaptive_sigma(error.mean().item(), "tracking_root_rot")
             return reward
         
     class tracking_qpos(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
+        def __init__(self, env, weight: float, enabled: bool = True, joint_names: str = ".*"):
             super().__init__(env, weight, enabled)
             self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
             self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
 
         def compute(self) -> torch.Tensor:
@@ -251,35 +275,49 @@ class Humanoid(SimpleEnv):
             ref_qpos = self.env.command_manager.qpos[timestep].to(self.device)[:, self.joint_indices]
             qpos = self.robot.data.joint_pos[:, self.joint_indices]
             error = (qpos - ref_qpos).square().mean(-1, True)
-            reward = torch.exp(- error / self.sigma)
+            # reward = torch.exp(- error / self.sigma)
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_qpos"])
+            self.env._update_adaptive_sigma(error.mean().item(), "tracking_qpos")
             return reward
         
     class tracking_keypoints(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
+        def __init__(self, env, weight: float, enabled: bool = True, body_names: str = ".*"):
             super().__init__(env, weight, enabled)
             self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
             self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
             self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
 
         def compute(self) -> torch.Tensor:
             timestep = (self.env.episode_length_buf-1).cpu()
-            ref_keypoints = self.env.command_manager.kp_local[timestep].to(self.device)[:, self.idx]
+            ref_keypoints = self.env.command_manager.kp_global[timestep].to(self.device)[:, self.idx]
             ref_keypoints.add_(self.env.scene.env_origins[:, None])
 
             body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
 
             diff = (ref_keypoints - body_pos_global).norm(dim=-1)
-            error = diff.square().sum(-1, True)
-            reward = torch.exp(- error.sqrt() / self.sigma)
+            error = diff.square().sum(-1, True).sqrt()
+            # reward = torch.exp(- error / self.sigma)
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_keypoints"])
+            self.env._update_adaptive_sigma(error.mean().item(), "tracking_keypoints")
             return reward
 
     class tracking_eff(tracking_keypoints):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, body_names: str = ".*"):
-            super().__init__(env, weight, enabled, sigma, body_names)
+        def __init__(self, env, weight: float, enabled: bool = True, body_names: str = ".*"):
+            super().__init__(env, weight, enabled, body_names)
 
         def compute(self):
-            return super().compute()
+            timestep = (self.env.episode_length_buf-1).cpu()
+            ref_keypoints = self.env.command_manager.kp_global[timestep].to(self.device)[:, self.idx]
+            ref_keypoints.add_(self.env.scene.env_origins[:, None])
+
+            body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
+
+            diff = (ref_keypoints - body_pos_global).norm(dim=-1)
+            error = diff.square().sum(-1, True).sqrt()
+            # reward = torch.exp(- error / self.sigma)
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_eff"])
+            self.env._update_adaptive_sigma(error.mean().item(), "tracking_eff")
+            return reward
         
     # Joint Position Penalty
     class joint_pos_l2(mdp.Reward):
@@ -347,6 +385,7 @@ class Humanoid(SimpleEnv):
             timestep = (self.env.episode_length_buf - 1).cpu()
             ref_keypoints = self.env.command_manager.kp_global[timestep].to(self.device)[:, self.idx]
             ref_keypoints.add_(self.env.scene.env_origins[:, None])
+
             body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
 
             diff = (ref_keypoints - body_pos_global).norm(dim=-1)    # (num_envs, num_bodies)

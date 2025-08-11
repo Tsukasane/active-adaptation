@@ -806,9 +806,6 @@ class max_feet_height(Reward):
         r = (self.impact * (max_height / self.target_height).clamp_max(1.0)).sum(
             dim=1, keepdim=True
         )
-        is_standing = self.env.command_manager.is_standing_env.squeeze(1)
-        r[~is_standing] -= r[~is_standing].mean()
-        r[is_standing] = 0
         return r
 
     def debug_draw(self):

@@ -152,7 +152,8 @@ def main(cfg: DictConfig):
     
     if aa.is_main_process():
         save(policy, "checkpoint_final")
-
+        print(env._adaptive_sigma)
+               
     wandb.finish()
     exit(0)
     

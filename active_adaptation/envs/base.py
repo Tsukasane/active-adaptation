@@ -497,7 +497,7 @@ class _Env(EnvBase):
     def get_extra_state(self) -> dict:
         return dict(self.extra)
 
-    def close(self):
+    def close(self, *, raise_if_closed: bool | None = None):
         if not self.is_closed:
             if self.backend == "isaac":
                 # destructor is order-sensitive

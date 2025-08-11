@@ -5,7 +5,7 @@ name: motion
 viewer:
   resolution: [1280, 720]
   lookat: [0., 0., 0.]
-  eye: [4.0, 4.0, 4.0]
+  eye: [3.0, 3.0, 3.0]
 
 robot: 
   name: g1_27dof
@@ -79,19 +79,19 @@ observation:
 
 reward:
   loco:
-    tracking_root_trans:    {weight: 4., enabled: true, sigma: 0.16}
-    tracking_root_rot:      {weight: 2., enabled: true, sigma: 0.16}
-    tracking_qpos:          {weight: 2., enabled: true, sigma: 0.16,
+    tracking_root_trans:    {weight: 4., enabled: true}
+    tracking_root_rot:      {weight: 2., enabled: true}
+    tracking_qpos:          {weight: 2., enabled: true,
                               joint_names: [.*hip_pitch.*, waist_yaw_joint, .*hip_roll.*,
                                             .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                             .*knee.*, .*shoulder_yaw.*,
                                             .*ankle_pitch.*, .*elbow.*]}
-    tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
+    tracking_keypoints:     {weight: 6., enabled: true,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
                                         left_shoulder_roll_link, left_elbow_link, 
                                         right_shoulder_roll_link, right_elbow_link]}
-    tracking_eff:           {weight: 8., enabled: true, sigma: 0.16,
+    tracking_eff:           {weight: 8., enabled: true,
                               body_names: [left_ankle_roll_link, left_rubber_hand,
                                         right_ankle_roll_link, right_rubber_hand]}
 
