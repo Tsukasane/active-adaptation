@@ -51,8 +51,8 @@ def main(cfg):
     with open(path, "w") as f:
         OmegaConf.save(info, f)
 
-    env.close()
     simulation_app.close()
+    env.close()
 
 
 if __name__ == "__main__":

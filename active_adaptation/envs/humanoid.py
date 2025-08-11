@@ -63,6 +63,7 @@ class Humanoid(SimpleEnv):
         return tensordict
     
     def _reset_idx(self, env_ids: torch.Tensor):
+        self.command_manager._update_stats(env_ids)
         init_root_state, start_frames, end_frames = self.command_manager.sample_init(env_ids)
         if not self.robot.is_fixed_base:
             self.robot.write_root_state_to_sim(

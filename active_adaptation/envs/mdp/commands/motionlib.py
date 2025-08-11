@@ -1,7 +1,6 @@
 from math import pi
 import torch
 import torch.distributions as D
-import math
 from typing import Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -68,6 +67,12 @@ class MotionLib(Command):
         self.load_data(data)
         print(f"Loaded {len(data)} motion clips with {self.num_frames} frames.")
 
+        self.min_weight = 3e-3
+        self.alpha0, self.beta0 = 1.0, 1.0
+        self.trials = torch.zeros(self.num_motions)
+        self.failures = torch.zeros(self.num_motions)
+        self.curr_motion_id = torch.full((self.num_envs,), -1, device=self.device, dtype=torch.long)
+
         self.mode = mode
         if mode == "play":
             from pynput import keyboard
@@ -89,9 +94,24 @@ class MotionLib(Command):
     # def debug_draw(self):
     #     if active_adaptation._BACKEND == "mujoco":
     #         self.marker.geom.pos = self.robot.data.body_pos_w[0, 10]
+
+    @torch.no_grad()
+    def _sampling_probs(self) -> torch.Tensor:
+        denom = (self.trials + self.alpha0 + self.beta0).clamp_min(1e-6)
+        p_fail = (self.failures + self.alpha0) / denom
+
+        w = p_fail.clamp_min(self.min_weight)
+        return w / w.sum()
     
     def sample_init(self, env_ids: torch.Tensor) -> torch.Tensor:
-        motion_ids = torch.randint(0, self.num_motions, (env_ids.shape[0],))
+        if self.mode in ["play", "eval"]:
+            motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * CURRENT_MOTION
+        else:
+            probs = self._sampling_probs()
+            motion_ids = D.Categorical(probs).sample((env_ids.shape[0],))
+
+        self.curr_motion_id[env_ids] = motion_ids.to(self.device)
+        
         start_frames = self.start_frames[motion_ids]
         end_frames = self.end_frames[motion_ids]
 
@@ -99,11 +119,6 @@ class MotionLib(Command):
         r = torch.rand(motion_length.shape) * 0.5
         offsets = (r * motion_length.float()).floor().long()
         start_frames += offsets
-
-        if self.mode == "play" or self.mode == "eval":
-            motion_ids = torch.ones(env_ids.shape[0], dtype=torch.long) * CURRENT_MOTION
-            start_frames = self.start_frames[motion_ids]
-            end_frames = self.end_frames[motion_ids]
 
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
@@ -122,6 +137,20 @@ class MotionLib(Command):
     
     def reset(self, env_ids: torch.Tensor):
         pass
+
+    def _update_stats(self, env_ids: torch.Tensor):
+        mids = self.curr_motion_id[env_ids].cpu()
+        valid = mids >= 0
+        if valid.any():
+            success = (self.env.stats["success"][env_ids].squeeze(-1) > 0.5)
+            failed = (~success).to(self.trials.dtype).cpu()
+
+            ones = torch.ones_like(failed, dtype=self.trials.dtype)
+
+            self.trials.index_add_(0, mids[valid], ones[valid])
+            self.failures.index_add_(0, mids[valid], failed[valid])
+
+        self.curr_motion_id[env_ids] = -1
 
     def get_robot_default(self):
         default_qpos = self.robot.data.default_joint_pos[0]
