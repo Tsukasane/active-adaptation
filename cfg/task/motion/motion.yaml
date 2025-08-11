@@ -86,17 +86,17 @@ reward:
                                             .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
                                             .*knee.*, .*shoulder_yaw.*,
                                             .*ankle_pitch.*, .*elbow.*]}
-    tracking_keypoints:     {weight: 6., enabled: true, sigma: 1.0,
+    tracking_keypoints:     {weight: 6., enabled: true, sigma: 0.16,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
                                         left_shoulder_roll_link, left_elbow_link, 
                                         right_shoulder_roll_link, right_elbow_link]}
-    tracking_eff:           {weight: 8., enabled: true, sigma: 1.0,
+    tracking_eff:           {weight: 8., enabled: true, sigma: 0.16,
                               body_names: [left_ankle_roll_link, left_rubber_hand,
                                         right_ankle_roll_link, right_rubber_hand]}
 
     feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
-    feet_slip:          {weight: 0.25, enabled: true, body_names: .*ankle_roll_link}
+    feet_slip:          {weight: 0.5, enabled: true, body_names: .*ankle_roll_link}
 
     joint_acc_l2:       {weight: 1.0e-8, enabled: true, joint_names: [waist_yaw_joint, .*hip.*, .*knee.*,
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
@@ -136,8 +136,6 @@ termination:
   # dummy: {}
   root_deviation: {max_distance: 0.5}
   root_rot_deviation: {max_theta: 30}
-  track_kp_error: {max_distance: 0.4, 
-                  body_names: [ left_hip_pitch_link, left_knee_link,
-                                right_hip_pitch_link, right_knee_link,
-                                left_shoulder_roll_link, left_elbow_link, 
-                                right_shoulder_roll_link, right_elbow_link]}
+  track_kp_error: {max_distance: 0.5, 
+                  body_names: [ left_rubber_hand, right_rubber_hand,
+                                left_ankle_roll_link, right_ankle_roll_link]}

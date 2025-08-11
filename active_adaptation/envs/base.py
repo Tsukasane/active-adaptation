@@ -404,6 +404,13 @@ class _Env(EnvBase):
         end = time.perf_counter()
         self.simulation_time = self.simulation_time * EMA_DECAY + (end - start)
         self.discount.fill_(1.0)
+
+        if self.sim.has_gui():
+            if hasattr(self, "debug_draw"): # isaac only
+                self.debug_draw.clear()
+            for callback in self._debug_draw_callbacks:
+                callback()
+        
         self._update()
         
         tensordict = TensorDict({}, self.num_envs, device=self.device)
@@ -424,11 +431,6 @@ class _Env(EnvBase):
         tensordict.set("discount", self.discount.clone())
         tensordict["stats"] = self.stats.clone()
 
-        if self.sim.has_gui():
-            if hasattr(self, "debug_draw"): # isaac only
-                self.debug_draw.clear()
-            for callback in self._debug_draw_callbacks:
-                callback()
         
         self.ema_cnt = self.ema_cnt * EMA_DECAY + 1.
         return tensordict

@@ -193,7 +193,7 @@ class Humanoid(SimpleEnv):
             timestep = timestep.unsqueeze(-1) + step_range
             timestep = torch.min(timestep, max_frame[:, None]-1)
             ref_root_translation = self.ref_root_translation[timestep].to(self.device)  # (num_envs, steps, 3)
-            ref_root_translation += self.env.scene.env_origins.unsqueeze(1)
+            ref_root_translation.add_(self.env.scene.env_origins.unsqueeze(1))
             self.root_pos = self.robot.data.root_pos_w.unsqueeze(1)
             root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
             self.gap = ref_root_translation - self.root_pos
@@ -222,8 +222,6 @@ class Humanoid(SimpleEnv):
             root_pos_w = self.robot.data.root_pos_w
             error = (root_pos_w - ref_root_translation).square().sum(-1, True)
             reward = torch.exp(- error.sqrt() / self.sigma)
-            if active_adaptation.get_mode() == "play":
-                print(f"tracking root trans: {error.sqrt().mean()}")
             return reward
         
     class tracking_root_rot(mdp.Reward):
@@ -239,8 +237,6 @@ class Humanoid(SimpleEnv):
             dot_product = dot(root_quat_w, ref_root_orientation)
             error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
             reward = torch.exp(- error / self.sigma)
-            if active_adaptation.get_mode() == "play":
-                print(f"tracking root rot: {error.mean()}")
             return reward
         
     class tracking_qpos(mdp.Reward):
@@ -256,8 +252,6 @@ class Humanoid(SimpleEnv):
             qpos = self.robot.data.joint_pos[:, self.joint_indices]
             error = (qpos - ref_qpos).square().mean(-1, True)
             reward = torch.exp(- error / self.sigma)
-            if active_adaptation.get_mode() == "play":
-                print(f"tracking qpos: {error.mean()}")
             return reward
         
     class tracking_keypoints(mdp.Reward):
@@ -278,8 +272,6 @@ class Humanoid(SimpleEnv):
             diff = (ref_keypoints - body_pos_global).norm(dim=-1)
             error = diff.square().sum(-1, True)
             reward = torch.exp(- error.sqrt() / self.sigma)
-            if active_adaptation.get_mode() == "play":
-                print(f"tracking keypoints: {error.sqrt().mean()}")
             return reward
 
     class tracking_eff(tracking_keypoints):
@@ -319,7 +311,8 @@ class Humanoid(SimpleEnv):
 
         def compute(self, termination: torch.Tensor) -> torch.Tensor:
             timestep = (self.env.episode_length_buf - 1).cpu()
-            ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device) + self.env.scene.env_origins
+            ref_root_translation = self.env.command_manager.root_translations[timestep].to(self.device)
+            ref_root_translation.add_(self.env.scene.env_origins)
             root_pos_w = self.robot.data.root_pos_w
             deviation = (root_pos_w - ref_root_translation).norm(dim=1, keepdim=True)
             return deviation > self.max_distance
