@@ -34,7 +34,7 @@ action:
 command:
   _target_: active_adaptation.envs.mdp.MotionLib
   motion_clip_dir: "scripts/data"
-  dataset: sfu
+  dataset: amass_train
   occlusion: "amass_copycat_occlusion_v3.pkl"
   mode: train
   eval_id: null
