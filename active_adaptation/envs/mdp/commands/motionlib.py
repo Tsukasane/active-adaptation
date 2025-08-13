@@ -1,6 +1,7 @@
 from math import pi
 import torch
 import torch.distributions as D
+import torch.nn.functional as F
 from typing import Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -126,6 +127,9 @@ class MotionLib(Command):
         init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)
 
         qpos = self.qpos[start_frames].to(self.device)
+        n_tgt = self.robot.data.default_joint_pos.shape[1]
+        pad = n_tgt - qpos.shape[1]
+        qpos = F.pad(qpos, (0, pad))
         self.robot.write_joint_state_to_sim(
             qpos,
             self.robot.data.default_joint_vel[env_ids],
@@ -179,7 +183,7 @@ class MotionLib(Command):
             pbar.set_description(f"Loading {k}: ")
             interpolated_root_trans = self.interpolate(motion, "root_trans_offset", self.source_fps, self.target_fps)
             interpolated_root_rot = self.interpolate(motion, "root_rot", self.source_fps, self.target_fps)
-            interpolated_qpos = self.interpolate(motion, "dof", self.source_fps, self.target_fps)
+            interpolated_qpos = self.interpolate(motion, "dof", self.source_fps, self.target_fps)[:, :23]
             interpolated_kp_global = self.interpolate(motion, "smpl_joints", self.source_fps, self.target_fps)
             interpolated_kp_local = convert2local(interpolated_kp_global, interpolated_root_rot)
 
@@ -385,6 +389,44 @@ joint_matches = [
     ["right_rubber_hand", "R_Hand"]
 ]
 
+# g1 29 dof version
+# mujoco_joints = [
+#     "left_hip_pitch_joint",
+#     "left_hip_roll_joint",
+#     "left_hip_yaw_joint",
+#     "left_knee_joint",
+#     "left_ankle_pitch_joint",
+#     "left_ankle_roll_joint",
+
+#     "right_hip_pitch_joint",
+#     "right_hip_roll_joint",
+#     "right_hip_yaw_joint",
+#     "right_knee_joint",
+#     "right_ankle_pitch_joint",
+#     "right_ankle_roll_joint",
+
+#     "waist_yaw_joint",
+#     "waist_roll_joint",
+#     "waist_pitch_joint",
+
+#     "left_shoulder_pitch_joint",
+#     "left_shoulder_roll_joint",
+#     "left_shoulder_yaw_joint",
+#     "left_elbow_joint",
+#     "left_wrist_roll_joint",
+#     "left_wrist_pitch_joint",
+#     "left_wrist_yaw_joint",
+
+#     "right_shoulder_pitch_joint",
+#     "right_shoulder_roll_joint",
+#     "right_shoulder_yaw_joint",
+#     "right_elbow_joint",
+#     "right_wrist_roll_joint",
+#     "right_wrist_pitch_joint",
+#     "right_wrist_yaw_joint"
+# ]
+
+# g1 23 dof version
 mujoco_joints = [
     "left_hip_pitch_joint",
     "left_hip_roll_joint",
@@ -392,38 +434,29 @@ mujoco_joints = [
     "left_knee_joint",
     "left_ankle_pitch_joint",
     "left_ankle_roll_joint",
-
     "right_hip_pitch_joint",
     "right_hip_roll_joint",
     "right_hip_yaw_joint",
     "right_knee_joint",
     "right_ankle_pitch_joint",
     "right_ankle_roll_joint",
-
     "waist_yaw_joint",
-    "waist_roll_joint",
-    "waist_pitch_joint",
-
     "left_shoulder_pitch_joint",
     "left_shoulder_roll_joint",
     "left_shoulder_yaw_joint",
     "left_elbow_joint",
     "left_wrist_roll_joint",
-    "left_wrist_pitch_joint",
-    "left_wrist_yaw_joint",
-
     "right_shoulder_pitch_joint",
     "right_shoulder_roll_joint",
     "right_shoulder_yaw_joint",
     "right_elbow_joint",
-    "right_wrist_roll_joint",
-    "right_wrist_pitch_joint",
-    "right_wrist_yaw_joint"
+    "right_wrist_roll_joint"
 ]
 
 isaacsim_joints = [
     "left_hip_pitch_joint", "right_hip_pitch_joint",
-    "waist_yaw_joint",
+    "waist_yaw_joint", 
+    # "waist_roll_joint", "waist_pitch_joint",
     "left_hip_roll_joint", "right_hip_roll_joint",
     "left_hip_yaw_joint", "right_hip_yaw_joint",
     "left_knee_joint", "right_knee_joint",
@@ -434,6 +467,6 @@ isaacsim_joints = [
     "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
     "left_elbow_joint", "right_elbow_joint",
     "left_wrist_roll_joint", "right_wrist_roll_joint",
-    "left_wrist_pitch_joint", "right_wrist_pitch_joint",
-    "left_wrist_yaw_joint", "right_wrist_yaw_joint"
+    # "left_wrist_pitch_joint", "right_wrist_pitch_joint",
+    # "left_wrist_yaw_joint", "right_wrist_yaw_joint"
 ]

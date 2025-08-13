@@ -58,7 +58,7 @@ class PPOConfig:
     num_minibatches: int = 8
     lr: float = 5e-4
     clip_param: float = 0.2
-    entropy_coef: float = 0.0005
+    entropy_coef: float = 0.001
     layer_norm: Union[str, None] = "before"
     value_norm: bool = False
     vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])

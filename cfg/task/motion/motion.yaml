@@ -55,10 +55,11 @@ observation:
   ref_motion_:
     ref_orientation:      {steps: 10}
     ref_height:           {steps: 10}
-    ref_qpos:             { joint_names: [.*hip_pitch.*, waist_yaw_joint, .*hip_roll.*,
-                                          .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
-                                          .*knee.*, .*shoulder_yaw.*,
-                                          .*ankle_pitch.*, .*elbow.*],
+    ref_qpos:             { joint_names: [.*hip_pitch.*, waist_yaw_joint, 
+                                            .*hip_roll.*, .*hip_yaw.*, .*knee.*,
+                                            .*shoulder_pitch.*, .*ankle_pitch.*,  
+                                            .*shoulder_roll.*, .*shoulder_yaw.*,
+                                             .*elbow.*],
                             steps: 10}
     ref_keypoints:        {steps: 10}
     ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
@@ -82,10 +83,11 @@ reward:
     tracking_root_trans:    {weight: 4., enabled: true}
     tracking_root_rot:      {weight: 2., enabled: true}
     tracking_qpos:          {weight: 2., enabled: true,
-                              joint_names: [.*hip_pitch.*, waist_yaw_joint, .*hip_roll.*,
-                                            .*shoulder_pitch.*, .*hip_yaw.*, .*shoulder_roll.*,
-                                            .*knee.*, .*shoulder_yaw.*,
-                                            .*ankle_pitch.*, .*elbow.*]}
+                              joint_names: [.*hip_pitch.*, waist_yaw_joint, 
+                                            .*hip_roll.*, .*hip_yaw.*, .*knee.*,
+                                            .*shoulder_pitch.*, .*ankle_pitch.*,  
+                                            .*shoulder_roll.*, .*shoulder_yaw.*,
+                                             .*elbow.*]}
     tracking_keypoints:     {weight: 6., enabled: true,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,

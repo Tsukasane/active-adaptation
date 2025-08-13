@@ -154,17 +154,6 @@ def main(cfg: DictConfig):
         save(policy, "checkpoint_final")
         print(env._adaptive_sigma)
         
-        probs = env.command_manager._sampling_probs().cpu()
-        plt.figure(figsize=(8, 5))
-        plt.bar(range(len(probs)), probs.numpy())
-        plt.xlabel("Motion ID")
-        plt.ylabel("Probability")
-        plt.title("Sampling Probabilities")
-        plt.grid(axis="y", linestyle="--", alpha=0.7)
-
-        plt.savefig("sampling_probabilities.png", dpi=300, bbox_inches="tight")
-        plt.close()
-        
     wandb.finish()
     exit(0)
     
