@@ -115,15 +115,16 @@ class MotionLib(Command):
         
         start_frames = self.start_frames[motion_ids]
         end_frames = self.end_frames[motion_ids]
-
         motion_length = self.motion_length[motion_ids]
-        r = torch.rand(motion_length.shape) * 0.5
-        offsets = (r * motion_length.float()).floor().long()
-        start_frames += offsets
+
+        if self.mode == "train":
+            r = torch.rand(motion_length.shape) * 0.5
+            offsets = (r * motion_length.float()).floor().long()
+            start_frames += offsets
 
         init_root_state = self.init_root_state[env_ids]     # (num_envs, 3 + 4 + 6) root position, root orientation, root linear velocity and root angular velocity
         init_root_state[:, :3] = self.root_translations[start_frames].to(self.device) + self.env_origin[env_ids]
-        init_root_state[:, :3] += torch.tensor([0, 0, 0.03], device=self.device)
+        init_root_state[:, :3] += torch.tensor([0, 0, 0.01], device=self.device)
         init_root_state[:, 3:7] = self.root_orientation[start_frames].to(self.device)
 
         qpos = self.qpos[start_frames].to(self.device)
@@ -174,6 +175,7 @@ class MotionLib(Command):
         self.qpos = []
         self.kp_global = []
         self.kp_local = []
+        self.contact = []
 
         mujoco_to_isaac_idx = mujoco_to_isaac()
         smpl_idx = [SMPL_BONE_ORDER_NAMES.index(j[1]) for j in joint_matches]
@@ -192,6 +194,12 @@ class MotionLib(Command):
             #                                                             interpolated_qpos[:, mujoco_to_isaac_idx],
             #                                                             interpolated_kp_local)
 
+            contact = contact_from_positions(interpolated_kp_global, 
+                                            left_foot_idx=SMPL_BONE_ORDER_NAMES.index("L_Ankle"),
+                                            right_foot_idx=SMPL_BONE_ORDER_NAMES.index("R_Ankle"),
+                                            v_thresh=getattr(self, "v_thresh", 0.01),
+                                            h_thresh=None)
+
             interpolated_kp_global = interpolated_kp_global[:, smpl_idx, :]
             interpolated_kp_local = interpolated_kp_local[:, smpl_idx, :]
 
@@ -205,6 +213,7 @@ class MotionLib(Command):
             self.qpos.append(interpolated_qpos[:, mujoco_to_isaac_idx])
             self.kp_global.append(interpolated_kp_global)
             self.kp_local.append(interpolated_kp_local)
+            self.contact.append(contact)
 
         self.motion_length = torch.tensor(self.motion_length)
         self.phase = torch.cat(self.phase, dim=0).float()
@@ -214,6 +223,7 @@ class MotionLib(Command):
         self.qpos = torch.cat(self.qpos, dim=0).float()
         self.kp_global = torch.cat(self.kp_global, dim=0).float()
         self.kp_local = torch.cat(self.kp_local, dim=0).float()
+        self.contact = torch.cat(self.contact, dim=0).float()
 
         self.num_motions = len(data)
         self.num_frames = self.root_translations.shape[0]
@@ -291,6 +301,30 @@ class MotionLib(Command):
     #         env_ids=env_ids
     #     )
     #     return
+
+def contact_from_positions(kp_global, left_foot_idx, right_foot_idx, v_thresh=0.01, h_thresh=0.01):
+    r'''
+    Args:
+        kp_global: (N, 24, 3)  torch tensor in global coordinate system
+        left_foot_idx: int
+        right_foot_idx: int
+        v_thresh: float
+        h_thresh: float
+    '''
+    feet_l = kp_global[:, left_foot_idx, :]
+    feet_l_vel = (torch.diff(feet_l, dim=0) ** 2).sum(dim=-1)
+    feet_l_still = feet_l_vel < v_thresh
+
+    feet_r = kp_global[:, right_foot_idx, :]
+    feet_r_vel = (torch.diff(feet_r, dim=0) ** 2).sum(dim=-1)
+    feet_r_still = feet_r_vel < v_thresh
+
+    feet_l_still = feet_l_still.unsqueeze(-1)
+    feet_r_still = feet_r_still.unsqueeze(-1)
+    feet_still = torch.cat([feet_l_still, feet_r_still], dim=-1)    # (N-1, 2）
+    feet_still = torch.cat([feet_still[:1], feet_still], dim=0)     # (N, 2)
+    return feet_still
+
 
 def convert2local(kp, root_orientation):
     r'''

@@ -19,8 +19,8 @@ data = env.get_data()
 fps = 30.0
 traj_handler = TrajectoryHandler(
     model=model,
-    # traj_path="./datasets/Loco-mj/balance.npz",
-    traj_path="./datasets/Lafan1/dance1_subject1.npz",
+    traj_path="./datasets/Loco-mj/balance.npz",
+    # traj_path="./datasets/Lafan1/dance1_subject1.npz",
     control_dt=1 / fps
 )
 

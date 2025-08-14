@@ -98,6 +98,7 @@ reward:
     tracking_eff:           {weight: 8., enabled: true,
                               body_names: [left_ankle_roll_link, left_rubber_hand,
                                         right_ankle_roll_link, right_rubber_hand]}
+    tracking_contact:       {weight: 1., enabled: true}
 
     feet_orientation:   {weight: 0.5, enabled: true, feet_names: .*ankle_roll_link, body_name: pelvis}
     feet_slip:          {weight: 0.5, enabled: true, body_names: .*ankle_roll_link}

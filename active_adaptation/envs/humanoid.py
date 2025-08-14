@@ -320,6 +320,24 @@ class Humanoid(SimpleEnv):
             self.env._update_adaptive_sigma(error.mean().item(), "tracking_eff")
             return reward
         
+    class tracking_contact(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.contact_sensor: ContactSensor = self.env.scene["contact_forces"]
+
+            self.body_ids, self.body_names = self.contact_sensor.find_bodies(".*ankle_roll_link")
+            self.body_ids = torch.tensor(self.body_ids, device=self.device)
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            in_contact = (self.contact_sensor.data.current_contact_time[:, self.body_ids] > 0.02).float()
+            ref_contact = self.env.command_manager.contact[timestep].to(self.device)
+
+            error = (in_contact - ref_contact).abs().mean(-1, True)
+            reward = 1 - error
+            return reward
+        
     # Joint Position Penalty
     class joint_pos_l2(mdp.Reward):
         def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
