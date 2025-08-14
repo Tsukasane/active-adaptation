@@ -1,0 +1,6 @@
+robot_pose_modifier:
+  - joint_left_shoulder_roll: "np.pi/2"
+  - joint_right_shoulder_roll: "-np.pi/2"
+
+optimization_params:
+  z_offset_feet: -0.05

@@ -178,6 +178,7 @@ scripts/*.pt
 scripts/*.onnx
 scripts/*.json
 scripts/*.txt
+scripts/data
 scripts/eval
 scripts/*.yaml
 scripts/file/

@@ -1,0 +1,6 @@
+robot_pose_modifier:
+  - l_shoulder_aa: "np.pi/2"
+  - r_shoulder_aa: "-np.pi/2"
+
+
+env_params: {}

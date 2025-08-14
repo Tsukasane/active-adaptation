@@ -1,0 +1,11 @@
+robot_pose_modifier:
+  - arm_add_r: "-np.pi/2"
+  - arm_rot_r: "np.pi/2"
+  - arm_add_l: "-np.pi/2"
+  - arm_rot_l: "np.pi/2"
+
+optimization_params:
+  z_offset_feet: 0.02
+
+env_params:
+  disable_arms: false

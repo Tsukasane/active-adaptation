@@ -1,0 +1,9 @@
+robot_pose_modifier:
+  - left_sho_roll: "-np.pi/2"
+  - right_sho_roll: "-np.pi/2"
+
+
+optimization_params:
+  z_offset_feet: 0.04
+
+env_params: {}

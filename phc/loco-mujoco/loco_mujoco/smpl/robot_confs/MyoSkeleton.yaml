@@ -1,0 +1,9 @@
+robot_pose_modifier:
+  - root: "[0 , 0, np.pi]"
+  - shoulder_elv_r: "np.pi/2"
+  - shoulder_elv_l: "np.pi/2"
+
+optimization_params:
+  z_offset_feet: -0.05
+
+env_params: {}

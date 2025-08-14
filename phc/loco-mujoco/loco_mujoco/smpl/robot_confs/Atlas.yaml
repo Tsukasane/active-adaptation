@@ -1,0 +1,31 @@
+smpl_joint_matches:
+  right_hip_mimic:
+    smpl_joint: "R_Hip"
+    equality_constraint_type: mjEQ_CONNECT
+  right_knee_mimic:
+    smpl_joint: "R_Knee"
+    equality_constraint_type: mjEQ_CONNECT
+  left_hip_mimic:
+    smpl_joint: "L_Hip"
+    equality_constraint_type: mjEQ_CONNECT
+  left_knee_mimic:
+    smpl_joint: "L_Knee"
+    equality_constraint_type: mjEQ_CONNECT
+  left_foot_mimic:
+    smpl_joint: "L_Ankle"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 10.0
+  right_foot_mimic:
+    smpl_joint: "R_Ankle"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 10.0
+
+
+robot_pose_modifier:
+  - l_arm_shx: "np.pi/2"
+  - r_arm_shx: "-np.pi/2"
+
+
+env_params:
+  disable_arms: false
+  disable_back_joint: false

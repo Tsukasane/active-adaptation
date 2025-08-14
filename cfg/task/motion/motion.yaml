@@ -57,7 +57,8 @@ observation:
     ref_height:           {steps: 10}
     ref_qpos:             { joint_names: [.*hip_pitch.*, waist_yaw_joint, 
                                             .*hip_roll.*, .*hip_yaw.*, .*knee.*,
-                                            .*shoulder_pitch.*, .*ankle_pitch.*,  
+                                            .*shoulder_pitch.*, 
+                                            # .*ankle_pitch.*,  
                                             .*shoulder_roll.*, .*shoulder_yaw.*,
                                              .*elbow.*],
                             steps: 10}
@@ -85,7 +86,8 @@ reward:
     tracking_qpos:          {weight: 2., enabled: true,
                               joint_names: [.*hip_pitch.*, waist_yaw_joint, 
                                             .*hip_roll.*, .*hip_yaw.*, .*knee.*,
-                                            .*shoulder_pitch.*, .*ankle_pitch.*,  
+                                            .*shoulder_pitch.*, 
+                                            # .*ankle_pitch.*,  
                                             .*shoulder_roll.*, .*shoulder_yaw.*,
                                              .*elbow.*]}
     tracking_keypoints:     {weight: 6., enabled: true,

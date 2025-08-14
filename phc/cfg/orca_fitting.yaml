@@ -1,0 +1,28 @@
+humanoid_type: orca
+
+asset:
+  assetFileName: "assets/robot/orca/orca_description_stable.xml"
+
+base_link: "waist_yaw_link"
+joint_matches:
+  - ["base", "Pelvis"]
+  - ["lleg_link1", "L_Hip"]
+  - ["lleg_link4", "L_Knee"]
+  - ["lleg_link5", "L_Ankle"]
+  - ["rleg_link1", "R_Hip"]
+  - ["rleg_link4", "R_Knee"]
+  - ["rleg_link5", "R_Ankle"]
+  - ["larm_link2", "L_Shoulder"]
+  - ["larm_link4", "L_Elbow"]
+  - ["larm_link6", "L_Hand"]
+  - ["rarm_link2", "R_Shoulder"]
+  - ["rarm_link4", "R_Elbow"]
+  - ["rarm_link6", "R_Hand"]
+
+
+smpl_pose_modifier:
+  - Pelvis: "[np.pi/2, 0, np.pi/2]"
+  - L_Shoulder: "[0, 0, -np.pi/2]"
+  - R_Shoulder: "[0, 0, np.pi/2]"
+  - L_Elbow: "[0, 0, 0]"
+  - R_Elbow: "[0, 0, 0]"

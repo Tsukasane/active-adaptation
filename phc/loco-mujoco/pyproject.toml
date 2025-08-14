@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools", "wheel", "wget"]
+
+[project]
+name = "loco-mujoco"
+dependencies = [
+    "numpy<2.0",
+    "scipy>=1.14.0",
+    "mujoco==3.2.7",    # todo: MjSpec API changed in 3.3.0, check why find functions are not supported anymore (no info in Mujoco changelog given)
+    "mujoco-mjx==3.2.7",
+    "hydra-core",
+    "jax",
+    "flax",
+    "orbax",
+    "distrax",
+    "metrx",
+    "gymnasium",
+    "pyyaml",
+    "opencv-python",
+    "wget",
+    "gitpython",
+    "datasets",
+    "huggingface_hub"]
+
+requires-python = ">=3.10"
+authors = [{name="Firas Al-Hafez", email="fi.alhafez@gmail.com"}]
+maintainers = [{ name="Firas Al-Hafez", email="fi.alhafez@gmail.com"}]
+description = 'Imitation learning benchmark focusing on complex locomotion tasks using MuJoCo.'
+readme = "README.md"
+license = { file= "LICENSE" }
+keywords = ["Imitation Learning", "Reinforcement Learning", "Locomotion"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dynamic = ["version"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.optional-dependencies]
+# To install SMPL, you need to accept the license as described here https://github.com/vchoutas/smplx
+smpl = [
+    "torch",
+    "tqdm",
+    "smplx @ git+https://github.com/ZhengyiLuo/smplx",
+    "joblib"
+]
+
+[project.urls]
+Homepage = "https://github.com/robfiras/loco-mujoco"
+Repository = "https://github.com/robfiras/loco-mujoco"
+Issues = "https://github.com/robfiras/loco-mujoco/issues"
+
+[project.scripts]
+loco-mujoco-download = "loco_mujoco.utils:download_all_datasets"
+loco-mujoco-download-real = "loco_mujoco.utils:download_real_datasets"
+loco-mujoco-download-perfect = "loco_mujoco.utils:download_perfect_datasets"
+loco-mujoco-myomodel-init = "loco_mujoco.utils:fetch_myoskeleton"
+loco-mujoco-myomodel-clear = "loco_mujoco.utils:clear_myoskeleton"
+loco-mujoco-set-smpl-model-path = "loco_mujoco.utils:set_smpl_model_path"
+loco-mujoco-set-amass-path = "loco_mujoco.utils:set_amass_path"
+loco-mujoco-set-conv-amass-path = "loco_mujoco.utils:set_converted_amass_path"
+loco-mujoco-set-lafan1-path = "loco_mujoco.utils:set_lafan1_path"
+loco-mujoco-set-conv-lafan1-path = "loco_mujoco.utils:set_converted_lafan1_path"
+loco-mujoco-set-all-caches = "loco_mujoco.utils:set_all_caches"
