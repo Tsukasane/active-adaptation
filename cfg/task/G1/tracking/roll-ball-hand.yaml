@@ -1,0 +1,9 @@
+# @package task
+defaults:
+  - G1/tracking/tracking-base
+  - _self_
+
+name: G1TrackBall
+
+command:
+  data_path: data/motion/data_for_sim/roll_ball-hand

@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 import torch
 import numpy as np
 from isaaclab.utils.math import sample_uniform, quat_from_euler_xyz, quat_mul, quat_apply, quat_apply_inverse
+from tensordict import TensorDict
 from active_adaptation.utils.math import batchify
 quat_apply = batchify(quat_apply)
 quat_apply_inverse = batchify(quat_apply_inverse)
@@ -44,6 +45,7 @@ class RobotTracking(Command):
         call_update: bool = True,
         sample_motion: bool = False,
         replay_motion: bool = False,
+        record_motion: bool = False,
     ):
         from . import observations
         from . import rewards
@@ -105,8 +107,15 @@ class RobotTracking(Command):
         self.first_sample_motion = True
         self.sample_motion = sample_motion
         self.replay_motion = replay_motion
+        self.record_motion = record_motion
 
-        if replay_motion:
+        if self.replay_motion:
+            self.pose_range.fill_(0.0)
+            self.init_joint_pos_noise = 0.0
+            self.init_joint_vel_noise = 0.0
+        
+        if self.record_motion:
+            assert self.num_envs == 1, "record_motion only supports num_envs=1"
             self.pose_range.fill_(0.0)
             self.init_joint_pos_noise = 0.0
             self.init_joint_vel_noise = 0.0
@@ -114,6 +123,8 @@ class RobotTracking(Command):
         if call_update:
             self._init_debug_draw()
             self.update()
+            if self.record_motion:
+                self.motion_frames = []
         
     def _sample_motions(self, env_ids: torch.Tensor) -> None:
         if self.sample_motion or self.first_sample_motion:
@@ -134,7 +145,7 @@ class RobotTracking(Command):
         else:
             start_t = torch.randint(*self.reset_range, (len(env_ids),), device=self.device)
             
-        if not self.env.training:
+        if not self.env.training or self.record_motion:
             start_t.fill_(0)
 
         if self.replay_motion:
@@ -145,8 +156,6 @@ class RobotTracking(Command):
 
 
     def sample_init(self, env_ids: torch.Tensor) -> None:
-        if not self.env.training:
-            self.pose_range.fill_(0.0)
         self._sample_motions(env_ids)
 
         # reset root state and joint position/velocity from motion
@@ -189,6 +198,31 @@ class RobotTracking(Command):
 
         self.asset.write_joint_state_to_sim(init_joint_pos, init_joint_vel, env_ids=env_ids)
 
+        if self.record_motion:
+            if len(self.motion_frames) > 0:
+                self._save_motion()
+                self.motion_frames = []
+    
+    def _save_motion(self):
+        motion_data: TensorDict = torch.cat(self.motion_frames, dim=0)
+        motion_data = motion_data[25:].numpy()
+        moton_meta = {
+            "joint_names": self.asset.joint_names,
+            "body_names": self.asset.body_names,
+            "fps": int(1/self.env.step_dt),
+        }
+        save_dir = "record_motion"
+        motion_data_path = f"{save_dir}/motion.npz"
+        motion_meta_path = f"{save_dir}/meta.json"
+        import os, json
+        os.makedirs(save_dir, exist_ok=True)
+        np.savez_compressed(motion_data_path, **motion_data)
+        with open(motion_meta_path, "w") as f:
+            json.dump(moton_meta, f, indent=4)
+        print(f"Saved recorded motion to {motion_data_path} and {motion_meta_path}")
+        breakpoint()
+            
+
     @property
     def success(self):
         return (self.t >= self.motion_len - 1).unsqueeze(1)
@@ -200,6 +234,16 @@ class RobotTracking(Command):
         return (self.t >= self.motion_len).unsqueeze(1)
 
     def update(self):
+        if hasattr(self, "motion_frames"):
+            motion_frame = {}
+            motion_frame["body_pos_w"] = self.asset.data.body_link_pos_w.cpu()
+            motion_frame["body_quat_w"] = self.asset.data.body_link_quat_w.cpu()
+            motion_frame["body_lin_vel_w"] = self.asset.data.body_com_lin_vel_w.cpu()
+            motion_frame["body_ang_vel_w"] = self.asset.data.body_com_ang_vel_w.cpu()
+            motion_frame["joint_pos"] = self.asset.data.joint_pos.cpu()
+            motion_frame["joint_vel"] = self.asset.data.joint_vel.cpu()
+            self.motion_frames.append(TensorDict(motion_frame, batch_size=[1]))
+            
         # future ref motion for actor observation
         self.future_ref_motion = self.dataset.get_slice(self.motion_ids, self.t, steps=self.future_steps)
         # shape: [num_envs, len(future_steps), num_bodies/num_joints, 3/4/...]
@@ -337,12 +381,13 @@ class RobotObjectTracking(RobotTracking):
 
         pose_range_list = [object_pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]]
         self.object_pose_range = torch.tensor(pose_range_list, device=self.device)
-        if self.replay_motion:
+        if self.replay_motion or self.record_motion:
             self.object_pose_range.fill_(0.0)
 
         # setup contact body indices
         assert len(contact_eef_body_name) == len(contact_target_pos_offset) == len(contact_eef_pos_offset), \
             "contact_eef_body_name, contact_target_pos_offset, and contact_eef_pos_offset must have the same length"
+        self.num_eefs = len(contact_eef_body_name)
         self.contact_eef_body_indices_asset = [self.asset.body_names.index(name) for name in contact_eef_body_name]
 
         self.eef_filtered_sensor: List[List[ContactSensor]] = []
@@ -402,13 +447,13 @@ class RobotObjectTracking(RobotTracking):
 
         self._init_debug_draw()
         self.update()
+        if self.record_motion:
+            self.motion_frames = []
     
     def _sample_motions(self, env_ids):
         super()._sample_motions(env_ids)
     
     def sample_init(self, env_ids):
-        if not self.env.training:
-            self.object_pose_range.fill_(0.0)
         super().sample_init(env_ids)
          
         for object_, object_body_id_motion in zip(self.extra_objects, self.extra_object_body_id_motion):
@@ -457,9 +502,40 @@ class RobotObjectTracking(RobotTracking):
             init_joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
 
             self.object.write_joint_state_to_sim(init_joint_pos, init_joint_vel, env_ids=env_ids, joint_ids=[self.object_joint_idx_asset])
-    
+
+    def _save_motion(self):
+        motion_data: TensorDict = torch.cat(self.motion_frames, dim=0)
+        motion_data = motion_data[25:].numpy()
+        moton_meta = {
+            "joint_names": self.asset.joint_names,
+            "body_names": self.asset.body_names + [self.object_asset_name],
+            "fps": int(1/self.env.step_dt),
+        }
+        save_dir = "record_motion"
+        motion_data_path = f"{save_dir}/motion.npz"
+        motion_meta_path = f"{save_dir}/meta.json"
+        import os, json
+        os.makedirs(save_dir, exist_ok=True)
+        np.savez_compressed(motion_data_path, **motion_data)
+        with open(motion_meta_path, "w") as f:
+            json.dump(moton_meta, f, indent=4)
+        print(f"Saved recorded motion to {motion_data_path} and {motion_meta_path}")
+        breakpoint()
+
     def update(self):
         super().update()
+        if hasattr(self, "motion_frames"):
+            motion_frame = self.motion_frames[-1]
+            # add object data to the motion frame
+            object_pos_w = self.object.data.body_link_pos_w[:, self.object_body_id_asset].cpu()
+            object_quat_w = self.object.data.body_link_quat_w[:, self.object_body_id_asset].cpu()
+            object_lin_vel_w = self.object.data.body_com_lin_vel_w[:, self.object_body_id_asset].cpu()
+            object_ang_vel_w = self.object.data.body_com_ang_vel_w[:, self.object_body_id_asset].cpu()
+            motion_frame["body_pos_w"] = torch.cat([motion_frame["body_pos_w"], object_pos_w.unsqueeze(1)], dim=1)
+            motion_frame["body_quat_w"] = torch.cat([motion_frame["body_quat_w"], object_quat_w.unsqueeze(1)], dim=1)
+            motion_frame["body_lin_vel_w"] = torch.cat([motion_frame["body_lin_vel_w"], object_lin_vel_w.unsqueeze(1)], dim=1)
+            motion_frame["body_ang_vel_w"] = torch.cat([motion_frame["body_ang_vel_w"], object_ang_vel_w.unsqueeze(1)], dim=1)
+
         self.ref_object_pos_future_w = self.future_ref_motion.body_pos_w[..., self.object_body_id_motion, :] + self.env.scene.env_origins[:, None, :]
         self.ref_object_quat_future_w = self.future_ref_motion.body_quat_w[..., self.object_body_id_motion, :]
         self.ref_object_pos_w = self.ref_object_pos_future_w[:, 0]
@@ -559,5 +635,14 @@ class RobotObjectTracking(RobotTracking):
             self.contact_eef_pos_w.reshape(-1, 3),
             self.eef_contact_forces_w.reshape(-1, 3) / 20,
             color=(1.0, 1.0, 1.0, 1.0),
+            size=4.0,
+        )
+
+        # draw vector from robot root to contact target
+        
+        self.env.debug_draw.vector(
+            self.contact_eef_pos_w.view(-1, 3),
+            (self.contact_target_pos_w - self.contact_eef_pos_w).view(-1, 3),
+            color=(0, 1, 0, 1),
             size=4.0,
         )

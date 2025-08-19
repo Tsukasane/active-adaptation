@@ -41,14 +41,18 @@ def main(cfg):
         "context_adapt_scale",
         "action_kl",
     ]
+
+    policy_keys = ["dr_", "dr_pred"]
     
     policy_eval = agent.get_rollout_policy("eval")
-    info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed, keys=keys)
+    info, trajs, stats, policy_trajs = evaluate(env, policy_eval, render=cfg.eval_render, render_mode=cfg.render_mode, seed=cfg.seed, keys=keys, policy_keys=policy_keys)
     
     # print(termcolor.colored(trajs, "light_yellow"))
     # time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
     # path = os.path.join(os.path.dirname(__file__), f"trajs-{time_str}.pt")
     # torch.save(trajs, path)
+    
+    torch.save(policy_trajs, os.path.join(os.path.dirname(__file__), f"policy_trajs.pt"))
 
     # path = os.path.join(os.path.dirname(__file__), f"stats-{time_str}.pt")
     # torch.save(stats, path)

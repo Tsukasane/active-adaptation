@@ -8,7 +8,7 @@ import logging
 import os
 import datetime
 
-from typing import Sequence
+from typing import Sequence, List, Tuple, TYPE_CHECKING
 from tensordict import TensorDictBase, TensorDict
 from tensordict.nn import TensorDictModuleBase as ModBase
 from torchrl.envs.transforms import VecNorm
@@ -20,6 +20,8 @@ from omegaconf import OmegaConf, DictConfig
 import active_adaptation.learning
 from active_adaptation.utils.wandb import parse_checkpoint_path
 import active_adaptation
+if TYPE_CHECKING:
+    from active_adaptation.envs.base import _Env
 
 class Every:
     def __init__(self, func, steps):
@@ -67,6 +69,20 @@ class ObsNorm(ModBase):
             scales=vecnorm.scale
         )
 
+class ObsOODDetector(ModBase):
+    def __init__(self, in_keys, sigma=5.0):
+        super().__init__()
+        self.in_keys = in_keys
+        self.out_keys = [("next", f"{k}_ood_ratio") for k in in_keys]
+        self.sigma = sigma
+    
+    def forward(self, tensordict: TensorDictBase):
+        for in_key, out_key in zip(self.in_keys, self.out_keys):
+            obs = tensordict.get(in_key, None)
+            if obs is not None:
+                ood_ratio = (obs.abs() > self.sigma).float().mean(dim=tuple(range(1, obs.ndim)))
+                tensordict.set(out_key, ood_ratio)
+        return tensordict
 
 class EpisodeStats:
     def __init__(self, in_keys: Sequence[str], device: torch.device):
@@ -100,14 +116,6 @@ def make_env_policy(cfg: DictConfig):
     from active_adaptation.envs import SimpleEnv
     from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, VecNorm, StepCounter
     
-    base_env = SimpleEnv(cfg.task)
-
-    checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)
-    if checkpoint_path is not None:
-        state_dict = torch.load(checkpoint_path, weights_only=False)
-    else:
-        state_dict = {}
-    
     policy_in_keys = cfg.algo.get("in_keys", ["policy", "priv"])
 
     for obs_group_key in list(cfg.task.observation.keys()):
@@ -117,6 +125,14 @@ def make_env_policy(cfg: DictConfig):
         ):
             cfg.task.observation.pop(obs_group_key)
             print(colored(f"Discard obs group {obs_group_key} as it is not used.", "yellow"))
+
+    base_env = SimpleEnv(cfg.task)
+
+    checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)
+    if checkpoint_path is not None:
+        state_dict = torch.load(checkpoint_path, weights_only=False)
+    else:
+        state_dict = {}
     
     obs_keys = [
         key for key, spec in base_env.observation_spec.items(True, True) 
@@ -165,6 +181,7 @@ def make_env_policy(cfg: DictConfig):
         print(colored(f"[Info]: Add TensorDictPrimer {primer}.", "green"))
         transform.append(primer)
         env = TransformedEnv(env.base_env, transform)
+    env: _Env
 
     return env, policy, vecnorm
 
@@ -180,12 +197,15 @@ def evaluate(
     exploration_type: ExplorationType=ExplorationType.MODE,
     # exploration_type: ExplorationType=ExplorationType.RANDOM,
     render=False,
+    render_mode="rgb_array",
     keys=[("next", "stats")],
+    policy_keys=[],
 ):
     """
     Evaluate the policy on the environment, selecting `keys` from the trajectory.
     If `render` is True, record and save the video.
     """
+    keys = ["ref_motion_phase_", "step_count"]
     keys = set(keys)
     keys.add(("next", "done"))
     keys.add(("next", "stats"))
@@ -198,6 +218,7 @@ def evaluate(
     tensordict_ = env.reset()
     trajs = []
     frames = []
+    policy_trajs = []
 
     inference_time = []
     torch.compiler.cudagraph_mark_step_begin()
@@ -207,13 +228,17 @@ def evaluate(
             tensordict_ = policy(tensordict_)
             e = time.perf_counter()
             inference_time.append(e - s)
+
+            policy_trajs.append(tensordict_.select(*policy_keys, strict=False).cpu())
             tensordict, tensordict_ = env.step_and_maybe_reset(tensordict_)
             trajs.append(tensordict.select(*keys, strict=False).cpu())
+
             if render:
-                frames.append(env.render("rgb_array"))
+                frames.append(env.render(mode=render_mode))
     inference_time = np.mean(inference_time[5:])
     print(f"Average inference time: {inference_time:.4f} s")
 
+    policy_trajs: TensorDictBase = torch.stack(policy_trajs, dim=1)
     trajs: TensorDictBase = torch.stack(trajs, dim=1)
     done = trajs.get(("next", "done"))
     episode_cnt = len(done.nonzero())
@@ -245,4 +270,4 @@ def evaluate(
         )
 
     info["episode_cnt"] = episode_cnt
-    return dict(sorted(info.items())), trajs, stats
+    return dict(sorted(info.items())), trajs, stats, policy_trajs

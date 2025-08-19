@@ -1,0 +1,46 @@
+# @package task
+defaults:
+  - base/hdmi-base
+  - _self_
+
+name: G1PushBox
+
+robot:
+  name: g1_WBT
+  robot_type: g1_29dof_nohand-feet_sphere-eef_L-body_capsule
+
+command:
+  data_path: data/motion/g1/push_box/push_box-VID_20250423_220958-light-high-adjust_root_height
+  root_body_name: "pelvis"
+
+  object_asset_name: "box"
+  object_body_name:  "box"
+  object_pose_range:
+    roll: [-0.0, 0.0]
+    pitch: [-0.0, 0.0]
+
+  contact_target_pos_offset:
+    - [0.0,-0.2, 0.8]  # left wrist
+    - [0.0, 0.2, 0.8]  # right wrist
+
+  contact_eef_pos_offset:
+    - [0.1, 0.0, 0.0]
+    - [0.1, 0.0, 0.0]
+
+randomization:
+  object_body_randomization:
+    static_dynamic_friction_ratio_range: [1.2, 2.0]
+    dynamic_friction_range: [0.4, 0.6]
+    restitution_range: [0.0, 0.2]
+    mass_range: [6.0, 12.0]
+  
+  body_scale:
+    name: "box"
+    scale_range: [0.9, 1.1]
+
+reward:
+  object_tracking:
+    eef_contact_exp: {weight: 5.0, enabled: true, pos_sigma: 0.2, frc_sigma: 5, frc_thres: [1.0, 0.0, 1.0]}
+
+termination:
+  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.2, frc_thres: [1.0, 0.0, 1.0]}

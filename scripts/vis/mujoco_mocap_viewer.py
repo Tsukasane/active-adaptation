@@ -11,18 +11,24 @@ from typing import List
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand.xml"
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.xml"
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-stool.xml"
+# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase-omomo.xml"
 # scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-ball.xml"
-# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-foldchair.xml"
-# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-lowstool.xml"
+# # scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-foldchair.xml"
+# # scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-lowstool.xml"
 scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-door.xml"
-scene = "active_adaptation/assets_mjcf/t1/t1-stool.xml"
-scene = "active_adaptation/assets_mjcf/t1/t1-foldchair.xml"
-scene = "active_adaptation/assets_mjcf/t1/t1-suitcase.xml"
-scene = "active_adaptation/assets_mjcf/t1/t1-ball.xml"
+# scene = "active_adaptation/assets_mjcf/t1/t1-stool.xml"
+# scene = "active_adaptation/assets_mjcf/t1/t1-foldchair.xml"
+# scene = "active_adaptation/assets_mjcf/t1/t1-suitcase.xml"
+# scene = "active_adaptation/assets_mjcf/t1/t1-ball.xml"
 
-# scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-eef_L-box.xml"
-scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-suitcase.xml"
-scene = "active_adaptation/assets_mjcf/g1_29dof_nohand/g1_29dof_nohand-stool.xml"
+# for motion data publisher
+JOINT_STATE_PUBLISHER_IP = "localhost"
+BODY_POSE_PUBLISHER_IP = "localhost"
+
+# for deployment
+# JOINT_STATE_PUBLISHER_IP = "172.26.52.156"
+# # BODY_POSE_PUBLISHER_IP = "172.26.52.156"
+# BODY_POSE_PUBLISHER_IP = "localhost"
 
 class MuJoCoMocapViewer:
     def __init__(
@@ -44,7 +50,7 @@ class MuJoCoMocapViewer:
         
         # Wait for publisher to send joint names and create mapping
         print("Waiting for publisher joint names...")
-        joint_names_subscriber = ZMQSubscriber(PORTS['joint_names'])
+        joint_names_subscriber = ZMQSubscriber(PORTS['joint_names'], ip=JOINT_STATE_PUBLISHER_IP)
         while True:
             publisher_joint_names = joint_names_subscriber.receive_names()
             if publisher_joint_names is not None:
@@ -69,9 +75,9 @@ class MuJoCoMocapViewer:
         self.root_joint_subscribers: List[ZMQSubscriber] = []
 
         # Initialize ZMQ subscribers
-        self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'])
+        self.joint_subscriber = ZMQSubscriber(PORTS['joint_pos'], ip=JOINT_STATE_PUBLISHER_IP)
         for root_joint_name in self.root_joint_names:
-            subscriber = ZMQSubscriber(PORTS[f"{root_joint_name}_pose"])
+            subscriber = ZMQSubscriber(PORTS[f"{root_joint_name}_pose"], ip=BODY_POSE_PUBLISHER_IP)
             self.root_joint_subscribers.append(subscriber)
 
         self.running = True

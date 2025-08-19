@@ -117,8 +117,10 @@ def main():
         if args.video:
             cfg["task"]["num_envs"] = 16
             cfg["eval_render"] = True
+            cfg["render_mode"] = "rgb_array"
             cfg["app"]["enable_cameras"] = True
             cfg["app"]["headless"] = False
+            cfg["task"]["max_episode_length"] = 1000
         eval(cfg)
 
 

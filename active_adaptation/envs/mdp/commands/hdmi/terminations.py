@@ -46,6 +46,21 @@ class cum_body_pos_error(_cum_error_mixin, RobotTrackTermination):
         body_pos_error = (ref_body_pos_w - robot_body_pos_w).norm(dim=-1)
         self.error[:] = body_pos_error.max(dim=1).values
         super().update()
+
+class cum_body_z_error(_cum_error_mixin, RobotTrackTermination):
+    def __init__(self, body_names: str | List[str] = ".*", **kwargs):
+        super().__init__(**kwargs)
+        self.body_names = resolve_matching_names(body_names, self.command_manager.tracking_keypoint_names)[1]
+        self.body_indices_asset = [self.command_manager.asset.body_names.index(name) for name in self.body_names]
+        self.body_indices_motion = [self.command_manager.tracking_keypoint_names.index(name) for name in self.body_names]
+
+    def update(self):
+        ref_body_pos_w = self.command_manager.ref_body_pos_w[:, self.body_indices_motion]
+        robot_body_pos_w = self.command_manager.asset.data.body_link_pos_w[:, self.body_indices_asset]
+        # shape: [num_envs, num_tracking_bodies, 3]
+        body_pos_error = (ref_body_pos_w - robot_body_pos_w)[..., 2].abs()
+        self.error[:] = body_pos_error.max(dim=1).values
+        super().update()
     
 class cum_body_ori_error(_cum_error_mixin, RobotTrackTermination):
     def __init__(self, body_names: str | List[str] = ".*", **kwargs):

@@ -3,7 +3,7 @@ import active_adaptation.utils.symmetry as sym_utils
 
 from isaaclab.utils.math import quat_apply_inverse
 import torch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple, List
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
     from isaaclab.sensors import ContactSensor
@@ -108,7 +108,7 @@ class joint_pos_history(Observation):
         self.buffer[:, 0] = joint_pos
     
     def compute(self):
-        joint_pos = self.buffer - self.joint_pos_offset.unsqueeze(1)
+        joint_pos = self.buffer - self.joint_pos_offset[:, self.joint_ids].unsqueeze(1)
         joint_pos_selected = joint_pos[:, self.history_steps]
         return joint_pos_selected.reshape(self.num_envs, -1)
  
@@ -243,3 +243,93 @@ class random_noise_placeholder(Observation):
     
     def compute(self) -> torch.Tensor:
         return torch.randn(self.num_envs, self.dim, device=self.device).clamp(-3, 3) * self.noise_std
+
+class depth_camera(Observation):
+    def __init__(
+        self,
+        env,
+        camera_name: str,
+        max_depth: float = 4.0,
+        min_depth: float = 0.1,
+        nan_to_num: float = 4.0,
+        # Domain Randomization Parameters
+        gaussian_filter_kernel_choices: List[int] = [1, 3, 5],
+        gaussian_filter_sigma_range: Tuple[float, float] = (1.2, 1.2),
+        noise_std: Tuple[float, float] = 0.05,  # 5cm
+        episode_noise_range: Tuple[float, float] = (-0.15, 0.15), # 15cm
+        delay_range: Tuple[int, int] = (0, 8), # frames
+    ):
+        super().__init__(env)
+        from isaaclab.sensors import TiledCamera
+        self.camera_name = camera_name
+        self.camera: TiledCamera = self.env.scene.sensors[camera_name]
+
+        self.max_depth = max_depth
+        self.min_depth = min_depth
+        self.nan_to_num = nan_to_num
+
+        # step noise
+        self.noise_std = noise_std
+
+        # episode DR
+        self.gaussian_filter_kernel_choices = gaussian_filter_kernel_choices
+        self.gaussian_filter_sigma_range = gaussian_filter_sigma_range
+        self.episodic_noise_range = episode_noise_range
+        self.delay_range = delay_range
+
+        with torch.device(self.device):
+            self.gaussian_filter_sigma = torch.zeros(self.num_envs, dtype=torch.float32)
+
+            self.gaussian_filter_kernel_choices = torch.tensor(self.gaussian_filter_kernel_choices, dtype=torch.int32)
+            self.gaussian_filter_kernel = torch.zeros(self.num_envs, dtype=torch.int32)
+
+            self.episodic_noise = torch.zeros(self.num_envs, dtype=torch.float32)
+
+            self.depth_img_buffer = torch.zeros((self.num_envs, self.delay_range[1] + 1, *self.camera.image_shape))
+            self.delay = torch.zeros(self.num_envs, dtype=torch.int32)
+
+            self.all_env_ids = torch.arange(self.num_envs, dtype=torch.int32)
+
+        # TODO: implement DR for camera intrinsics and extrinsics
+        # self.camera.set_intrinsic_matrices()
+        # self.camera.set_world_poses()
+    
+    def reset(self, env_ids):
+        # resample Dr parameters
+        with torch.device(self.device):
+            self.gaussian_filter_sigma[env_ids] = torch.empty(len(env_ids)).uniform_(*self.gaussian_filter_sigma_range)
+
+            choice_of_kernel = torch.randint(low=0, high=len(self.gaussian_filter_kernel_choices), size=(len(env_ids),))
+            self.gaussian_filter_kernel[env_ids] = self.gaussian_filter_kernel_choices[choice_of_kernel]
+
+            self.episodic_noise[env_ids] = torch.empty(len(env_ids)).uniform_(*self.episodic_noise_range)
+            
+            self.delay[env_ids] = torch.randint(
+                low=self.delay_range[0], 
+                high=self.delay_range[1] + 1, 
+                size=(len(env_ids),),
+                dtype=torch.int32
+            )
+    
+    def compute(self) -> torch.Tensor:
+        depth_img_current = self.camera.data.output["depth"].squeeze(-1)  # [N, H, W]
+        # update the depth image buffer with the latest depth image
+        self.depth_img_buffer = self.depth_img_buffer.roll(1, dims=1)
+        self.depth_img_buffer[:, 0] = depth_img_current
+        depth_img = self.depth_img_buffer[self.all_env_ids, self.delay, :, :]
+        
+        # TODO: does not support different kernel sizes and sigmas for each environment, not batched
+        # # gaussian filter with the specified kernel size and sigma
+        # import torchvision.transforms.functional as TF
+        # depth_img = TF.gaussian_blur(depth_img, kernel_size=[self.gaussian_filter_kernel, self.gaussian_filter_kernel],
+        #                                 sigma=self.gaussian_filter_sigma)
+        # add noise
+        if self.noise_std > 0:
+            depth_img += torch.randn_like(depth_img) * self.noise_std
+        # add deviation
+        depth_img += self.episodic_noise.unsqueeze(-1).unsqueeze(-1)
+
+        # post-process the depth image
+        depth_img.nan_to_num_(nan=self.nan_to_num, posinf=self.max_depth, neginf=self.min_depth)
+        depth_img.clamp_(min=self.min_depth, max=self.max_depth)
+        return depth_img.unsqueeze(1) # [N, 1, H, W]

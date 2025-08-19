@@ -88,17 +88,6 @@ def main(cfg: DictConfig):
     ]
     episode_stats = EpisodeStats(stats_keys, device=env.device)
 
-    rollout_policy = policy.get_rollout_policy("train")
-
-    # collector = SyncDataCollector(
-    #     env,
-    #     policy=rollout_policy,
-    #     frames_per_batch=frames_per_batch,
-    #     total_frames=total_frames,
-    #     device=env.device,
-    #     return_same_td=True,
-    # )
-    
     def save(policy, checkpoint_name: str, artifact: bool=False):
         ckpt_path = os.path.join(run.dir, f"{checkpoint_name}.pt")
         state_dict = OrderedDict()
@@ -111,7 +100,7 @@ def main(cfg: DictConfig):
         torch.save(state_dict, ckpt_path)
         if artifact:
             artifact = wandb.Artifact(
-                f"{type(env).__name__}-{type(policy).__name__}", 
+                f"{type(env).__name__}-{type(policy).__name__}",
                 type="model"
             )
             artifact.add_file(ckpt_path)
@@ -120,24 +109,19 @@ def main(cfg: DictConfig):
         logging.info(f"Saved checkpoint to {str(ckpt_path)}")
 
     assert env.training
-    if aa.is_main_process():
-        progress = tqdm(range(total_iters))
-    else:
-        progress = range(total_iters)
-    
     def should_save(i):
         if not aa.is_main_process():
             return False
-        return i > 0 and i % save_interval == 0
-    
-    carry = env.reset()
+        return i > 0 and save_interval > 0 and i % save_interval == 0
 
+    # 4. --- Training Loop ---
+    carry = env.reset()
     rollout_policy: TensorDictModuleBase = policy.get_rollout_policy("train")
-    
+
     with torch.inference_mode():
         tmp_carry = rollout_policy(carry.clone(False))
         tmp_td, _ = env.step_and_maybe_reset(tmp_carry.clone(False))
-        tmp_td["next"] = tmp_td["next"].exclude(*rollout_policy.in_keys)
+        tmp_td["next"] = tmp_td["next"].select("done", "terminated", "discount", "reward", "stats", "is_init", "adapt_hx", strict=False)
 
     N = env.num_envs
     T = cfg.algo.train_every
@@ -148,12 +132,16 @@ def main(cfg: DictConfig):
         shape_tail = value.shape[1:]
         buf = torch.empty((N, T, *shape_tail), dtype=value.dtype, device=device)
         data_buf.set(key, buf)
+    logging.info(f"Data buffer size: {data_buf.bytes() / 1e6:.2f} MB")
+
+    if aa.is_main_process():
+        progress = tqdm(range(total_iters))
+    else:
+        progress = range(total_iters)
 
     env_frames = 0
     start_iter = env.current_iter
     for i in progress:
-
-        # data = []
         rollout_start = time.perf_counter()
         with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
             torch.compiler.cudagraph_mark_step_begin() # for compiled policy
@@ -161,11 +149,8 @@ def main(cfg: DictConfig):
             for step in range(cfg.algo.train_every):
                 carry = rollout_policy(carry)
                 td, carry = env.step_and_maybe_reset(carry)
-                td["next"] = td["next"].exclude(*rollout_policy.in_keys)
-                # data.append(td.to(policy.device))
+                td["next"] = td["next"].select("done", "terminated", "discount", "reward", "stats", "is_init", "adapt_hx", strict=False)
                 data_buf[:, step] = td
-            # data_buf = torch.stack(data, dim=1)
-            
             policy.critic(data_buf)
             values = data_buf["state_value"]
             data_buf["next", "state_value"] = torch.where(
@@ -187,24 +172,25 @@ def main(cfg: DictConfig):
         info.update(policy.train_op(data_buf))
         training_time = time.perf_counter() - training_start
         info.update(env.extra)
-        info.update(env.stats_ema) # step-wise exponential moving average of stats
-        
+        info.update(env.stats_ema)
+
         if hasattr(policy, "step_schedule"):
             policy.step_schedule(i / total_iters)
-        
+
         info["env_frames"] = env_frames
         info["rollout_fps"] = data_buf.numel() / rollout_time
         info["training_time"] = training_time
-        
+
         if should_save(i):
             save(policy, f"checkpoint_{i}")
 
         if aa.is_main_process():
-            print(OmegaConf.to_yaml({k: v for k, v in info.items() if (isinstance(v, (float, int)) and not k.startswith("performance_reward"))}))
+            # print(OmegaConf.to_yaml({k: v for k, v in info.items() if (isinstance(v, (float, int)) and not k.startswith("performance_reward"))}))
             run.log(info)
-    
+
+    # 5. --- Finalization and Cleanup ---
     if aa.is_main_process():
-        save(policy, "checkpoint_final")
+        save(policy, "checkpoint_final", artifact=True)
 
     # policy_eval = policy.get_rollout_policy("eval")
     # info, trajs, stats = evaluate(env, policy_eval, render=cfg.eval_render, seed=cfg.seed)
@@ -214,6 +200,14 @@ def main(cfg: DictConfig):
     os._exit(0)
     env.close()
     simulation_app.close()
+
+    run_id = run.id
+    project = run.project
+    entity = run.entity
+    run_path = f"{entity}/{project}/{run_id}"
+    
+    return run_path
+
 
 
 if __name__ == "__main__":

@@ -152,8 +152,8 @@ class door_joint_randomization(TrackDoorRandomization):
         #     print(f"door_friction: {door_friction}")
         #     print(f"door_damping: {door_damping}")
 
-        self.door.friction[env_ids] = door_friction
-        self.door.damping[env_ids] = door_damping
+        self.door._custom_friction[env_ids] = door_friction
+        self.door._custom_damping[env_ids] = door_damping
 
 class door_body_randomization(TrackDoorRandomization):
     def __init__(

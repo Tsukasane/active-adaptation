@@ -25,7 +25,7 @@ def main(cfg):
     app_launcher = AppLauncher(cfg.app)
     simulation_app = app_launcher.app
 
-    from scripts.helpers import EpisodeStats, make_env_policy, ObsNorm
+    from scripts.helpers import EpisodeStats, make_env_policy, ObsNorm, ObsOODDetector
     env, policy, vecnorm = make_env_policy(cfg)
     
     if cfg.export_policy:
@@ -66,7 +66,8 @@ def main(cfg):
         
         deploy_policy = copy.deepcopy(policy.get_rollout_policy("deploy"))
         obs_norm = ObsNorm.from_vecnorm(vecnorm, deploy_policy.in_keys)
-        _policy = TensorDictSequential(obs_norm, deploy_policy).cpu()
+        ood_detector = ObsOODDetector(deploy_policy.in_keys, sigma=5.0)
+        _policy = TensorDictSequential(obs_norm, ood_detector, deploy_policy).cpu()
         
         print(f"Inference time of policy: {test(_policy, fake_input)}")
 
@@ -83,8 +84,7 @@ def main(cfg):
         ## observation
         policy_config = dict()
         obs_cfg = dict()
-        obs_keys = ["policy", "command"]
-        for k in obs_keys:
+        for k in deploy_policy.in_keys:
             obs_cfg[k] = dict_cfg["task"]["observation"][k]
         policy_config["observation"] = obs_cfg
         
@@ -95,8 +95,34 @@ def main(cfg):
         from active_adaptation.assets import get_asset_meta
         asset_meta = get_asset_meta(env.scene["robot"])
         policy_config["isaac_joint_names"] = asset_meta["joint_names_isaac"]
-        policy_config["joint_kp"] = asset_meta["actuators"]["base_legs"]["stiffness"]
-        policy_config["joint_kd"] = asset_meta["actuators"]["base_legs"]["damping"]
+        joint_kp, joint_kd = {}, {}
+        for actuator_name, actuator in asset_meta["actuators"].items():
+            stiffness = actuator["stiffness"]
+            if isinstance(stiffness, float):
+                joint_name_expr = actuator["joint_names_expr"]
+                if not isinstance(joint_name_expr, list):
+                    joint_name_expr = [joint_name_expr]
+                for joint_name in joint_name_expr:
+                    joint_kp.update({joint_name: stiffness})
+            elif isinstance(stiffness, dict):
+                joint_kp.update(stiffness)
+            else:
+                raise ValueError(f"Unsupported stiffness type: {type(stiffness)}")
+
+            damping = actuator["damping"]
+            if isinstance(damping, float):
+                joint_name_expr = actuator["joint_names_expr"]
+                if not isinstance(joint_name_expr, list):
+                    joint_name_expr = [joint_name_expr]
+                for joint_name in joint_name_expr:
+                    joint_kd.update({joint_name: damping})
+            elif isinstance(damping, dict):
+                joint_kd.update(damping)
+            else:
+                raise ValueError(f"Unsupported damping type: {type(damping)}")
+
+        policy_config["joint_kp"] = joint_kp
+        policy_config["joint_kd"] = joint_kd
         policy_config["default_joint_pos"] = asset_meta["init_state"]["joint_pos"]
 
         ## policy joint names
@@ -117,10 +143,12 @@ def main(cfg):
 
         ## command
         command = env.command_manager
-        command_obs = policy_config["observation"]["command"]
+        cmd_key = "command" if "command" in policy_config["observation"] else "command_"
+        command_obs = policy_config["observation"][cmd_key]
         if cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.motion_tracking.command.MotionTrackingCommand":
             from active_adaptation.envs.mdp.commands.motion_tracking.command import MotionTrackingCommand
             command: MotionTrackingCommand
+            assert command.dataset.num_motions == 1
             motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
             future_steps = command.future_steps.tolist()
             tracking_keypoint_names = command.tracking_keypoint_names
@@ -128,6 +156,7 @@ def main(cfg):
 
             for obs_key in command_obs:
                 command_obs[obs_key]["motion_duration_second"] = motion_duration_second
+                command_obs[obs_key]["motion_path"] = cfg.task.command.data_path
                 command_obs[obs_key]["future_steps"] = future_steps
                 command_obs[obs_key]["body_names"] = tracking_keypoint_names
                 command_obs[obs_key]["joint_names"] = tracking_joint_names
@@ -135,6 +164,8 @@ def main(cfg):
         elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotTracking":
             from active_adaptation.envs.mdp.commands.hdmi.command import RobotTracking
             command: RobotTracking
+            assert command.dataset.num_motions == 1
+
             tracking_keypoint_names = command.tracking_keypoint_names
             tracking_joint_names = command.tracking_joint_names
             motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
@@ -145,6 +176,7 @@ def main(cfg):
 
             for obs_key in command_obs:
                 command_obs[obs_key]["motion_duration_second"] = motion_duration_second
+                command_obs[obs_key]["motion_path"] = cfg.task.command.data_path
                 command_obs[obs_key]["future_steps"] = future_steps
                 command_obs[obs_key]["body_names"] = tracking_keypoint_names
                 command_obs[obs_key]["joint_names"] = tracking_joint_names
@@ -152,6 +184,7 @@ def main(cfg):
         elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.hdmi.command.RobotObjectTracking":
             from active_adaptation.envs.mdp.commands.hdmi.command import RobotObjectTracking
             command: RobotObjectTracking
+            assert command.dataset.num_motions == 1
             tracking_keypoint_names = command.tracking_keypoint_names
             tracking_joint_names = command.tracking_joint_names
             motion_duration_second = command.dataset.lengths[0].item() * env.step_dt
@@ -160,26 +193,32 @@ def main(cfg):
             tracking_joint_names = command.tracking_joint_names
             root_body_name = command.root_body_name
 
+            # for motion observation
             for obs_key in command_obs:
                 command_obs[obs_key]["motion_duration_second"] = motion_duration_second
+                command_obs[obs_key]["motion_path"] = cfg.task.command.data_path
                 command_obs[obs_key]["future_steps"] = future_steps
                 command_obs[obs_key]["body_names"] = tracking_keypoint_names
                 command_obs[obs_key]["joint_names"] = tracking_joint_names
                 command_obs[obs_key]["root_body_name"] = root_body_name
             
-            object_name = cfg.task.command.object_asset_name
+            object_asset_name = cfg.task.command.object_asset_name
+            object_body_name = cfg.task.command.object_body_name
             contact_target_pos_offset = np.array(cfg.task.command.contact_target_pos_offset).tolist()
-            # convert to list
-            policy_obs = policy_config["observation"]["policy"]
-            ref_contact_obs_cfg = policy_obs.get("ref_contact_pos_b", None)
-            if ref_contact_obs_cfg is not None:
-                ref_contact_obs_cfg["object_name"] = object_name
-                ref_contact_obs_cfg["root_body_name"] = root_body_name
-                ref_contact_obs_cfg["contact_target_pos_offset"] = contact_target_pos_offset
+            # for object observation in object obs
+            object_obs = policy_config["observation"].get("object", None)
+            if object_obs is not None:
+                for obs_key in object_obs:
+                    if obs_key == "ref_contact_pos_b":
+                        object_obs[obs_key]["object_name"] = object_body_name
+                        object_obs[obs_key]["contact_target_pos_offset"] = contact_target_pos_offset
+                    else:
+                        object_obs[obs_key]["object_name"] = object_asset_name
+                    object_obs[obs_key]["root_body_name"] = root_body_name
         elif cfg.task.command._target_ == "active_adaptation.envs.mdp.commands.box_transport.command.BoxTransport":
             from active_adaptation.envs.mdp.commands.box_transport.command import BoxTransport
             command: BoxTransport
-            object_name = command.object_asset_name
+            object_asset_name = command.object_asset_name
             root_body_name = command.root_body_name
             
             policy_obs = policy_config["observation"]["policy"]
@@ -187,12 +226,12 @@ def main(cfg):
             for obs_key in object_obs:
                 obs_cfg = policy_obs.get(obs_key, None)
                 if obs_cfg is not None:
-                    obs_cfg["object_name"] = object_name
+                    obs_cfg["object_name"] = object_asset_name
                     obs_cfg["root_body_name"] = root_body_name
 
             ref_contact_obs_cfg = policy_obs.get("ref_contact_pos_b", None)
             if ref_contact_obs_cfg is not None:
-                ref_contact_obs_cfg["object_name"] = object_name
+                ref_contact_obs_cfg["object_name"] = object_asset_name
                 ref_contact_obs_cfg["root_body_name"] = root_body_name
                 contact_target_pos_offset = np.array(cfg.task.command.contact_target_pos_offset).tolist()
                 policy_obs["ref_contact_pos_b"]["contact_target_pos_offset"] = contact_target_pos_offset
@@ -208,15 +247,15 @@ def main(cfg):
         if isinstance(k, tuple) and k[0]=="stats"
     ]
     episode_stats = EpisodeStats(stats_keys, device=env.device)
-    policy = policy.get_rollout_policy("eval")
+    rollout_policy = policy.get_rollout_policy("eval")
     
     env.base_env.eval()
     td_ = env.reset()
     assert not env.base_env.training
-    with torch.inference_mode(), set_exploration_type(ExplorationType.RANDOM):
+    with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
         torch.compiler.cudagraph_mark_step_begin()
         for i in itertools.count():
-            td_ = policy(td_)
+            td_ = rollout_policy(td_)
             td, td_ = env.step_and_maybe_reset(td_)
             # td_.update(td["next"])
             episode_stats.add(td)

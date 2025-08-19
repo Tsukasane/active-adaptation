@@ -507,7 +507,7 @@ class eef_contact_pos(RobotObjectTrackReward):
     def __init__(self, sigma: float=0.1, **kwargs):
         super().__init__(**kwargs)
         self.sigma = sigma
-        self.eef_pos_error = torch.zeros(self.num_envs, len(self.command_manager.contact_eef_body_indices_asset), device=self.device)
+        self.eef_pos_error = torch.zeros(self.num_envs, self.command_manager.num_eefs, device=self.device)
     
     def update(self):
         self.in_range = self.command_manager.ref_object_contact
@@ -548,8 +548,8 @@ class eef_contact_exp(RobotObjectTrackReward):
         **kwargs
     ):
         super().__init__(**kwargs)
-        self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
-        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
+        self.eef_pos_error = torch.zeros(self.num_envs, self.command_manager.num_eefs, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, self.command_manager.num_eefs, 3, device=self.device)
 
         self.pos_sigma = pos_sigma
         self.pos_tolerance = pos_tolerance
@@ -602,9 +602,9 @@ class eef_contact_exp_max(RobotObjectTrackReward):
         **kwargs
     ):
         super().__init__(**kwargs)
-        self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
-        self.eef_ori_error = torch.zeros(self.num_envs, 2, 3, device=self.device)
-        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
+        self.eef_pos_error = torch.zeros(self.num_envs, self.command_manager.num_eefs, device=self.device)
+        self.eef_ori_error = torch.zeros(self.num_envs, self.command_manager.num_eefs, 3, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, self.command_manager.num_eefs, 3, device=self.device)
 
         self.pos_sigma = pos_sigma
         self.pos_tolerance = pos_tolerance

@@ -2,6 +2,7 @@ import os
 
 from .humanoid import *
 from .objects import *
+from .g1_wbt import *
 
 
 ASSET_PATH = os.path.dirname(__file__)
@@ -10,6 +11,7 @@ ROBOTS = {
     "g1_29dof": G1_29DOF_CFG,
     "g1_GMT": G1_GMT_29DOF_CFG,
     "g1_HV": G1_HV_29DOF_CFG,
+    "g1_WBT": G1_CYLINDER_CFG,
 }
 
 OBJECTS = {
@@ -18,6 +20,7 @@ OBJECTS = {
     "box_small": BOX_SMALL_CFG,
     "suitcase": SUITCASE_CFG,
     "stool": STOOL_CFG,
+    "stool_low": STOOL_LOW_CFG,
     "ball": BALL_CFG,
     "foldchair": FOLDCHAIR_CFG,
     "stool_support": STOOL_SUPPORT_CFG,

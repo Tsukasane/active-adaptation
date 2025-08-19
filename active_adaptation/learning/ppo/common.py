@@ -91,7 +91,8 @@ class FlattenBatch(nn.Module):
 
     def forward(self, input: torch.Tensor):
         batch_shape = input.shape[:-self.data_dim]
-        output = self.module(input.flatten(0, len(batch_shape)-1))
+        flattened_input = input.flatten(0, len(batch_shape)-1)
+        output = self.module(flattened_input)
         return output.unflatten(0, batch_shape)
 
 
@@ -408,4 +409,3 @@ def parse_keys(spec: CompositeSpec, keys: list[str]):
         else:
             cnn_keys.append(key)
     return mlp_keys, cnn_keys, aux_keys
-

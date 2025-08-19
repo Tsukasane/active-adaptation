@@ -1,0 +1,78 @@
+# @package task
+defaults:
+  - base/hdmi-base
+  - _self_
+
+name: G1OpenDoorFeet
+
+robot:
+  name: g1_WBT
+  robot_type: g1_29dof_rubberhand-feet_sphere-eef_box_approx-body_capsule
+
+command:
+  data_path: data/motion/data_for_sim/open_door-feet-0816
+  root_body_name: "pelvis"
+
+  pose_range:
+    x: [-0.3, 0.3]
+    y: [-0.3, 0.3]
+    yaw: [-0.4, 0.4]
+
+  object_asset_name: "door"
+  object_body_name:  "door_panel"
+  object_joint_name: "door_joint"
+
+  object_pose_range:
+    z: [-0.0, 0.0]
+    roll: [-0.0, 0.0]
+    pitch: [-0.0, 0.0]
+
+  contact_eef_body_name: ["left_ankle_roll_link"]
+  contact_frc_eef_body_name: ["left_ankle_roll_link"]
+  contact_eef_pos_offset:
+    - [0.05, 0.0, 0.0] # left ankle
+  contact_target_pos_offset:
+    - [0.0, -0.9, 0.1] # left ankle
+
+observation:
+  object:
+    object_xy_b:     {noise_std: 0.1, episodic_noise_std: 0.2}
+    object_yaw_b:     {noise_std: 0.1, episodic_noise_std: 0.2, offset: 3.14}
+  priv:
+    object_joint_pos:    {}
+    object_joint_vel:    {}
+    object_joint_torque: {}
+
+randomization:
+  object_joint_randomization:
+    armature_range: [0.0, 0.01]
+
+    friction_range: [0.5, 5.0]
+    damping_range: [2.0, 5.0]
+
+    # friction_range: [5.0, 10.0]
+    # damping_range: [2.0, 4.0]
+    # armature_range: [0.0, 0.01]
+
+  object_body_randomization:
+    static_dynamic_friction_ratio_range: [1.0, 2.0]
+    dynamic_friction_range: [0.3, 0.8]
+    restitution_range: [0.0, 0.2]
+    mass_range: [5.0, 20.0]
+  
+  body_scale:
+    name: "door"
+    scale_range: [0.9, 1.1]
+
+reward:
+  object_tracking:
+    object_pos_tracking: {enabled: false}
+    object_ori_tracking: {enabled: false}
+    object_joint_pos_tracking: {weight: 1.0, sigma: 0.5}
+
+    _multiplicative: true
+    eef_contact_exp: {weight: 5.0, enabled: true, pos_sigma: 0.2, frc_sigma: 1.0, frc_thres: [0.0, 1.0, 0.0]}
+    eef_contact_exp_2(eef_contact_exp): {weight: 2.0, enabled: true, pos_sigma: 0.5, frc_sigma: 3.0, frc_thres: [0.0, 1.0, 0.0]}
+
+termination:
+ cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.2, frc_thres: 1.0}

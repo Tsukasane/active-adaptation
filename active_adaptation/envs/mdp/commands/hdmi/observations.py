@@ -8,6 +8,7 @@ from isaaclab.utils.math import (
     quat_conjugate,
     matrix_from_quat,
     yaw_quat,
+    wrap_to_pi
 )
 from active_adaptation.utils.math import batchify
 quat_apply_inverse = batchify(quat_apply_inverse)
@@ -289,6 +290,12 @@ class ref_motion_phase(RobotTrackObservation):
     def compute(self):
         return (self.command_manager.t / self.command_manager.motion_len).unsqueeze(1)
 
+
+def yaw_from_quat(quat: torch.Tensor) -> torch.Tensor:
+    qw, qx, qy, qz = torch.unbind(quat, dim=-1)
+    yaw = torch.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    return yaw
+
 RobotObjectTrackObservation = BaseObservation[RobotObjectTracking]
 
 class ref_contact_pos_b(RobotObjectTrackObservation):
@@ -329,18 +336,6 @@ class ref_contact_pos_b(RobotObjectTrackObservation):
     def compute(self):
         return self.ref_contact_pos_b.view(self.num_envs, -1)
 
-    def debug_draw(self):
-        # draw vector from robot root to contact target
-        contact_target_pos_w = self.command_manager.contact_target_pos_w
-        robot_root_pos_w = self.command_manager.robot_root_pos_w[:, None, :]
-        
-        self.env.debug_draw.vector(
-            contact_target_pos_w.view(-1, 3),
-            (robot_root_pos_w - contact_target_pos_w).view(-1, 3),
-            color=(0, 1, 0, 1),
-            size=4.0,
-        )
-
 class diff_contact_pos_b(RobotObjectTrackObservation):
     """
     Reference end-effector target position in robot root frame - Robot end-effector position in robot root frame
@@ -359,6 +354,68 @@ class diff_contact_pos_b(RobotObjectTrackObservation):
 
     def compute(self):
         return self.diff_contact_pos_b.view(self.num_envs, -1)
+    
+class object_xy_b(RobotObjectTrackObservation):
+    """
+    Object position in robot root frame
+    """
+    def __init__(self, noise_std: float=0.0, episodic_noise_std: float=0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.object_xy_b = torch.zeros(self.num_envs, 2, device=self.device)
+        self.noise_std = noise_std
+        self.episodic_noise_std = episodic_noise_std
+
+        self.step_noise = torch.zeros(self.num_envs, 2, device=self.device)
+        self.episodic_noise = torch.zeros(self.num_envs, 2, device=self.device)
+
+    def reset(self, env_ids):
+        if self.episodic_noise_std > 0.0:
+            self.episodic_noise[env_ids] = torch.empty(len(env_ids), 2, device=self.device).uniform_(-1, 1) * self.episodic_noise_std
+
+    def update(self):
+        if self.noise_std > 0.0:
+            self.step_noise = torch.randn_like(self.object_xy_b).clamp(-3, 3) * self.noise_std
+        object_pos_w = self.command_manager.object.data.root_link_pos_w # shape: [num_envs, 3]
+        robot_root_pos_w = self.command_manager.robot_root_pos_w # shape: [num_envs, 3]
+        robot_root_quat_w = self.command_manager.robot_root_quat_w # shape: [num_envs, 4]
+        robot_root_quat_w = yaw_quat(robot_root_quat_w)
+
+        self.object_xy_b = quat_apply_inverse(robot_root_quat_w, object_pos_w - robot_root_pos_w)[:, :2] + self.episodic_noise + self.step_noise
+
+    def compute(self):
+        return self.object_xy_b.view(self.num_envs, -1)
+
+class object_yaw_b(RobotObjectTrackObservation):
+    """
+    Object orientation in robot root frame
+    """
+    def __init__(self, noise_std: float=0.0, episodic_noise_std: float=0.0, offset: float=0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.object_yaw_b = torch.zeros(self.num_envs, 1, device=self.device)
+        self.noise_std = noise_std
+        self.episodic_noise_std = episodic_noise_std
+        self.offset = offset
+
+        self.step_noise = torch.zeros_like(self.object_yaw_b)
+        self.episodic_noise = torch.zeros_like(self.object_yaw_b)
+
+    def reset(self, env_ids):
+        if self.episodic_noise_std > 0.0:
+            self.episodic_noise[env_ids] = torch.empty(len(env_ids), 1, device=self.device).uniform_(-1, 1) * self.episodic_noise_std
+
+    def update(self):
+        if self.noise_std > 0.0:
+            self.step_noise = torch.randn_like(self.object_yaw_b).clamp(-3, 3) * self.noise_std
+        object_quat_w = self.command_manager.object.data.root_link_quat_w # shape: [num_envs, 4]
+        robot_root_quat_w = self.command_manager.robot_root_quat_w # shape: [num_envs, 4]
+
+        object_yaw_w = yaw_from_quat(object_quat_w)
+        robot_root_yaw_w = yaw_from_quat(robot_root_quat_w)
+        
+        self.object_yaw_b = wrap_to_pi(object_yaw_w - robot_root_yaw_w + self.offset)[:, None] + self.episodic_noise + self.step_noise
+
+    def compute(self):
+        return self.object_yaw_b.view(self.num_envs, -1)
     
 class object_pos_b(RobotObjectTrackObservation):
     """
@@ -405,6 +462,32 @@ class object_joint_pos(RobotObjectTrackObservation):
     """
     def compute(self):
         return self.command_manager.object_joint_pos.unsqueeze(1)
+
+class object_joint_vel(RobotObjectTrackObservation):
+    """
+    Object joint velocity
+    """
+    def compute(self):
+        return self.command_manager.object_joint_vel.unsqueeze(1)
+
+class object_joint_torque(RobotObjectTrackObservation):
+    """
+    Object joint torque
+    """
+    def compute(self):
+        return self.command_manager.object.data.applied_torque
+
+class object_joint_friction(RobotObjectTrackObservation):
+    """ Object joint friction
+    """
+    def compute(self):
+        return self.command_manager.object._custom_friction.unsqueeze(1)
+
+class object_joint_damping(RobotObjectTrackObservation):
+    """ Object joint damping
+    """
+    def compute(self):
+        return self.command_manager.object._custom_damping.unsqueeze(1)
 
 class diff_object_pos_future(RobotObjectTrackObservation):
     """

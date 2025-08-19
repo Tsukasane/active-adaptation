@@ -10,8 +10,8 @@ ASSET_PATH = os.path.dirname(__file__)
 class CustomArticulation(Articulation):
     def _create_buffers(self):
         super()._create_buffers()
-        self.friction = torch.zeros((self.num_instances,), device=self.device)
-        self.damping = torch.zeros((self.num_instances,), device=self.device)
+        self._custom_friction = torch.zeros((self.num_instances,), device=self.device)
+        self._custom_damping = torch.zeros((self.num_instances,), device=self.device)
         assert len(self.joint_names) == 1, "DoorArticulation should have exactly one joint."
         self.custom_joint_id = 0
         self.custom_torques = torch.zeros((self.num_instances,), device=self.device)
@@ -32,8 +32,8 @@ class CustomArticulation(Articulation):
     
     def write_data_to_sim(self):
         j_vel = self.data.joint_vel[:, self.custom_joint_id]
-        j_friction = -torch.sign(j_vel) * (j_vel.abs() > 0.01) * self.friction
-        j_damping = -j_vel * self.damping
+        j_friction = -torch.sign(j_vel) * (j_vel.abs() > 0.01) * self._custom_friction
+        j_damping = -j_vel * self._custom_damping
         self.custom_torques[:] = j_friction + j_damping
         
         self.set_joint_effort_target(self.custom_torques.unsqueeze(-1), joint_ids=[self.custom_joint_id])
@@ -124,8 +124,17 @@ SUITCASE_CFG = RigidObjectCfg(
 STOOL_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/stool",
     spawn=sim_utils.UsdFileCfg(
-        # usd_path=f"{ASSET_PATH}/objects/stool/stool.usd",
-        usd_path=f"{ASSET_PATH}/objects/stool/stool-side_widened.usd",
+        usd_path=f"{ASSET_PATH}/objects/stool/stool.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.5,
+        ),
+    ),
+)
+STOOL_LOW_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/stool",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/stool/stool-low.usd",
         activate_contact_sensors=True,
         mass_props=sim_utils.MassPropertiesCfg(
             mass=0.5,

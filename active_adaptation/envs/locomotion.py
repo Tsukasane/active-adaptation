@@ -83,7 +83,7 @@ class SimpleEnv(_Env):
                 setattr(scene_cfg, obj_name, obj_cfg)
 
                 # add contact sensor to the box
-                eef_names = [f"{left_right}_wrist_{roll_pitch_yaw}_link" for left_right in ["left", "right"] for roll_pitch_yaw in ["yaw"]]
+                eef_names = self.cfg.command.get("contact_eef_body_name", [])
                 contact_geom_prim_path = "{ENV_REGEX_NS}/" + obj_name + "/" + obj_contact_body_name
 
                 for eef_name in eef_names:
@@ -103,6 +103,7 @@ class SimpleEnv(_Env):
                 spawn_func = asset.spawn.func.__wrapped__
                 asset.spawn.func = clone(spawn_func)
                 asset.spawn.scale_range = tuple(body_scale_rand.scale_range)
+                asset.spawn.homogeneous_scale = body_scale_rand.get("homogeneous_scale", False)
                 print(f"Randomized {body_scale_rand.name} scale to {asset.spawn.scale_range}")
 
             scene_cfg.terrain = TERRAINS[self.cfg.terrain]
@@ -111,6 +112,62 @@ class SimpleEnv(_Env):
                 history_length=3,
                 track_air_time=True
             )
+
+            if self.cfg.get("enable_cameras", False):
+                from isaaclab.sensors import TiledCameraCfg
+                # this is from my ros reading
+                # camera_spawn_cfg = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
+                #     intrinsic_matrix=[
+                #         390.2486572265625, 0.0, 324.02740478515625,
+                #         0.0, 390.2486572265625, 234.0133056640625,
+                #         0.0, 0.0, 1.0,
+                #     ],
+                #     width=640,
+                #     height=480,
+                #     clipping_range=(0.1, 4.0),
+                #     focal_length=None,
+                #     focus_distance=400.0,
+                #     f_stop=0.0,
+                #     projection_type="pinhole",
+                #     lock_camera=True,
+                # )
+                # from https://github.com/unitreerobotics/unitree_sim_isaaclab/blob/27498c09159a99879a882e212059988df86018c8/tasks/common_config/camera_configs.py#L21
+                camera_spawn_cfg = sim_utils.PinholeCameraCfg(
+                    focal_length=7.6,
+                    focus_distance=400.0,
+                    horizontal_aperture=20.0,
+                    clipping_range=(0.1, 1.0e5),
+                )
+                tiled_camera: TiledCameraCfg = TiledCameraCfg(
+                    prim_path="/World/envs/env_.*/Robot/d435_link/front_cam",
+                    spawn=camera_spawn_cfg,
+                    offset=TiledCameraCfg.OffsetCfg(
+                        pos=(0.0, 0.0, 0.0),
+                        rot=(0.5, -0.5, 0.5, -0.5),
+                        convention="ros"
+                    ),
+                    # NOTE: remove rgb does not improve speed, and only slightly reduces memory usage
+                    # TODO: depth or distance_to_image_plane?
+                    data_types=["rgb", "depth", "distance_to_image_plane"],
+                    update_latest_camera_pose=True,
+                    update_period=0.02,
+                    width=self.cfg.camera_width,
+                    height=self.cfg.camera_height,
+                )
+                scene_cfg.tiled_camera = tiled_camera
+            
+            # if self.cfg.get("enable_raycaster", False):
+            #     from isaaclab.sensors import RayCasterCfg
+            #     raycaster = RayCasterCfg(
+            #         prim_path="/World/envs/env_.*/Robot/d435_link/front_cam",
+            #         update_period=0.02,
+            #         offset=RayCasterCfg.OffsetCfg(
+            #             pos=(0.0, 0.0, 0.0),
+            #             rot=(0.5, -0.5, 0.5, -0.5),
+            #         ),
+            #     )
+            #     scene_cfg.raycaster = raycaster
+            
             sim_cfg = sim_utils.SimulationCfg(
                 dt=self.cfg.sim.isaac_physics_dt,
                 render=sim_utils.RenderCfg(
@@ -153,7 +210,7 @@ class SimpleEnv(_Env):
                 # for _ in range(4):
                 #     self.sim.render()
             except ModuleNotFoundError as e:
-                print("Set enable_cameras=true to use cameras.")
+                print("Set app.enable_cameras=true to use cameras.")
             
             try:
                 from active_adaptation.utils.debug import DebugDraw

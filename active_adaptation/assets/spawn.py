@@ -290,9 +290,14 @@ def clone(func: Callable) -> Callable:
             schemas.activate_contact_sensors(prim_paths[0], cfg.activate_contact_sensors)
         # clone asset using cloner API
         low, high = getattr(cfg, "scale_range", (1., 1.))
-        scales = torch.ones(len(prim_paths), 3)
-        scales[1:].uniform_(low, high)
-        # scales[1:].fill_(low)
+        homogeneous_scale = getattr(cfg, "homogeneous_scale", False)
+        if homogeneous_scale:
+            scales = torch.ones(len(prim_paths), 1)
+            scales[1:].uniform_(low, high)
+            scales = scales.repeat(1, 3)
+        else:
+            scales = torch.ones(len(prim_paths), 3)
+            scales[1:].uniform_(low, high)
         cfg.scale = scales
         if len(prim_paths) > 1:
             # clone the prim

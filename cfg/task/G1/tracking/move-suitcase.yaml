@@ -1,10 +1,19 @@
 # @package task
 defaults:
-  - G1/tracking/tracking-base
+  - base/tracking-base
   - _self_
 
 name: G1TrackSuitcase
 
+robot:
+  name: g1_HV
+  robot_type: g1_29dof_nohand-feet_sphere
+  # override_params:
+  #   init_state:
+  #     joint_pos:
+  #       left_wrist_roll_joint: 1.57
+  #       right_wrist_roll_joint: -1.57
+
 command:
   data_path: data/motion/g1/omomo/sub1_suitcase_011
-  
+  root_body_name: "pelvis"

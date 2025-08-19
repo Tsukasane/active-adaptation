@@ -44,7 +44,11 @@ class SMPLPublisher:
 
         dataset = MotionDataset.create_from_path(str(self.tmp_dir), target_fps=rate).to("cpu")
         motion_data: MotionData = dataset.data
-        
+
+        print(motion_data.shape)
+        print(motion_data.shape [0]/ rate)
+        # breakpoint()
+
         # get joint names and state
         self.joint_names = dataset.joint_names
         self.joint_pos = motion_data.joint_pos.numpy()
@@ -103,11 +107,11 @@ class SMPLPublisher:
                 print(f"Playback {status} (frame {self.index}/{self.n_steps-1})")
                 
             elif key == "left" and self.paused:
-                self.index = (self.index - 1) % self.n_steps
+                self.index = (self.index - 5) % self.n_steps
                 print(f"Frame {self.index}/{self.n_steps-1}")
                 
             elif key == "right" and self.paused:
-                self.index = (self.index + 1) % self.n_steps
+                self.index = (self.index + 5) % self.n_steps
                 print(f"Frame {self.index}/{self.n_steps-1}")
                 
             elif key == "esc":

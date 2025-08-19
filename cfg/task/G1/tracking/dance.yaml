@@ -1,0 +1,18 @@
+# @package task
+defaults:
+  - base/tracking-base-wbt
+  - _self_
+
+name: G1Dance1Subject2
+
+observation:
+  policy:
+    joint_pos_history:         {history_steps: [0, 1], joint_names: "^(?!.*wrist).+$", noise_std: 0.015}
+
+robot: 
+  name: g1_WBT
+  robot_type: g1_29dof_nohand-feet_sphere
+
+command:
+  root_body_name: "pelvis"
+  data_path: data/motion/lafan/dance1_subject2-270_1000

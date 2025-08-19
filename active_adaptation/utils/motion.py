@@ -102,9 +102,10 @@ def slerp(ts_target, ts_source, quat):
 
 def interpolate(motion, source_fps: int, target_fps: int):
     if source_fps != target_fps:
-        in_keys = ["body_pos_w", "body_lin_vel_w", "body_quat_w", "body_ang_vel_w", "joint_pos", "joint_vel", "box_contact"]
-        if not all(key in in_keys for key in motion.keys()):
-            raise NotImplementedError(f"interpolation is not fully implemented for some keys")
+        in_keys = ["body_pos_w", "body_lin_vel_w", "body_quat_w", "body_ang_vel_w", "joint_pos", "joint_vel"]
+        extra_keys = set(motion.keys()) - set(in_keys)
+        if extra_keys:
+            raise NotImplementedError(f"interpolation is not fully implemented for keys: {extra_keys}")
         T = motion["joint_pos"].shape[0]
         end_t = T / source_fps
         ts_source = np.arange(0, end_t, 1 / source_fps)
@@ -117,8 +118,6 @@ def interpolate(motion, source_fps: int, target_fps: int):
         motion["body_ang_vel_w"] = lerp(ts_target, ts_source, motion["body_ang_vel_w"].reshape(T, -1)).reshape(len(ts_target), -1, 3)
         motion["joint_pos"] = lerp(ts_target, ts_source, motion["joint_pos"])
         motion["joint_vel"] = lerp(ts_target, ts_source, motion["joint_vel"])
-        if "box_contact" in motion:
-            motion["box_contact"] = lerp(ts_target, ts_source, motion["box_contact"].reshape(T, -1)).reshape(len(ts_target), -1) > 0.5
     return motion
 
 def quat_to_angular_velocity(quat: torch.Tensor, fps: float) -> torch.Tensor:

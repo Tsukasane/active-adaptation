@@ -108,8 +108,8 @@ class object_joint_randomization(RobotObjectTrackRandomization):
         joint_friction = sample_uniform(*self.friction_range, (len(env_ids),), self.device)
         joint_damping = sample_uniform(*self.damping_range, (len(env_ids),), self.device)
 
-        self.object.friction[env_ids] = joint_friction
-        self.object.damping[env_ids] = joint_damping
+        self.object._custom_friction[env_ids] = joint_friction
+        self.object._custom_damping[env_ids] = joint_damping
 
 # class keypoint_virtual_force(RobotTrackRandomization):
 #     def __init__(

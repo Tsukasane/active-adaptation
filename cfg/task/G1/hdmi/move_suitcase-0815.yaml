@@ -1,0 +1,58 @@
+# @package task
+defaults:
+  - base/hdmi-base
+  - _self_
+
+name: G1TrackSuitcase
+
+robot:
+  name: g1_WBT
+  robot_type: g1_29dof_rubberhand-feet_sphere-eef_box_approx-body_capsule
+  override_params:
+    init_state:
+      joint_pos:
+        left_wrist_yaw_joint: -0.8
+        right_wrist_yaw_joint: 0.8
+
+command:
+  data_path: data/motion/data_for_sim/move_suitcase-0815
+  root_body_name: "pelvis"
+
+  pose_range:
+    x: [-0.0, 0.0]
+    y: [-0.0, 0.0]
+    yaw: [-0.0, 0.0]
+
+  object_asset_name: "suitcase"
+  object_body_name:  "suitcase"
+
+  # object_pose_range:
+  #   roll: [-0.0, 0.0]
+  #   pitch: [-0.0, 0.0]
+
+  contact_target_pos_offset:
+    - [-0.1,-0.18, 0.3]  # left wrist
+    - [-0.1, 0.18, 0.3]  # right wrist
+  contact_eef_pos_offset:
+    - [0.1, 0.0, 0.0]  # left wrist
+    - [0.1, 0.0, 0.0]  # right wrist
+
+randomization:
+  object_body_randomization:
+    static_dynamic_friction_ratio_range: [1.0, 2.0]
+    dynamic_friction_range: [0.3, 0.8]
+    restitution_range: [0.0, 0.2]
+    mass_range: [1.0, 2.0]
+  
+  body_scale:
+    name: "suitcase"
+    scale_range: [0.9, 1.1]
+
+reward:
+  object_tracking:
+    _multiplicative: true
+    eef_contact_exp: {weight: 5.0, enabled: true, pos_sigma: 0.2, frc_sigma: 1.0, frc_thres: [0.0, 1.0, 0.0]}
+    eef_contact_exp_2(eef_contact_exp): {weight: 2.0, enabled: true, pos_sigma: 0.5, frc_sigma: 3.0, frc_thres: [0.0, 1.0, 0.0]}
+
+termination:
+  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.2, frc_thres: [0.0, 1.0, 0.0]}

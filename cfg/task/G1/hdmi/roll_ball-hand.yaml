@@ -1,0 +1,42 @@
+# @package task
+defaults:
+  - base/hdmi-base
+  - _self_
+
+name: G1RollBall
+robot:
+  name: g1_WBT
+  robot_type: g1_29dof_rubberhand-feet_sphere-eef_box_approx-body_capsule
+
+command:
+  data_path: data/motion/data_for_sim/roll_ball-hand
+  root_body_name: "pelvis"
+
+  object_asset_name: "ball"
+  object_body_name:  "ball"
+  contact_target_pos_offset:
+    - [0.1, 0.0, 0.0]  # left wrist
+    - [0.1, 0.0, 0.0]  # right wrist
+
+randomization:
+  object_body_randomization:
+    static_dynamic_friction_ratio_range: [1.0, 2.0]
+    dynamic_friction_range: [0.2, 0.8]
+    restitution_range: [0.0, 0.2]
+    # mass_range: [10.0, 40.0]
+    mass_range: [5.0, 10.0]
+  
+  body_scale:
+    name: "ball"
+    scale_range: [0.9, 1.1]
+    homogeneous_scale: true
+
+reward:
+  object_tracking:
+    eef_contact_exp_max: {weight: 0.5, enabled: true, pos_sigma: 0.2, pos_tolerance: 0.32, frc_sigma: 10, frc_thres: 1.0}
+  debug:
+    eef_contact_all:    {weight: 1.0, enabled: false, frc_thres: 1.0, pos_thres: 0.4}
+
+termination:
+  cum_lost_contact_steps:   {min_steps: 200, pos_thres: 0.4, frc_thres: 2.0}
+  cum_object_ori_error:     {min_steps: 25, threshold: 5.0}

@@ -24,8 +24,9 @@ PORTS = {
     "foldchair_pose": 5565,
     "foldchair_joint_pos": 5566,
     "door_pose": 5567,
-    "door_joint_pos": 5568,
-    "stool_support_pose": 5569,
+    "door_panel_pose": 5568,
+    "door_joint_pos": 5569,
+    "stool_support_pose": 5570,
 }
 
 class PoseMessage:
@@ -126,10 +127,10 @@ class ZMQPublisher:
 
 class ZMQSubscriber:
     """ZMQ Subscriber wrapper"""
-    def __init__(self, port: int):
+    def __init__(self, port: int, ip: str = "localhost"):
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.SUB)
-        self.socket.connect(f"tcp://localhost:{port}")
+        self.socket.connect(f"tcp://{ip}:{port}")
         self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all messages
         self.socket.setsockopt(zmq.RCVTIMEO, 10)  # 10ms timeout
         

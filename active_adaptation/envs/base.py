@@ -25,6 +25,7 @@ if active_adaptation.get_backend() == "isaac":
     import isaaclab.sim as sim_utils
     from isaaclab.terrains.trimesh.utils import make_plane
     from isaaclab.scene import InteractiveScene
+    from isaaclab.sensors import TiledCamera
     from isaaclab.utils.warp import convert_to_warp_mesh, raycast_mesh
     from pxr import UsdGeom, UsdPhysics
 
@@ -261,7 +262,13 @@ class _Env(EnvBase):
             self._stats_ema[group_name] = {}
             self._perf_ema_reward[group_name] = {}
 
+            multiplicative = False
             for rew_spec, params in func_specs.items():
+                if params is None:
+                    continue
+                if rew_spec == "_multiplicative":
+                    multiplicative = params
+                    continue
                 rew_name, cls_name = parse_name_and_class(rew_spec)
                 rew_cls = mdp.Reward.registry[cls_name]
                 reward: mdp.Reward = rew_cls(env=self, **params)
@@ -275,8 +282,8 @@ class _Env(EnvBase):
                 print(f"\t{rew_name}: \t{reward.weight:.2f}, \t{reward.enabled}")
                 self._stats_ema[group_name][rew_name] = (torch.tensor(0., device=self.device), torch.tensor(0., device=self.device))
                 self._perf_ema_reward[group_name][rew_name] = (torch.tensor(0., device=self.device), torch.tensor(0., device=self.device))
-
-            self.reward_groups[group_name] = RewardGroup(self, group_name, funcs)
+            
+            self.reward_groups[group_name] = RewardGroup(self, group_name, funcs, multiplicative=multiplicative)
             reward_spec["stats", group_name, "return"] = UnboundedContinuous(1, device=self.device)
 
         reward_spec["reward"] = UnboundedContinuous(max(1, len(self.reward_groups)), device=self.device)
@@ -556,6 +563,22 @@ class _Env(EnvBase):
             rgb_data = np.frombuffer(rgb_data, dtype=np.uint8).reshape(*rgb_data.shape)
             # return the rgb data
             return rgb_data[:, :, :3]
+        elif mode == "ego_rgb":
+            assert "tiled_camera" in self.scene.sensors, "Tiled camera is not set up in the scene."
+            tiled_camera: TiledCamera = self.scene.sensors["tiled_camera"]
+            ego_rgb_data = tiled_camera.data.output["rgb"][0] # get the first environment's RGB data
+            return ego_rgb_data.cpu().numpy()[:, :, :3]  # Convert to numpy and keep RGB channels
+        elif mode == "ego_depth":
+            import cv2
+            assert "tiled_camera" in self.scene.sensors, "Tiled camera is not set up in the scene."
+            tiled_camera: TiledCamera = self.scene.sensors["tiled_camera"]
+            ego_depth_data = tiled_camera.data.output["depth"][0].squeeze(-1) # get the first environment's depth data
+            min_depth, max_depth = 0.1, 4.0
+            ego_depth_data = torch.nan_to_num(ego_depth_data, nan=max_depth, posinf=max_depth, neginf=min_depth).cpu().numpy()
+            ego_depth_data = (ego_depth_data - min_depth) / (max_depth - min_depth)
+            ego_depth_data = (np.clip(ego_depth_data, 0, 1) * 255).astype(np.uint8)
+            rgb = cv2.applyColorMap(ego_depth_data, colormap=cv2.COLORMAP_JET)
+            return rgb
         else:
             raise NotImplementedError
 
@@ -586,10 +609,11 @@ class _Env(EnvBase):
 
 
 class RewardGroup:
-    def __init__(self, env: _Env, name: str, funcs: OrderedDict[str, mdp.Reward]):
+    def __init__(self, env: _Env, name: str, funcs: OrderedDict[str, mdp.Reward], multiplicative: bool):
         self.env = env
         self.name = name
         self.funcs = funcs
+        self.multiplicative = multiplicative
         self.enabled_rewards = sum([func.enabled for func in funcs.values()])
         self.rew_buf = torch.zeros(env.num_envs, self.enabled_rewards, device=env.device)
     
@@ -616,7 +640,11 @@ class RewardGroup:
         #     raise RuntimeError(f"Error in computing reward for {key}: {e}")
         if len(rewards):
             self.rew_buf[:] = torch.cat(rewards, 1)
-        return self.rew_buf.sum(1, True)
+
+        if self.multiplicative:
+            return self.rew_buf.prod(dim=1, keepdim=True)
+        else:
+            return self.rew_buf.sum(dim=1, keepdim=True)
 
 
 def classify_callback(callback):
