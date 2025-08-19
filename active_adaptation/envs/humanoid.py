@@ -225,8 +225,8 @@ class Humanoid(SimpleEnv):
                 )
 
     def _init_adaptive_sigma(self):
-        self._adaptive_sigma = {k: v for k, v in ADAPTIVE_SIGMA["sigma"].items()}
-        self._error_ema = {k: v for k, v in self._adaptive_sigma.items()}
+        self._adaptive_sigma = {k: torch.tensor(v, device=self.device) for k, v in ADAPTIVE_SIGMA["sigma"].items()}
+        self._error_ema = {k: torch.tensor(v, device=self.device) for k, v in self._adaptive_sigma.items()}
         self._alpha = ADAPTIVE_SIGMA["params"]["alpha"]
 
     def _update_adaptive_sigma(self, error, term):
@@ -246,7 +246,7 @@ class Humanoid(SimpleEnv):
             error = (root_pos_w - ref_root_translation).square().sum(-1, True).sqrt()
             # reward = torch.exp(- error / self.sigma)
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_root_trans"])
-            self.env._update_adaptive_sigma(error.mean().item(), "tracking_root_trans")
+            self.env._update_adaptive_sigma(error.mean(), "tracking_root_trans")
             return reward
         
     class tracking_root_rot(mdp.Reward):
@@ -262,7 +262,7 @@ class Humanoid(SimpleEnv):
             error = 2 * torch.acos(dot_product.abs().clamp(min=-1.0, max=1.0))
             # reward = torch.exp(- error / self.sigma)
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_root_rot"])
-            self.env._update_adaptive_sigma(error.mean().item(), "tracking_root_rot")
+            self.env._update_adaptive_sigma(error.mean(), "tracking_root_rot")
             return reward
         
     class tracking_qpos(mdp.Reward):
@@ -278,7 +278,7 @@ class Humanoid(SimpleEnv):
             error = (qpos - ref_qpos).square().mean(-1, True)
             # reward = torch.exp(- error / self.sigma)
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_qpos"])
-            self.env._update_adaptive_sigma(error.mean().item(), "tracking_qpos")
+            self.env._update_adaptive_sigma(error.mean(), "tracking_qpos")
             return reward
         
     class tracking_keypoints(mdp.Reward):
@@ -299,7 +299,7 @@ class Humanoid(SimpleEnv):
             error = diff.square().sum(-1, True).sqrt()
             # reward = torch.exp(- error / self.sigma)
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_keypoints"])
-            self.env._update_adaptive_sigma(error.mean().item(), "tracking_keypoints")
+            self.env._update_adaptive_sigma(error.mean(), "tracking_keypoints")
             return reward
 
     class tracking_eff(tracking_keypoints):
@@ -317,7 +317,7 @@ class Humanoid(SimpleEnv):
             error = diff.square().sum(-1, True).sqrt()
             # reward = torch.exp(- error / self.sigma)
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_eff"])
-            self.env._update_adaptive_sigma(error.mean().item(), "tracking_eff")
+            self.env._update_adaptive_sigma(error.mean(), "tracking_eff")
             return reward
         
     class tracking_contact(mdp.Reward):
