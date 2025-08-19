@@ -253,12 +253,16 @@ class PPOPolicy(TensorDictModuleBase):
 
     # @torch.compile
     def _update(self, tensordict: TensorDict):
-        dist = self.actor.get_dist(tensordict)
-        log_probs = dist.log_prob(tensordict[ACTION_KEY])
+        action_data = tensordict[ACTION_KEY]
+        log_probs_data = tensordict["action_log_prob"]
+        self.actor(tensordict)
+        dist = IndependentNormal(tensordict["loc"], tensordict["scale"])
+        # dist = self.actor.get_dist(tensordict)
+        log_probs = dist.log_prob(action_data)
         entropy = dist.entropy().mean()
 
         adv = tensordict["adv"]
-        log_ratio = (log_probs - tensordict["action_log_prob"]).unsqueeze(-1)
+        log_ratio = (log_probs - log_probs_data).unsqueeze(-1)
         ratio = torch.exp(log_ratio)
         surr1 = adv * ratio
         surr2 = adv * ratio.clamp(1.-self.clip_param, 1.+self.clip_param)

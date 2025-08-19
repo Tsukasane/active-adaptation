@@ -109,7 +109,7 @@ reward:
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
     joint_torques_l2:   {weight: 2.5e-6, enabled: true, joint_names: [waist_yaw_joint, .*hip.*, .*knee.*,
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
-    action_rate_l2:     {weight: 0.2, enabled: true}
+    action_rate_l2:     {weight: 0.5, enabled: true}
     action_rate2_l2:    {weight: 0.05, enabled: true}
 
 randomization:

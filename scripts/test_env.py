@@ -145,10 +145,10 @@ def main(cfg: DictConfig):
         if should_save(i):
             save(policy, f"checkpoint_{i}")
 
-        run.log(info)
 
         if aa.is_main_process():
             print(OmegaConf.to_yaml({k: v for k, v in info.items() if isinstance(v, (float, int))}))
+            run.log(info)
     
     if aa.is_main_process():
         save(policy, "checkpoint_final")
