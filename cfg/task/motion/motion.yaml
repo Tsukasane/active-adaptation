@@ -139,7 +139,7 @@ randomization:
 
 termination:
   # dummy: {}
-  root_deviation: {max_distance: 0.5}
+  root_deviation: {max_distance: 0.4}
   root_rot_deviation: {max_theta: 30}
   track_kp_error: {max_distance: 0.5, 
                   body_names: [ left_rubber_hand, right_rubber_hand,
