@@ -164,6 +164,7 @@ class Humanoid(SimpleEnv):
             self.steps = steps
             self.ref_keypoints = self.env.command_manager.kp_global    # (num_frames, num_joints, 3)
             self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
 
             self.root_quat_w = self.robot.data.root_quat_w[:, None, None]    # (num_envs, 1, 1, 4)
             self.body_pos_global = self.robot.data.body_pos_w[:, self.body_indices]
@@ -180,6 +181,7 @@ class Humanoid(SimpleEnv):
             timestep = torch.min(timestep, max_frame[:, None]-1)
             ref_keypoints = self.ref_keypoints[timestep].to(self.device)   # (num_envs, steps, num_joints, 3)
             ref_keypoints.add_(self.env.scene.env_origins[:, None, None])
+            ref_keypoints = ref_keypoints[:, :, self.idx, :]
 
             body_pos_global = self.body_pos_global.unsqueeze(1).expand_as(ref_keypoints)
             ref_keypoints_gap = quat_rotate_inverse(self.root_quat_w, ref_keypoints - body_pos_global)
@@ -190,6 +192,7 @@ class Humanoid(SimpleEnv):
                 timestep = self.env.episode_length_buf.cpu()
                 ref_keypoints = self.ref_keypoints[timestep].to(self.device)    # (num_envs, num_joints, 3)
                 ref_keypoints.add_(self.env.scene.env_origins[:, None])
+                ref_keypoints = ref_keypoints[:, self.idx, :]
                 for i in range(ref_keypoints.shape[1]):
                     self.env.debug_draw.point(ref_keypoints[:, i], color=(1., 0., 0., 1.), size = 20)
                     self.env.debug_draw.point(self.body_pos_global[:, i], color=(0., 1., 0., 1.), size = 20)

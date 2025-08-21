@@ -64,8 +64,8 @@ class PPOStudentConfig:
     vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
     
     kl_coef: float = 0.01
-    teacher_ckpt_path: str = "/ssd/cv/motion_tracking/active-adaptation/scripts/outputs/2025-08-20/14-27-26-parallel-ppo/wandb/latest-run/files/checkpoint_1500.pt"
-
+    teacher_ckpt_path: Union[str, None] = None
+    # teacher_ckpt_path: str = "/home/ubuntu/Desktop/isaacsim45/scripts/outputs/2025-08-20/17-48-29-motion-ppo/wandb/latest-run/files/checkpoint_28200.pt"
     compile: bool = False
     use_ddp: bool = True
     checkpoint_path: Union[str, None] = None
@@ -184,15 +184,16 @@ class PPOStudentPolicy(TensorDictModuleBase):
             self.update = torch.compile(self.update, fullgraph=True)
 
         # build teacher policy and teacher vecnorm
-        from active_adaptation.learning.ppo.ppo import PPOConfig, PPOPolicy
-        teacher = PPOPolicy(PPOConfig(), observation_spec, action_spec, reward_spec, device)
-        teacher.load_state_dict(torch.load(cfg.teacher_ckpt_path, weights_only=False)["policy"])
-        teacher.actor.eval()
-        teacher.vecnorm.freeze()
-        self.teacher = TensorDictSequential(
-            teacher.vecnorm.to_observation_norm(),
-            teacher.actor,
-        )
+        if cfg.teacher_ckpt_path is not None:
+            from active_adaptation.learning.ppo.ppo import PPOConfig, PPOPolicy
+            teacher = PPOPolicy(PPOConfig(), observation_spec, action_spec, reward_spec, device)
+            teacher.load_state_dict(torch.load(cfg.teacher_ckpt_path, weights_only=False)["policy"])
+            teacher.actor.eval()
+            teacher.vecnorm.freeze()
+            self.teacher = TensorDictSequential(
+                teacher.vecnorm.to_observation_norm(),
+                teacher.actor,
+            )
 
     def count_parameters(self):
         num_actor_params = sum(p.numel() for p in self.actor.parameters() if p.requires_grad)
