@@ -342,16 +342,17 @@ class Humanoid(SimpleEnv):
             return reward
         
     # Joint Position Penalty
-    class joint_pos_l2(mdp.Reward):
-        def __init__(self, env, weight: float, enabled: bool = True, sigma: float = 0.1, joint_names: str = ".*"):
+    class joint_pos_default(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, joint_names: str=".*"):
             super().__init__(env, weight, enabled)
-            self.robot: Articulation = self.env.scene["robot"]
-            self.sigma = sigma
-            self.joint_indices, self.joint_names = self.robot.find_joints(joint_names, preserve_order=True)
-
+            self.asset: Articulation = self.env.scene["robot"]
+            self.joint_ids = self.asset.find_joints(joint_names)[0]
+            self.default_joint_pos = self.asset.data.default_joint_pos[:, self.joint_ids].clone()
+            self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
+        
         def compute(self) -> torch.Tensor:
-            qpos = self.robot.data.joint_pos[:, self.joint_indices]
-            return -qpos.square().mean(-1, True)
+            dev = self.asset.data.joint_pos[:, self.joint_ids] - self.default_joint_pos
+            return - dev.square().mean(1, True)
 
     # Early Termination Conditions
     class dummy(mdp.Termination):

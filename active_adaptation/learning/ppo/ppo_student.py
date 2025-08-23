@@ -63,9 +63,11 @@ class PPOStudentConfig:
     value_norm: bool = False
     vecnorm: List[str] = field(default_factory=lambda: [OBS_KEY, OBS_PRIV_KEY])
     
+    short_history: int = 10
+
     kl_coef: float = 0.01
-    teacher_ckpt_path: Union[str, None] = None
-    # teacher_ckpt_path: str = "/home/ubuntu/Desktop/isaacsim45/scripts/outputs/2025-08-20/17-48-29-motion-ppo/wandb/latest-run/files/checkpoint_28200.pt"
+    # teacher_ckpt_path: Union[str, None] = None
+    teacher_ckpt_path: str = "/ssd/cv/motion_tracking/active-adaptation/scripts/outputs/2025-08-21/18-15-52-3090_parallel-ppo/wandb/latest-run/files/checkpoint_final.pt"
     compile: bool = False
     use_ddp: bool = True
     checkpoint_path: Union[str, None] = None

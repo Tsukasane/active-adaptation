@@ -18,6 +18,7 @@ from collections import OrderedDict
 from torchvision.io import write_video
 from omegaconf import OmegaConf, DictConfig
 import active_adaptation.learning
+from active_adaptation.learning.modules.common import *
 from active_adaptation.utils.wandb import parse_checkpoint_path
 import active_adaptation
 
@@ -100,7 +101,8 @@ def make_env_policy(cfg: DictConfig):
     cfg.seed = cfg.seed + active_adaptation.get_local_rank()
     
     from active_adaptation.envs import SimpleEnv, Humanoid
-    from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, VecNorm, StepCounter
+    from active_adaptation.utils.torchrl import StackFrames
+    from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, VecNorm, StepCounter, CatFrames
     
     checkpoint_path = parse_checkpoint_path(cfg.checkpoint_path)
     if checkpoint_path is not None:
@@ -110,6 +112,20 @@ def make_env_policy(cfg: DictConfig):
 
     base_env = Humanoid(cfg.task)
     transform = Compose(InitTracker(), StepCounter())
+
+    long_history = cfg.algo.get("long_history", 0)
+    if long_history > 0:
+        print(colored(f"[Info]: Long history length {long_history}.", "green"))
+        transform.append(StackFrames(long_history, [OBS_KEY], [OBS_HIST_KEY]))
+    short_history = cfg.algo.get("short_history", 0)
+    if short_history > 0:
+        print(colored(f"[Info]: Short history length {short_history}.", "green"))
+        transform.append(CatFrames( short_history, 
+                                    dim=-1,
+                                    padding="same",
+                                    in_keys=[OBS_KEY], 
+                                    out_keys=[OBS_HIST_KEY]))
+
 
     env = TransformedEnv(base_env, transform)
     # env.set_seed(cfg.seed)
