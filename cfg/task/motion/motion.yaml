@@ -62,13 +62,20 @@ observation:
                                             .*shoulder_roll.*, .*shoulder_yaw.*,
                                              .*elbow.*],
                             steps: 10}
-    ref_keypoints:        {steps: 10}
-    ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+    # ref_keypoints:        {steps: 10}
+    # ref_keypoints_gap:    { body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+    #                                     right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+    #                                     left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+    #                                     right_shoulder_roll_link, right_elbow_link, right_rubber_hand],
+    #                         steps: 10}
+    ref_trans_gap:        {steps: 10}
+    # 添加 local keypoints 追踪
+    ref_keypoints_local: {steps: 10}  # 局部坐标系下的关键点
+    ref_keypoints_gap_local: {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
                                         right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
                                         left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
                                         right_shoulder_roll_link, right_elbow_link, right_rubber_hand],
                             steps: 10}
-    ref_trans_gap:        {steps: 10}
   priv:
     root_height:      {}
     root_linvel_b:    {}
@@ -90,12 +97,12 @@ reward:
                                             # .*ankle_pitch.*,  
                                             .*shoulder_roll.*, .*shoulder_yaw.*,
                                              .*elbow.*]}
-    tracking_keypoints:     {weight: 6., enabled: true,
+    tracking_keypoints:     {weight: 0., enabled: true,
                               body_names: [left_hip_pitch_link, left_knee_link,
                                         right_hip_pitch_link, right_knee_link,
                                         left_shoulder_roll_link, left_elbow_link, 
                                         right_shoulder_roll_link, right_elbow_link]}
-    tracking_eff:           {weight: 8., enabled: true,
+    tracking_eff:           {weight: 0., enabled: true,
                               body_names: [left_ankle_roll_link, left_rubber_hand,
                                         right_ankle_roll_link, right_rubber_hand]}
     tracking_contact:       {weight: 2., enabled: true}
@@ -111,6 +118,14 @@ reward:
                                                                   .*shoulder.*, .*elbow.*, .*ankle.*]}
     action_rate_l2:     {weight: 0.5, enabled: true}
     action_rate2_l2:    {weight: 0.05, enabled: true}
+
+    # 修改关键点追踪奖励为 local
+    tracking_keypoints_local: {weight: 6., enabled: true, body_names: [left_hip_pitch_link, left_knee_link,
+                                        right_hip_pitch_link, right_knee_link,
+                                        left_shoulder_roll_link, left_elbow_link, 
+                                        right_shoulder_roll_link, right_elbow_link]}
+    tracking_eff_local: {weight: 8., enabled: true, body_names: [left_ankle_roll_link, left_rubber_hand,
+                                        right_ankle_roll_link, right_rubber_hand]}
 
 randomization:
   push:
@@ -141,6 +156,8 @@ termination:
   # dummy: {}
   root_deviation: {max_distance: 0.4}
   root_rot_deviation: {max_theta: 30}
-  track_kp_error: {max_distance: 0.5, 
-                  body_names: [ left_rubber_hand, right_rubber_hand,
+  # track_kp_error: {max_distance: 0.5, 
+  #                 body_names: [ left_rubber_hand, right_rubber_hand,
+  #                               left_ankle_roll_link, right_ankle_roll_link]}
+  track_kp_error_local: {max_distance: 0.5, body_names: [left_rubber_hand, right_rubber_hand,
                                 left_ankle_roll_link, right_ankle_roll_link]}
