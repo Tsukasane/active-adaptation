@@ -221,6 +221,7 @@ class Humanoid(SimpleEnv):
             super().__init__(env)
             self.robot: Articulation = self.env.scene["robot"]
             self.steps = steps
+            self.ref_keypoints_draw = self.env.command_manager.kp_global 
             self.ref_keypoints = self.env.command_manager.kp_local    # 使用 local keypoints
             self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
             self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
@@ -256,7 +257,8 @@ class Humanoid(SimpleEnv):
         def debug_draw(self):
             if active_adaptation._BACKEND == "isaac":
                 timestep = self.env.episode_length_buf.cpu()
-                ref_keypoints = self.ref_keypoints[timestep].to(self.device)    # (num_envs, num_joints, 3)
+                ref_keypoints = self.ref_keypoints_draw[timestep].to(self.device)    # (num_envs, num_joints, 3)
+                ref_keypoints.add_(self.env.scene.env_origins[:, None])
                 ref_keypoints = ref_keypoints[:, self.idx, :]
                 for i in range(ref_keypoints.shape[1]):
                     self.env.debug_draw.point(ref_keypoints[:, i], color=(1., 0., 0., 1.), size = 20)
