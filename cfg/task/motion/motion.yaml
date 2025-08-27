@@ -76,6 +76,17 @@ observation:
                                         left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
                                         right_shoulder_roll_link, right_elbow_link, right_rubber_hand],
                             steps: 10}
+    # 新增：Body 线速度和角速度观测
+    ref_body_linvel: {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                   right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                   left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+                                   right_shoulder_roll_link, right_elbow_link, right_rubber_hand],
+                      steps: 10}
+    ref_body_angvel: {body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                   right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                   left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+                                   right_shoulder_roll_link, right_elbow_link, right_rubber_hand],
+                      steps: 10}
   priv:
     root_height:      {}
     root_linvel_b:    {}
@@ -126,6 +137,16 @@ reward:
                                         right_shoulder_roll_link, right_elbow_link]}
     tracking_eff_local: {weight: 8., enabled: true, body_names: [left_ankle_roll_link, left_rubber_hand,
                                         right_ankle_roll_link, right_rubber_hand]}
+    
+    # 新增：Body 线速度和角速度追踪奖励
+    tracking_body_linvel: {weight: 3., enabled: true, body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                                                   right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                                                   left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+                                                                   right_shoulder_roll_link, right_elbow_link, right_rubber_hand]}
+    tracking_body_angvel: {weight: 2., enabled: true, body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                                                   right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                                                   left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+                                                                   right_shoulder_roll_link, right_elbow_link, right_rubber_hand]}
 
 randomization:
   push:
@@ -161,3 +182,9 @@ termination:
   #                               left_ankle_roll_link, right_ankle_roll_link]}
   track_kp_error_local: {max_distance: 0.5, body_names: [left_rubber_hand, right_rubber_hand,
                                 left_ankle_roll_link, right_ankle_roll_link]}
+  
+  # 新增：Body 速度误差终止条件
+  track_body_vel_error: {max_linvel_error: 2.0, max_angvel_error: 3.0, body_names: [left_hip_pitch_link, left_knee_link, left_ankle_roll_link, 
+                                                                                     right_hip_pitch_link, right_knee_link, right_ankle_roll_link,
+                                                                                     left_shoulder_roll_link, left_elbow_link, left_rubber_hand, 
+                                                                                     right_shoulder_roll_link, right_elbow_link, right_rubber_hand]}

@@ -17,6 +17,23 @@ from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 
 quat_rotate = batchify(quat_rotate)
 quat_rotate_inverse = batchify(quat_rotate_inverse)
+
+# 添加缺失的四元数操作函数
+def quat_multiply(a: torch.Tensor, b: torch.Tensor):
+    """四元数乘法"""
+    x1, y1, z1, w1 = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    x2, y2, z2, w2 = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    
+    return torch.stack([x, y, z, w], dim=-1)
+
+def quat_conjugate(q: torch.Tensor):
+    """四元数共轭"""
+    return torch.cat([-q[..., :3], q[..., 3:4]], dim=-1)
 from tensordict.tensordict import TensorDictBase, TensorDict
 
 from active_adaptation.envs.locomotion import SimpleEnv
@@ -31,7 +48,9 @@ ADAPTIVE_SIGMA = {
         "tracking_keypoints": 0.36,
         "tracking_eff": 0.36,
         "tracking_keypoints_local": 0.36,  # 新增：local keypoints 追踪的 sigma
-        "tracking_eff_local": 0.36         # 新增：local eff 追踪的 sigma
+        "tracking_eff_local": 0.36,        # 新增：local eff 追踪的 sigma
+        "tracking_body_linvel": 0.5,       # 新增：body 线速度追踪的 sigma
+        "tracking_body_angvel": 0.5        # 新增：body 角速度追踪的 sigma
     },
     "params": {
         "alpha": 1e-3
@@ -277,8 +296,9 @@ class Humanoid(SimpleEnv):
             step_range = torch.arange(self.steps)
             timestep = timestep.unsqueeze(-1) + step_range
             timestep = torch.min(timestep, max_frame[:, None]-1)
+            # [450, 3]
             ref_root_translation = self.ref_root_translation[timestep].to(self.device)  # env world coords, (num_envs, steps, 3)
-            ref_root_translation.add_(self.env.scene.env_origins.unsqueeze(1))
+            ref_root_translation.add_(self.env.scene.env_origins.unsqueeze(1)) # [4096, 10, 3]
             self.root_pos = self.robot.data.root_pos_w.unsqueeze(1) # obtained from sim, the large world coords
             root_quat_w = self.robot.data.root_quat_w.unsqueeze(1)
             self.gap = ref_root_translation - self.root_pos
@@ -293,6 +313,78 @@ class Humanoid(SimpleEnv):
                     color=(1., 0., 1., 1.),
                     size=1.
                 )
+
+    
+    class ref_body_linvel(mdp.Observation):
+        def __init__(self, env, body_names: str, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            
+            # 获取参考关键点位置（线速度计算用 global）
+            ref_keypoints_global = self.env.command_manager.kp_global[timestep].to(self.device)
+            ref_keypoints_global.add_(self.env.scene.env_origins[:, None, None])
+            ref_keypoints_global = ref_keypoints_global[:, :, self.idx, :]
+            
+            # 计算线速度（位置差分，必须用 global 坐标）
+            if timestep[0, 0] > 0:
+                prev_timestep = timestep - 1
+                prev_ref_keypoints_global = self.env.command_manager.kp_global[prev_timestep].to(self.device)
+                prev_ref_keypoints_global.add_(self.env.scene.env_origins[:, None, None])
+                prev_ref_keypoints_global = prev_ref_keypoints_global[:, :, self.idx, :]
+                ref_linvel = (ref_keypoints_global - prev_ref_keypoints_global) * 50  # 50 Hz
+            else:
+                ref_linvel = torch.zeros_like(ref_keypoints_global)
+            
+            return ref_linvel.reshape(self.num_envs, -1)
+    
+    class ref_body_angvel(mdp.Observation):
+        def __init__(self, env, body_names: str, steps: int=1):
+            super().__init__(env)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.steps = steps
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self) -> torch.Tensor:
+            timestep = self.env.episode_length_buf.cpu()
+            max_frame = self.env.max_episode_length.cpu()
+            step_range = torch.arange(self.steps)
+            timestep = timestep.unsqueeze(-1) + step_range
+            timestep = torch.min(timestep, max_frame[:, None]-1)
+            
+            # 计算角速度：使用 local 坐标以获得更准确的结果
+            if timestep[0, 0] > 0:
+                prev_timestep = timestep - 1
+                ref_keypoints_local_t = self.env.command_manager.kp_local[timestep].to(self.device)[:, :, self.idx, :]
+                ref_keypoints_local_t1 = self.env.command_manager.kp_local[prev_timestep].to(self.device)[:, :, self.idx, :]
+                
+                root_quat_t = self.env.command_manager.root_orientation[timestep].to(self.device)
+                root_quat_t1 = self.env.command_manager.root_orientation[prev_timestep].to(self.device)
+                
+                # 将前一帧的 local 坐标转换到当前帧的坐标系
+                # 计算从 t-1 到 t 的旋转变化
+                quat_diff = quat_multiply(root_quat_t, quat_conjugate(root_quat_t1))
+                # 扩展 quat_diff 以匹配 ref_keypoints_local_t1 的形状
+                quat_diff_expanded = quat_diff.unsqueeze(2).expand(-1, -1, ref_keypoints_local_t1.shape[2], -1) # [num_envs, n_steps, 4] --> 
+                prev_kp_in_curr_frame = quat_rotate(quat_diff_expanded, ref_keypoints_local_t1)
+                
+                # 计算角度变化（使用向量叉积）
+                cross_product = torch.cross(prev_kp_in_curr_frame, ref_keypoints_local_t, dim=-1)
+                ref_angvel_magnitude = cross_product.norm(dim=-1, keepdim=True) * 50  # 50 Hz
+            else:
+                ref_angvel_magnitude = torch.zeros(timestep.shape[0], timestep.shape[1], len(self.idx), 1, device=self.device)
+            
+            return ref_angvel_magnitude.reshape(self.num_envs, -1)
 
     def _init_adaptive_sigma(self):
         self._adaptive_sigma = {k: torch.tensor(v, device=self.device) for k, v in ADAPTIVE_SIGMA["sigma"].items()}
@@ -414,7 +506,7 @@ class Humanoid(SimpleEnv):
 
             diff = (ref_keypoints - body_pos_local).norm(dim=-1)
             error = diff.square().sum(-1, True).sqrt()
-            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_keypoints_local"])
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_keypoints_local"]) # [num_envs, 1]
             self.env._update_adaptive_sigma(error.mean(), "tracking_keypoints_local")
             return reward
 
@@ -426,7 +518,6 @@ class Humanoid(SimpleEnv):
             timestep = (self.env.episode_length_buf-1).cpu()
             ref_keypoints = self.env.command_manager.kp_local[timestep].to(self.device)[:, self.idx]
 
-            # 将当前机器人身体位置转换为局部坐标系
             root_pos_w = self.robot.data.root_pos_w[:, None]    # (num_envs, 1, 3)
             root_quat_w = self.robot.data.root_quat_w[:, None]  # (num_envs, 1, 4)
             
@@ -440,6 +531,84 @@ class Humanoid(SimpleEnv):
             error = diff.square().sum(-1, True).sqrt()
             reward = torch.exp(- error / self.env._adaptive_sigma["tracking_eff_local"])
             self.env._update_adaptive_sigma(error.mean(), "tracking_eff_local")
+            return reward
+    
+    # 新增：Body 线速度和角速度追踪奖励类
+    class tracking_body_linvel(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, body_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+            
+            # 计算参考线速度
+            ref_keypoints_global = self.env.command_manager.kp_global[timestep].to(self.device)
+            ref_keypoints_global.add_(self.env.scene.env_origins[:, None])
+            ref_keypoints_global = ref_keypoints_global[:, self.idx]
+            
+            # ref_linvel (n_envs, 12, 3)
+            if timestep[0] > 0:
+                prev_timestep = timestep - 1
+                prev_ref_keypoints_global = self.env.command_manager.kp_global[prev_timestep].to(self.device)
+                prev_ref_keypoints_global.add_(self.env.scene.env_origins[:, None])
+                prev_ref_keypoints_global = prev_ref_keypoints_global[:, self.idx]
+                ref_linvel = (ref_keypoints_global - prev_ref_keypoints_global) * 50  # 50 Hz
+            else:
+                ref_linvel = torch.zeros_like(ref_keypoints_global)
+            
+            # current_linvel (n_envs, 12, 3)
+            current_linvel = self.robot.data.body_vel_w[:, self.body_indices, :3]  # 前3个元素是线速度
+            
+            error = (ref_linvel - current_linvel).norm(dim=-1)
+            error = error.square().sum(-1, True).sqrt()
+            
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_body_linvel"])
+            self.env._update_adaptive_sigma(error.mean(), "tracking_body_linvel")
+            return reward
+    
+    class tracking_body_angvel(mdp.Reward):
+        def __init__(self, env, weight: float, enabled: bool = True, body_names: str = ".*"):
+            super().__init__(env, weight, enabled)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf-1).cpu()
+
+            # 计算参考角速度
+            if timestep[0] > 0:
+                prev_timestep = timestep - 1
+                ref_keypoints_local_t = self.env.command_manager.kp_local[timestep].to(self.device)[:, self.idx]
+                ref_keypoints_local_t1 = self.env.command_manager.kp_local[prev_timestep].to(self.device)[:, self.idx]
+                
+                root_quat_t = self.env.command_manager.root_orientation[timestep].to(self.device)
+                root_quat_t1 = self.env.command_manager.root_orientation[prev_timestep].to(self.device)
+                
+                # 将前一帧的 local 坐标转换到当前帧的坐标系
+                quat_diff = quat_multiply(root_quat_t, quat_conjugate(root_quat_t1))
+                # 扩展 quat_diff 以匹配 ref_keypoints_local_t1 的形状
+                quat_diff_expanded = quat_diff.unsqueeze(1).expand(-1, ref_keypoints_local_t1.shape[1], -1)
+                prev_kp_in_curr_frame = quat_rotate(quat_diff_expanded, ref_keypoints_local_t1)
+                
+                # cross_product (n_envs, 12, 3)
+                cross_product = torch.cross(prev_kp_in_curr_frame, ref_keypoints_local_t, dim=-1)
+                ref_angvel_magnitude = cross_product.norm(dim=-1, keepdim=True) * 50  # 50 Hz
+            else:
+                ref_angvel_magnitude = torch.zeros(timestep.shape[0], len(self.idx), 1, device=self.device)
+            
+            # current_angvel (n_envs, 12, 3)
+            current_angvel = self.robot.data.body_vel_w[:, self.body_indices, 3:]  # 后3个元素是角速度
+            current_angvel_magnitude = current_angvel.norm(dim=-1, keepdim=True)
+
+            error = (ref_angvel_magnitude - current_angvel_magnitude).abs()
+            error = error.mean(dim=1)
+            
+            reward = torch.exp(- error / self.env._adaptive_sigma["tracking_body_angvel"])
+            self.env._update_adaptive_sigma(error.mean(), "tracking_body_angvel")
             return reward
         
     class tracking_contact(mdp.Reward):
@@ -561,6 +730,72 @@ class Humanoid(SimpleEnv):
             diff = (ref_keypoints - body_pos_local).norm(dim=-1)    # (num_envs, num_bodies)
             mean_diff = diff.mean(-1, True)     # (num_envs, 1)
             return mean_diff > self.max_distance
+    
+    # 新增：Body 线速度和角速度误差终止条件类
+    class track_body_vel_error(mdp.Termination):
+        def __init__(self, env, max_linvel_error: float, max_angvel_error: float, body_names: str = ".*"):
+            super().__init__(env)
+            self.device = self.env.device
+            self.max_linvel_error = torch.tensor(max_linvel_error, device=self.env.device)
+            self.max_angvel_error = torch.tensor(max_angvel_error, device=self.env.device)
+            self.robot: Articulation = self.env.scene["robot"]
+            self.body_indices, self.body_names = self.robot.find_bodies(body_names, preserve_order=True)
+            self.idx = [self.env.command_manager.bodys.index(name) for name in self.body_names]
+
+        def compute(self, termination: torch.Tensor) -> torch.Tensor:
+            timestep = (self.env.episode_length_buf - 1).cpu()
+            
+            # 计算参考线速度
+            ref_keypoints_global = self.env.command_manager.kp_global[timestep].to(self.device)
+            ref_keypoints_global.add_(self.env.scene.env_origins[:, None])
+            ref_keypoints_global = ref_keypoints_global[:, self.idx]
+            
+            if timestep[0] > 0:
+                prev_timestep = timestep - 1
+                prev_ref_keypoints_global = self.env.command_manager.kp_global[prev_timestep].to(self.device)
+                prev_ref_keypoints_global.add_(self.env.scene.env_origins[:, None])
+                prev_ref_keypoints_global = prev_ref_keypoints_global[:, self.idx]
+                ref_linvel = (ref_keypoints_global - prev_ref_keypoints_global) * 50  # 50 Hz
+            else:
+                ref_linvel = torch.zeros_like(ref_keypoints_global)
+            
+            # 计算参考角速度
+            if timestep[0] > 0:
+                ref_keypoints_local_t = self.env.command_manager.kp_local[timestep].to(self.device)[:, self.idx]
+                ref_keypoints_local_t1 = self.env.command_manager.kp_local[prev_timestep].to(self.device)[:, self.idx]
+                
+                root_quat_t = self.env.command_manager.root_orientation[timestep].to(self.device)
+                root_quat_t1 = self.env.command_manager.root_orientation[prev_timestep].to(self.device)
+                
+                quat_diff = quat_multiply(root_quat_t, quat_conjugate(root_quat_t1))
+                # 扩展 quat_diff 以匹配 ref_keypoints_local_t1 的形状
+                quat_diff_expanded = quat_diff.unsqueeze(1).expand(-1, ref_keypoints_local_t1.shape[1], -1)
+                prev_kp_in_curr_frame = quat_rotate(quat_diff_expanded, ref_keypoints_local_t1)
+                
+                cross_product = torch.cross(prev_kp_in_curr_frame, ref_keypoints_local_t, dim=-1)
+                ref_angvel_magnitude = cross_product.norm(dim=-1, keepdim=True) * 50  # 50 Hz
+            else:
+                ref_angvel_magnitude = torch.zeros(timestep.shape[0], len(self.idx), 1, device=self.device)
+            
+            # 获取当前速度
+            current_linvel = self.robot.data.body_vel_w[:, self.body_indices, :3]  # 前3个元素是线速度
+            current_angvel = self.robot.data.body_vel_w[:, self.body_indices, 3:]  # 后3个元素是角速度
+            current_angvel_magnitude = current_angvel.norm(dim=-1, keepdim=True)
+            
+            # 计算线速度误差
+            linvel_error = (ref_linvel - current_linvel).norm(dim=-1)
+            mean_linvel_error = linvel_error.mean(-1, True)
+            
+            # 计算角速度误差
+            angvel_error = (ref_angvel_magnitude - current_angvel_magnitude).abs()
+            mean_angvel_error = angvel_error.mean(dim=1)
+            # mean_angvel_error = angvel_error.mean(-1, True)
+            
+            # 检查是否超过阈值
+            linvel_exceeded = mean_linvel_error > self.max_linvel_error
+            angvel_exceeded = mean_angvel_error > self.max_angvel_error
+            
+            return linvel_exceeded | angvel_exceeded
 
 def dot(a: torch.Tensor, b: torch.Tensor):
     return (a * b).sum(-1, True)
